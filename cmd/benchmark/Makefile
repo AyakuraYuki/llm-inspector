@@ -1,5 +1,5 @@
 DIST   := build
-BINARY := banehmark
+BINARY := benchmark
 GOOS   ?= darwin
 GOARCH ?= amd64
 
