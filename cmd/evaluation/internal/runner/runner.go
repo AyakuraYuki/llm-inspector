@@ -95,8 +95,17 @@ func Run(ctx context.Context, cfg *config.Config, only map[string]bool) (*core.R
 			r.Layers = append(r.Layers, lr)
 			return
 		}
+		// 输出当前层级进度
+		info, _ := catalogInfo(id)
+		fmt.Printf("执行 %s (%s)...\n", id, info.Name)
 		lr = fn()
 		lr.Compute(cfg.Thresholds.MinLayerScore)
+		// 输出层级完成状态
+		status := "✓"
+		if !lr.Passed {
+			status = "✗"
+		}
+		fmt.Printf("  %s %s 完成 (%.1f%%, %.2fs)\n", status, id, lr.Score*100, lr.DurationMS/1000)
 		r.Layers = append(r.Layers, lr)
 		if id == "L1" && lr.HasFail() {
 			skipRest = true

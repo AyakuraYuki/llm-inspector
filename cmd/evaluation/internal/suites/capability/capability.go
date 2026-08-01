@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -68,7 +69,10 @@ func Run(ctx context.Context, p provider.Provider, cfg config.CapabilityConfig, 
 		return layer
 	}
 
+	fmt.Printf("  加载 %d 道题目，并发度 %d\n", len(cases), cfg.Concurrency)
+
 	checks := make([]core.CheckResult, len(cases))
+	var completed int32 // 原子计数器
 	var wg sync.WaitGroup
 	jobs := make(chan int)
 	workers := cfg.Concurrency
@@ -81,6 +85,9 @@ func Run(ctx context.Context, p provider.Provider, cfg config.CapabilityConfig, 
 			defer wg.Done()
 			for i := range jobs {
 				checks[i] = runCase(ctx, p, judge, &cases[i])
+				// 原子递增并输出进度
+				done := atomic.AddInt32(&completed, 1)
+				fmt.Printf("  [%d/%d] %s: %.0f%%\n", done, len(cases), cases[i].ID, checks[i].Score*100)
 			}
 		}()
 	}
