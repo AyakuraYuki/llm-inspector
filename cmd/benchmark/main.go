@@ -7,12 +7,17 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
+
+// progressReportInterval 是心跳监控器输出当前进度的间隔
+const progressReportInterval = 30 * time.Second
 
 // BenchmarkConfig 包含 benchmark 运行配置
 type BenchmarkConfig struct {
@@ -74,10 +79,10 @@ func main() {
 		log.Fatalf("Failed to load questions: %v", err)
 	}
 
-	fmt.Printf("Loaded %d questions\n", len(questions))
-	fmt.Printf("Config: max_tokens=%d, max_workers=%d, thinking_style=%s\n",
+	logf("Loaded %d questions", len(questions))
+	logf("Config: max_tokens=%d, max_workers=%d, thinking_style=%s",
 		config.MaxTokens, config.MaxWorkers, config.ThinkingStyle)
-	fmt.Printf("Model: %s, Base URL: %s\n\n", modelName, baseURL)
+	logf("Model: %s, Base URL: %s", modelName, baseURL)
 
 	// 创建 OpenAI 客户端
 	clientConfig := openai.DefaultConfig(apiKey)
@@ -85,7 +90,9 @@ func main() {
 	client := openai.NewClientWithConfig(clientConfig)
 
 	// 运行 benchmark
+	logf("Benchmark started")
 	results := runBenchmark(client, modelName, questions, config)
+	logf("Benchmark finished")
 
 	// 创建统一的报告目录，本次运行的所有输出都存放在此
 	reportDir := fmt.Sprintf("reports_%s", time.Now().Format("20060102_150405"))
@@ -124,6 +131,12 @@ func runBenchmark(client *openai.Client, model string, questions []Question, con
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, config.MaxWorkers)
 
+	// 启动心跳监控器，定期输出整体进度和正在执行的测试项目
+	tracker := newProgressTracker(len(questions))
+	monitorCtx, stopMonitor := context.WithCancel(context.Background())
+	defer stopMonitor()
+	go tracker.monitor(monitorCtx, progressReportInterval)
+
 	for i, question := range questions {
 		wg.Add(1)
 		go func(index int, q Question) {
@@ -131,9 +144,10 @@ func runBenchmark(client *openai.Client, model string, questions []Question, con
 			semaphore <- struct{}{}        // 获取信号量
 			defer func() { <-semaphore }() // 释放信号量
 
-			fmt.Printf("[%d/%d] Processing question %d...\n", index+1, len(questions), index+1)
+			tracker.start(index)
 			result := benchmarkQuestion(client, model, q, index, config)
 			results[index] = result
+			completed := tracker.finish(index)
 
 			if result.Error == "" {
 				correctnessStr := ""
@@ -152,16 +166,18 @@ func runBenchmark(client *openai.Client, model string, questions []Question, con
 					finishReasonStr = fmt.Sprintf(" [finish_reason=%s]", result.FinishReason)
 				}
 
-				fmt.Printf("[%d/%d] Completed: TTFT=%dms, Total=%dms, Tokens=%d, TPS=%.2f%s%s\n",
-					index+1, len(questions), result.TTFT.Milliseconds(),
+				logf("Question %d completed (%d/%d done): TTFT=%dms, Total=%dms, Tokens=%d, TPS=%.2f%s%s",
+					index+1, completed, len(questions), result.TTFT.Milliseconds(),
 					result.TotalTime.Milliseconds(), result.TokensUsed, result.TPS, correctnessStr, finishReasonStr)
 			} else {
-				fmt.Printf("[%d/%d] Error: %s\n", index+1, len(questions), result.Error)
+				logf("Question %d failed (%d/%d done): %s", index+1, completed, len(questions), result.Error)
 			}
 		}(i, question)
 	}
 
 	wg.Wait()
+	stopMonitor()
+	tracker.report()
 	return results
 }
 
@@ -221,6 +237,7 @@ func benchmarkQuestion(client *openai.Client, model string, q Question, index in
 			firstTokenTime = time.Now()
 			receivedFirstToken = true
 			result.TTFT = firstTokenTime.Sub(startTime)
+			logf("Question %d first token received (TTFT=%dms)", index+1, result.TTFT.Milliseconds())
 		}
 
 		// 收集完整响应
@@ -318,7 +335,7 @@ func outputResults(results []BenchmarkResult, reportDir string) {
 		return
 	}
 
-	fmt.Printf("\nResults saved to: %s\n", filename)
+	logf("Results saved to: %s", filename)
 }
 
 // saveIndividualReports 为每个问题保存单独的详细报告
@@ -451,7 +468,7 @@ func saveIndividualReports(results []BenchmarkResult, reportDir string) {
 		}
 	}
 
-	fmt.Printf("Individual reports saved to: %s/ (%d success, %d failed)\n", reportDir, successCount, failCount)
+	logf("Individual reports saved to: %s/ (%d success, %d failed)", reportDir, successCount, failCount)
 }
 
 // extractAnswer 从模型回答中提取 \boxed{} 中的答案
@@ -581,4 +598,77 @@ func printStatistics(results []BenchmarkResult) {
 	fmt.Printf("Average TPS: %.2f\n", totalTPS/float64(successCount))
 	fmt.Printf("Average TPM: %.2f\n", totalTPM/float64(successCount))
 	fmt.Println(strings.Repeat("=", 60))
+}
+
+// logf 输出带时间戳的日志，用于跟踪测试进度
+func logf(format string, args ...any) {
+	fmt.Printf("[%s] %s\n", time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
+}
+
+// progressTracker 跟踪 benchmark 的执行进度，用于监控当前正在执行的测试项目
+type progressTracker struct {
+	total      int
+	startTime  time.Time
+	completed  int64             // 原子计数：已完成的问题数
+	mu         sync.Mutex        // 保护 inProgress
+	inProgress map[int]time.Time // 问题索引（0-based） -> 开始执行的时间
+}
+
+func newProgressTracker(total int) *progressTracker {
+	return &progressTracker{
+		total:      total,
+		startTime:  time.Now(),
+		inProgress: make(map[int]time.Time),
+	}
+}
+
+// start 标记某个问题开始执行
+func (p *progressTracker) start(index int) {
+	p.mu.Lock()
+	p.inProgress[index] = time.Now()
+	p.mu.Unlock()
+	logf("Question %d started", index+1)
+}
+
+// finish 标记某个问题执行完成，返回累计已完成的问题数
+func (p *progressTracker) finish(index int) int {
+	p.mu.Lock()
+	delete(p.inProgress, index)
+	p.mu.Unlock()
+	return int(atomic.AddInt64(&p.completed, 1))
+}
+
+// report 输出整体进度以及当前正在执行的测试项目及其已运行时长
+func (p *progressTracker) report() {
+	completed := atomic.LoadInt64(&p.completed)
+
+	p.mu.Lock()
+	running := make([]int, 0, len(p.inProgress))
+	starts := make(map[int]time.Time, len(p.inProgress))
+	for idx, t := range p.inProgress {
+		running = append(running, idx)
+		starts[idx] = t
+	}
+	p.mu.Unlock()
+	sort.Ints(running)
+
+	elapsed := time.Since(p.startTime).Round(time.Second)
+	logf("Progress: %d/%d completed, %d in progress (elapsed %s)", completed, p.total, len(running), elapsed)
+	for _, idx := range running {
+		logf("  -> question %d running for %s", idx+1, time.Since(starts[idx]).Round(time.Second))
+	}
+}
+
+// monitor 定期输出进度，直到 ctx 被取消
+func (p *progressTracker) monitor(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.report()
+		}
+	}
 }
