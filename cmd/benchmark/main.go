@@ -87,11 +87,17 @@ func main() {
 	// 运行 benchmark
 	results := runBenchmark(client, modelName, questions, config)
 
-	// 输出结果
-	outputResults(results)
+	// 创建统一的报告目录，本次运行的所有输出都存放在此
+	reportDir := fmt.Sprintf("reports_%s", time.Now().Format("20060102_150405"))
+	if err = os.MkdirAll(reportDir, os.ModePerm); err != nil {
+		log.Fatalf("Failed to create report directory: %v", err)
+	}
+
+	// 输出 JSON 结果
+	outputResults(results, reportDir)
 
 	// 保存每个问题的详细报告
-	saveIndividualReports(results)
+	saveIndividualReports(results, reportDir)
 
 	// 计算统计信息
 	printStatistics(results)
@@ -105,7 +111,7 @@ func loadQuestions(filename string) ([]Question, error) {
 	}
 
 	var questions []Question
-	if err := json.Unmarshal(data, &questions); err != nil {
+	if err = json.Unmarshal(data, &questions); err != nil {
 		return nil, err
 	}
 
@@ -260,8 +266,8 @@ func benchmarkQuestion(client *openai.Client, model string, q Question, index in
 	return result
 }
 
-// outputResults 将结果输出到 JSON 文件
-func outputResults(results []BenchmarkResult) {
+// outputResults 将结果输出到报告目录下的 JSON 文件
+func outputResults(results []BenchmarkResult, reportDir string) {
 	// 转换为可序列化的格式
 	type SerializableResult struct {
 		QuestionIndex   int     `json:"question_index"`
@@ -298,9 +304,8 @@ func outputResults(results []BenchmarkResult) {
 		}
 	}
 
-	// 生成输出文件名
-	timestamp := time.Now().Format("20060102_150405")
-	filename := fmt.Sprintf("benchmark_results_%s.json", timestamp)
+	// 生成输出文件名（存放在报告目录下）
+	filename := fmt.Sprintf("%s/benchmark_results.json", reportDir)
 
 	data, err := json.MarshalIndent(serializableResults, "", "  ")
 	if err != nil {
@@ -317,16 +322,7 @@ func outputResults(results []BenchmarkResult) {
 }
 
 // saveIndividualReports 为每个问题保存单独的详细报告
-func saveIndividualReports(results []BenchmarkResult) {
-	// 创建报告目录
-	timestamp := time.Now().Format("20060102_150405")
-	reportDir := fmt.Sprintf("reports_%s", timestamp)
-
-	if err := os.MkdirAll(reportDir, 0755); err != nil {
-		log.Printf("Failed to create report directory: %v", err)
-		return
-	}
-
+func saveIndividualReports(results []BenchmarkResult, reportDir string) {
 	successCount := 0
 	failCount := 0
 
