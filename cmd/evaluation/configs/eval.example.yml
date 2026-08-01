@@ -1,0 +1,57 @@
+# llm-eval 评测配置示例
+target:
+  base_url: http://localhost:8000/v1   # 端点地址
+  api_key: sk-xxx
+  model: qwen2.5-72b-instruct
+  protocol: openai                     # openai（默认）/ anthropic / gemini
+  timeout: 60s
+# Anthropic 原生示例：
+# target:
+#   base_url: https://api.anthropic.com   # 缺省自动补 /v1
+#   api_key: sk-ant-xxx
+#   model: claude-sonnet-4-5
+#   protocol: anthropic
+# Gemini 原生示例：
+# target:
+#   base_url: https://generativelanguage.googleapis.com   # 缺省自动补 /v1beta
+#   api_key: AIza-xxx
+#   model: gemini-2.5-flash
+#   protocol: gemini
+
+# 可选：裁判模型，用于开放式题目打分（L3 中 scorer 为 judge 的题）
+# judge:
+#   base_url: https://api.openai.com/v1
+#   api_key: sk-yyy
+#   model: gpt-4o
+
+layers:
+  availability:           # L1：任一失败即中止后续评测
+    enabled: true
+  protocol:               # L2
+    enabled: true
+  capability:             # L3
+    enabled: true
+    # dataset: datasets/smoke.yaml     # 不填则使用内建题库
+    concurrency: 4
+  stability:              # L4
+    enabled: true
+    samples: 5
+    soak_requests: 50
+    temperature: 1.0
+  performance:            # L5
+    enabled: true
+    runs: 20
+    concurrency: [1, 4, 16]
+    max_probe_tokens: 32768
+    slo:
+      ttft_p99_ms: 2000
+      min_tokens_per_sec: 10
+      max_error_rate: 0.01
+
+thresholds:
+  min_layer_score: 0.8    # 层通过线
+  fail_fast: false        # 某层不达标即中止（L1 门控不受此开关影响）
+
+output:
+  dir: ./reports
+  formats: [json, markdown]

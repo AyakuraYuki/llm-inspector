@@ -1,0 +1,117 @@
+# L3 内建冒烟题库：中英双语、全确定性打分（judge 演示题除外）。
+# 该格式即未来 L7 业务评测集格式：
+#   - id: 唯一标识
+#     category: 分类（用于分组统计）
+#     turns: 完整对话轮次（末轮通常为用户提问）
+#     scorer: 打分器配置（见 internal/scorer）
+- id: math-001
+  category: reasoning
+  turns: [{role: user, content: "计算 17*23+4，只输出数字"}]
+  scorer: {type: numeric, expected: 395}
+
+- id: math-002
+  category: reasoning
+  turns: [{role: user, content: "What is 15% of 240? Reply with the number only."}]
+  scorer: {type: numeric, expected: 36}
+
+- id: math-003
+  category: reasoning
+  turns: [{role: user, content: "一个数的 3 倍加上 5 等于 50，这个数是多少？只输出数字"}]
+  scorer: {type: numeric, expected: 15}
+
+- id: math-004
+  category: reasoning
+  turns: [{role: user, content: "小明有 5 个苹果，吃了 2 个，又买了 3 箱每箱 4 个，现在有几个苹果？只输出数字"}]
+  scorer: {type: numeric, expected: 15}
+
+- id: str-001
+  category: string_ops
+  turns: [{role: user, content: "把字符串「hello」反转，只输出结果"}]
+  scorer: {type: exact_match, expected: "olleh"}
+
+- id: str-002
+  category: string_ops
+  turns: [{role: user, content: "How many letters are in the word 'banana'? Reply with the number only."}]
+  scorer: {type: numeric, expected: 6}
+
+- id: str-003
+  category: string_ops
+  turns: [{role: user, content: "把「ABC」转为小写，只输出结果"}]
+  scorer: {type: exact_match, expected: "abc"}
+
+- id: if-001
+  category: instruction_following
+  turns: [{role: user, content: "用恰好 3 个要点介绍人工智能的优点"}]
+  scorer: {type: bullet_count, expected: 3}
+
+- id: if-002
+  category: instruction_following
+  turns: [{role: user, content: "Answer the following question entirely in lowercase: what is the capital of Japan?"}]
+  scorer: {type: lowercase}
+
+- id: if-003
+  category: instruction_following
+  turns: [{role: user, content: "介绍深度学习，回答中必须包含「神经网络」和「梯度」，且不能出现「玄学」一词"}]
+  scorer: {type: keyword, keywords: ["神经网络", "梯度"], forbidden: ["玄学"]}
+
+- id: if-004
+  category: instruction_following
+  turns: [{role: user, content: "Name a primary color. Your answer must contain the word 'red'."}]
+  scorer: {type: contains, keywords: ["red"]}
+
+- id: if-005
+  category: instruction_following
+  turns: [{role: user, content: "把「我爱自然语言处理」翻译成英语，只输出译文"}]
+  scorer: {type: contains, keywords: ["natural language"]}
+
+- id: json-001
+  category: json
+  turns: [{role: user, content: "输出一个 JSON 对象，包含 name（字符串）和 age（数字）两个字段，描述一个虚构人物。只输出 JSON。"}]
+  scorer: {type: json_schema, fields: ["name", "age"]}
+
+- id: json-002
+  category: json
+  turns: [{role: user, content: "List two programming languages as a JSON array of strings. Output JSON only."}]
+  scorer: {type: json_valid}
+
+- id: mt-001
+  category: multi_turn
+  turns:
+    - {role: user, content: "记住数字 7391，只回复「好」"}
+    - {role: assistant, content: "好"}
+    - {role: user, content: "我刚才让你记住的数字是什么？只输出数字"}
+  scorer: {type: numeric, expected: 7391}
+
+- id: mt-002
+  category: multi_turn
+  turns:
+    - {role: user, content: "My favorite fruit is mango. Reply with OK."}
+    - {role: assistant, content: "OK"}
+    - {role: user, content: "What is my favorite fruit? Answer with one word."}
+  scorer: {type: contains, keywords: ["mango"]}
+
+- id: know-001
+  category: knowledge
+  # contains 匹配前会归一数字形式，"H2O" 与 "H₂O"（下标）等高阶排版均可通过
+  turns: [{role: user, content: "水的化学式是什么？只输出化学式"}]
+  scorer: {type: contains, keywords: ["H2O"]}
+
+- id: know-002
+  category: knowledge
+  turns: [{role: user, content: "Which planet is known as the Red Planet? Answer with one word."}]
+  scorer: {type: contains, keywords: ["Mars"]}
+
+- id: know-003
+  category: knowledge
+  turns: [{role: user, content: "《静夜思》的作者是谁？只回答姓名"}]
+  scorer: {type: contains, keywords: ["李白"]}
+
+- id: reas-001
+  category: reasoning
+  turns: [{role: user, content: "If all Bloops are Razzies and all Razzies are Lazzies, are all Bloops definitely Lazzies? Answer Yes or No."}]
+  scorer: {type: contains, keywords: ["yes"]}
+
+- id: open-001
+  category: open_ended
+  turns: [{role: user, content: "Explain the difference between TCP and UDP in one paragraph."}]
+  scorer: {type: judge, rubric: "准确区分 TCP（面向连接、可靠、有序）与 UDP（无连接、不保证可靠），无事实错误"}
