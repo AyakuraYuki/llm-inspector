@@ -1,5 +1,5 @@
 DIST   := build
-BINARY := evaluation
+BINARY := performance
 GOOS   ?= darwin
 GOARCH ?= amd64
 
@@ -7,7 +7,8 @@ GOARCH ?= amd64
 
 build:
 	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build -ldflags "-s -w" -o $(DIST)/$(BINARY)-$(GOOS)_$(GOARCH) .
-	@cp configs/eval.example.yml $(DIST)/eval.yml
+	@cp configs/models.example.json $(DIST)/models.json
+	@cp configs/tokens.example.json $(DIST)/tokens.json
 
 clean:
 	@go clean -cache
