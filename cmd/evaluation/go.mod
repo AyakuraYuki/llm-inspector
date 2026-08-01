@@ -3,7 +3,6 @@ module github.com/AyakuraYuki/llm-inspector/cmd/evaluation
 go 1.26.5
 
 require (
-	github.com/AyakuraYuki/llm-eval-go v0.2.0
 	github.com/openai/openai-go v1.12.0
 	gopkg.in/yaml.v3 v3.0.1
 )
