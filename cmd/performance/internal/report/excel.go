@@ -1,4 +1,4 @@
-package main
+package report
 
 import (
 	"fmt"
@@ -7,10 +7,16 @@ import (
 	"time"
 
 	"github.com/xuri/excelize/v2"
+
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 )
 
-// exportExcel 将基准测试结果导出为 xlsx 文件，结构仿照 build_metrics_report.py。
-func exportExcel(cfg BenchmarkConfig, results []AggregatedMetrics, runAt time.Time, outPath string) error {
+var excludedModel = ""
+
+func SetExcludedModel(model string) { excludedModel = model }
+
+// ExportExcel 将基准测试结果导出为 xlsx 文件，结构仿照 build_metrics_report.py。
+func ExportExcel(cfg types.BenchmarkConfig, results []types.AggregatedMetrics, runAt time.Time, outPath string) error {
 	f := excelize.NewFile()
 	defer func(f *excelize.File) { _ = f.Close() }(f)
 
@@ -28,7 +34,7 @@ func exportExcel(cfg BenchmarkConfig, results []AggregatedMetrics, runAt time.Ti
 
 	// ── Sheet 1: 总览 ─────────────────────────────────────────────────────
 	_ = f.SetSheetName("Sheet1", "总览")
-	writeOverview(f, cfg, results, runAt, titleStyle, labelStyle)
+	writeOverview(f, cfg, runAt, titleStyle, labelStyle)
 
 	// ── Sheet 2: TTFT延迟 ─────────────────────────────────────────────────
 	_, _ = f.NewSheet("TTFT延迟")
@@ -59,9 +65,7 @@ func exportExcel(cfg BenchmarkConfig, results []AggregatedMetrics, runAt time.Ti
 
 // ── Sheet writers ─────────────────────────────────────────────────────────────
 
-func writeOverview(f *excelize.File, cfg BenchmarkConfig, results []AggregatedMetrics,
-	runAt time.Time, titleStyle, labelStyle int) {
-
+func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time, titleStyle, labelStyle int) {
 	const sh = "总览"
 	xlSetCell(f, sh, 1, 1, "LLM性能基准测试报告")
 	_ = f.SetCellStyle(sh, "A1", "A1", titleStyle)
@@ -100,7 +104,7 @@ func writeOverview(f *excelize.File, cfg BenchmarkConfig, results []AggregatedMe
 	}
 }
 
-func writeTTFTSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int) {
+func writeTTFTSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "TTFT延迟"
 	headers := []any{
 		"模型 ID", "Provider", "并发数", "样本数(N)",
@@ -115,7 +119,7 @@ func writeTTFTSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int)
 
 	row := 2
 	for _, agg := range results {
-		if agg.Provider == ProviderOpenAIImage {
+		if agg.Provider == types.ProviderOpenAIImage {
 			continue
 		}
 		xlSetRow(f, sh, row, []any{
@@ -130,7 +134,7 @@ func writeTTFTSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int)
 	}
 }
 
-func writeGenSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int) {
+func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "生成速度(TPS·token)"
 	headers := []any{
 		"模型 ID",
@@ -153,7 +157,7 @@ func writeGenSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int) 
 
 	row := 2
 	for _, agg := range results {
-		if agg.Provider == ProviderOpenAIImage {
+		if agg.Provider == types.ProviderOpenAIImage {
 			continue
 		}
 		note := ""
@@ -176,7 +180,7 @@ func writeGenSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int) 
 	}
 }
 
-func writeIORSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int) {
+func writeIORSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "输入输出Token比"
 	headers := []any{
 		"模型 ID", "Provider", "并发数", "样本数(N)",
@@ -197,7 +201,7 @@ func writeIORSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int) 
 
 	row := 2
 	for _, agg := range results {
-		if agg.Provider == ProviderOpenAIImage {
+		if agg.Provider == types.ProviderOpenAIImage {
 			continue
 		}
 		note := ""
@@ -219,7 +223,7 @@ func writeIORSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int) 
 	}
 }
 
-func writeQPSSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int) {
+func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "QPS压测(TPS·req)"
 	headers := []any{
 		"模型 ID", "Provider", "类型", "并发数",
@@ -234,7 +238,7 @@ func writeQPSSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int) 
 	row := 2
 	for _, agg := range results {
 		category := "text"
-		if agg.Provider == ProviderOpenAIImage {
+		if agg.Provider == types.ProviderOpenAIImage {
 			category = "image"
 		}
 		successPct := 0.0
@@ -301,10 +305,10 @@ func round1(v float64) float64 { return math.Round(v*10) / 10 }
 func round2(v float64) float64 { return math.Round(v*100) / 100 }
 func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
 
-func writeErrorSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int) {
+func writeErrorSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "错误分析"
 	headers := []any{"模型 ID", "Provider", "并发数", "总请求数", "失败总数", "成功率(%)"}
-	for _, et := range errorTypeOrder {
+	for _, et := range types.ErrorTypeOrder {
 		headers = append(headers, string(et))
 	}
 	xlSetRow(f, sh, 1, headers, hdrStyle)
@@ -327,7 +331,7 @@ func writeErrorSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int
 			agg.Failed,
 			round1(successPct),
 		}
-		for _, et := range errorTypeOrder {
+		for _, et := range types.ErrorTypeOrder {
 			values = append(values, agg.ErrorCounts[et])
 		}
 		xlSetRow(f, sh, row, values, 0)
@@ -336,7 +340,7 @@ func writeErrorSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int
 }
 
 // writeErrorDetailSheet 把每条失败请求的原始记录按发生时间排成一行一条的错误日志。
-func writeErrorDetailSheet(f *excelize.File, results []AggregatedMetrics, hdrStyle int) {
+func writeErrorDetailSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "错误明细"
 	headers := []any{"序号", "模型 ID", "Provider", "并发数", "发生时间", "错误类型", "总时延(ms)", "错误信息"}
 	xlSetRow(f, sh, 1, headers, hdrStyle)
@@ -351,9 +355,9 @@ func writeErrorDetailSheet(f *excelize.File, results []AggregatedMetrics, hdrSty
 
 	type detailRow struct {
 		model       string
-		provider    Provider
+		provider    types.Provider
 		concurrency int
-		m           RequestMetrics
+		m           types.RequestMetrics
 	}
 	var rows []detailRow
 	for _, agg := range results {

@@ -1,4 +1,4 @@
-package main
+package reporter
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 )
 
 const (
@@ -33,26 +35,25 @@ const (
 type failSample struct {
 	at    time.Time
 	model string
-	et    ErrorType
+	et    types.ErrorType
 	msg   string
 }
 
-// tuiState 保存 TUI 渲染所需的全部状态。
+// TUIState 保存 TUI 渲染所需的全部状态。
 // 热路径计数走 counters 的原子操作；其余低频字段由 mu 保护，
 // 渲染协程每帧加锁做一次快照。
-type tuiState struct {
-	counters levelCounters
-
+type TUIState struct {
+	counters      LevelCounters
 	mu            sync.Mutex
 	phase         tuiPhase
 	seq, total    int
-	model         ModelSpec
+	model         types.ModelSpec
 	concurrency   int
 	phaseStart    time.Time
 	deadline      time.Time
 	log           []string
 	samples       []failSample
-	lastSampleAt  map[ErrorType]time.Time
+	lastSampleAt  map[types.ErrorType]time.Time
 	cumRequests   int64 // 已完成档位的累计请求数（不含当前档位）
 	cumFailed     int64
 	aborting      bool
@@ -61,80 +62,83 @@ type tuiState struct {
 	preflightFail int
 }
 
-func newTuiState() *tuiState {
-	return &tuiState{
-		lastSampleAt: make(map[ErrorType]time.Time),
+func NewTuiState() *TUIState {
+	return &TUIState{
+		lastSampleAt: make(map[types.ErrorType]time.Time),
 		benchStart:   time.Now(),
 	}
 }
 
-func (s *tuiState) appendLog(line string) {
+func (s *TUIState) AppendLog(line string) {
 	s.log = append(s.log, line)
 	if len(s.log) > maxLogLines {
 		s.log = s.log[len(s.log)-maxLogLines:]
 	}
 }
+func (s *TUIState) Lock()           { s.mu.Lock() }
+func (s *TUIState) Unlock()         { s.mu.Unlock() }
+func (s *TUIState) IsAborted() bool { return s.aborting }
 
-// tuiReporter 将 Runner 事件写入 tuiState；渲染由 bubbletea 的定时 tick 驱动。
-type tuiReporter struct {
-	state *tuiState
-	prog  *tea.Program
+// TUIReporter 将 Runner 事件写入 tuiState；渲染由 bubbletea 的定时 tick 驱动。
+type TUIReporter struct {
+	State *TUIState
+	Prog  *tea.Program
 }
 
-var _ Reporter = (*tuiReporter)(nil)
+var _ Reporter = (*TUIReporter)(nil)
 
-func (r *tuiReporter) PreflightStart(int) {
-	s := r.state
+func (r *TUIReporter) PreflightStart(int) {
+	s := r.State
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.phase = phasePreflight
 	s.phaseStart = time.Now()
 }
 
-func (r *tuiReporter) PreflightResult(model ModelSpec, m RequestMetrics) {
-	s := r.state
+func (r *TUIReporter) PreflightResult(model types.ModelSpec, m types.RequestMetrics) {
+	s := r.State
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if m.Success {
 		s.preflightOK++
-		s.appendLog(fmt.Sprintf("[预检 OK] %s (%s) %.0fms",
+		s.AppendLog(fmt.Sprintf("[预检 OK] %s (%s) %.0fms",
 			model.Name, model.Provider, float64(m.TotalLatency)/float64(time.Millisecond)))
 	} else {
 		s.preflightFail++
-		s.appendLog(fmt.Sprintf("[预检 FAIL] %s (%s) %s", model.Name, model.Provider, oneLine(m.Error, 120)))
+		s.AppendLog(fmt.Sprintf("[预检 FAIL] %s (%s) %s", model.Name, model.Provider, oneLine(m.Error, 120)))
 	}
 }
 
-func (r *tuiReporter) PreflightEnd(bool) {}
+func (r *TUIReporter) PreflightEnd(bool) {}
 
-func (r *tuiReporter) WarmupStart(concurrency int, duration time.Duration) {
-	s := r.state
+func (r *TUIReporter) WarmupStart(concurrency int, duration time.Duration) {
+	s := r.State
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.phase = phaseWarmup
 	s.concurrency = concurrency
 }
 
-func (r *tuiReporter) WarmupModel(idx, total int, model ModelSpec, deadline time.Time) {
-	s := r.state
+func (r *TUIReporter) WarmupModel(idx, total int, model types.ModelSpec, deadline time.Time) {
+	s := r.State
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.seq, s.total = idx, total
 	s.model = model
 	s.phaseStart = time.Now()
 	s.deadline = deadline
-	s.counters.reset()
+	s.counters.Reset()
 }
 
-func (r *tuiReporter) WarmupEnd() {
-	s := r.state
+func (r *TUIReporter) WarmupEnd() {
+	s := r.State
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.appendLog("[预热] 完成")
+	s.AppendLog("[预热] 完成")
 }
 
-func (r *tuiReporter) LevelStart(seq, total int, model ModelSpec, concurrency int, deadline time.Time) {
-	s := r.state
+func (r *TUIReporter) LevelStart(seq, total int, model types.ModelSpec, concurrency int, deadline time.Time) {
+	s := r.State
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.phase = phaseRunning
@@ -143,17 +147,17 @@ func (r *tuiReporter) LevelStart(seq, total int, model ModelSpec, concurrency in
 	s.concurrency = concurrency
 	s.phaseStart = time.Now()
 	s.deadline = deadline
-	s.counters.reset()
+	s.counters.Reset()
 }
 
-func (r *tuiReporter) RequestDone(m RequestMetrics) {
-	r.state.counters.add(m)
+func (r *TUIReporter) RequestDone(m types.RequestMetrics) {
+	r.State.counters.Add(m)
 	if m.Success {
 		return
 	}
 
 	// 失败抽样：同一错误类型限速记录，避免高失败率时刷屏和锁竞争
-	s := r.state
+	s := r.State
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,8 +176,8 @@ func (r *tuiReporter) RequestDone(m RequestMetrics) {
 	}
 }
 
-func (r *tuiReporter) LevelEnd(agg AggregatedMetrics) {
-	s := r.state
+func (r *TUIReporter) LevelEnd(agg types.AggregatedMetrics) {
+	s := r.State
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cumRequests += int64(agg.Total)
@@ -182,12 +186,12 @@ func (r *tuiReporter) LevelEnd(agg AggregatedMetrics) {
 	if agg.Total > 0 {
 		errPct = float64(agg.Failed) / float64(agg.Total) * 100
 	}
-	s.appendLog(fmt.Sprintf("[%d/%d] %s c=%d done: %d req, %d ok, %d failed (%.1f%%)",
+	s.AppendLog(fmt.Sprintf("[%d/%d] %s c=%d done: %d req, %d ok, %d failed (%.1f%%)",
 		s.seq, s.total, agg.Model, agg.Concurrency, agg.Total, agg.Success, agg.Failed, errPct))
 }
 
-func (r *tuiReporter) CooldownStart(d time.Duration) {
-	s := r.state
+func (r *TUIReporter) CooldownStart(d time.Duration) {
+	s := r.State
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.phase = phaseCooldown
@@ -195,19 +199,19 @@ func (r *tuiReporter) CooldownStart(d time.Duration) {
 	s.deadline = time.Now().Add(d)
 }
 
-func (r *tuiReporter) BenchmarkEnd(bool) {
-	s := r.state
+func (r *TUIReporter) BenchmarkEnd(bool) {
+	s := r.State
 	s.mu.Lock()
 	s.phase = phaseFinished
 	s.mu.Unlock()
-	r.prog.Send(benchDoneMsg{})
+	r.Prog.Send(BenchDoneMsg{})
 }
 
 // ---- bubbletea ----
 
 type tickMsg time.Time
 
-type benchDoneMsg struct{}
+type BenchDoneMsg struct{}
 
 var (
 	styleTitle    = lipgloss.NewStyle().Bold(true)
@@ -223,13 +227,13 @@ var (
 // tuiModel 是 bubbletea 的 Model，实际状态都在 state 里，
 // 渲染协程每 200ms 取一次快照重绘。
 type tuiModel struct {
-	state  *tuiState
+	state  *TUIState
 	cancel context.CancelFunc
-	cfg    BenchmarkConfig
+	cfg    types.BenchmarkConfig
 	width  int
 }
 
-func newTuiModel(state *tuiState, cancel context.CancelFunc, cfg BenchmarkConfig) tuiModel {
+func NewTuiModel(state *TUIState, cancel context.CancelFunc, cfg types.BenchmarkConfig) tuiModel {
 	return tuiModel{state: state, cancel: cancel, cfg: cfg, width: 100}
 }
 
@@ -245,7 +249,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tickMsg:
 		return m, tick()
-	case benchDoneMsg:
+	case BenchDoneMsg:
 		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -278,7 +282,7 @@ func (m tuiModel) abort() (tea.Model, tea.Cmd) {
 
 func (m tuiModel) View() string {
 	s := m.state
-	n, ok, byType := s.counters.snapshot()
+	n, ok, byType := s.counters.Snapshot()
 
 	s.mu.Lock()
 	phase := s.phase

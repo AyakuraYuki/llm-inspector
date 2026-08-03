@@ -1,4 +1,4 @@
-package main
+package runner
 
 import (
 	"bufio"
@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 )
 
 // newTransport 构建连接池调优后的 Transport。
@@ -55,29 +57,29 @@ func configureSharedClient(maxConcurrency int) {
 // 便于区分"我们自己的超时预算到了"“上游拒绝/重置连接”"DNS 挂了"等不同故障域。
 // 判断顺序很重要：更具体的原因要排在通用的 net.Error.Timeout() 之前，
 // 否则例如 DNS 超时会被笼统地归为 net_timeout 而丢失"是 DNS 的问题"这一信息。
-func classifyNetError(err error) ErrorType {
+func classifyNetError(err error) types.ErrorType {
 	if errors.Is(err, context.Canceled) {
-		return ErrorTypeCanceled
+		return types.ErrorTypeCanceled
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return ErrorTypeTimeout
+		return types.ErrorTypeTimeout
 	}
 	if _, ok := errors.AsType[*net.DNSError](err); ok {
-		return ErrorTypeDNS
+		return types.ErrorTypeDNS
 	}
 	if errors.Is(err, syscall.ECONNREFUSED) {
-		return ErrorTypeConnRefused
+		return types.ErrorTypeConnRefused
 	}
 	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
-		return ErrorTypeConnReset
+		return types.ErrorTypeConnReset
 	}
 	if isTLSError(err) {
-		return ErrorTypeTLS
+		return types.ErrorTypeTLS
 	}
 	if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
-		return ErrorTypeNetTimeout
+		return types.ErrorTypeNetTimeout
 	}
-	return ErrorTypeConnect
+	return types.ErrorTypeConnect
 }
 
 // isTLSError 判断错误是否源自 TLS 握手/证书校验失败。
@@ -101,14 +103,14 @@ func isTLSError(err error) bool {
 }
 
 // classifyHTTPStatus 按状态码把非 200 响应细分为限流/服务端错误/其他客户端错误。
-func classifyHTTPStatus(code int) ErrorType {
+func classifyHTTPStatus(code int) types.ErrorType {
 	switch {
 	case code == http.StatusTooManyRequests:
-		return ErrorTypeRateLimit
+		return types.ErrorTypeRateLimit
 	case code >= 500:
-		return ErrorTypeServerError
+		return types.ErrorTypeServerError
 	default:
-		return ErrorTypeHTTP
+		return types.ErrorTypeHTTP
 	}
 }
 
@@ -117,17 +119,22 @@ const (
 	imageTimeout  = 30 * time.Minute
 )
 
-type doSSERequest func(context.Context, BenchmarkConfig, ModelSpec) RequestMetrics
+type doSSERequest func(context.Context, types.BenchmarkConfig, types.ModelSpec) types.RequestMetrics
 
 // doSSERequests 声明了受支持的接口协议类型，并且可根据接口协议类型获取相应的
 // 流式调用方法。
-var doSSERequests = map[Provider]doSSERequest{
-	ProviderAnthropic:      doAnthropicRequest,
-	ProviderGemini:         doGeminiRequest,
-	ProviderOpenAI:         doOpenAIRequest,
-	ProviderOpenAIImage:    doImageRequest,
-	ProviderOpenAIResponse: doOpenAIResponseRequest,
-	ProviderBaseline:       doBaselineRequest,
+var doSSERequests = map[types.Provider]doSSERequest{
+	types.ProviderAnthropic:      doAnthropicRequest,
+	types.ProviderGemini:         doGeminiRequest,
+	types.ProviderOpenAI:         doOpenAIRequest,
+	types.ProviderOpenAIImage:    doImageRequest,
+	types.ProviderOpenAIResponse: doOpenAIResponseRequest,
+	types.ProviderBaseline:       doBaselineRequest,
+}
+
+func IsSupportedProvider(p types.Provider) bool {
+	_, ok := doSSERequests[p]
+	return ok
 }
 
 // firstByteTracker 包装 io.Reader，精确记录首字节到达时刻。
@@ -149,7 +156,7 @@ func (t *firstByteTracker) Read(p []byte) (n int, err error) {
 }
 
 // doAnthropicRequest 向 /v1/messages 发起 SSE 流式请求。
-func doAnthropicRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) RequestMetrics {
+func doAnthropicRequest(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec) types.RequestMetrics {
 	t0 := time.Now()
 
 	payload, _ := json.Marshal(map[string]any{
@@ -164,7 +171,7 @@ func doAnthropicRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpe
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.BaseURL+"/v1/messages", bytes.NewReader(payload))
 	if err != nil {
-		return RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: ErrorTypeConnect}
+		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.PickToken())
@@ -173,13 +180,13 @@ func doAnthropicRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpe
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
-		return RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
+		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
 	}
 	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return RequestMetrics{
+		return types.RequestMetrics{
 			Success:      false,
 			TotalLatency: time.Since(t0),
 			Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
@@ -191,7 +198,7 @@ func doAnthropicRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpe
 }
 
 // doOpenAIRequest 向 /v1/chat/completions 发起 SSE 流式请求。
-func doOpenAIRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) RequestMetrics {
+func doOpenAIRequest(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec) types.RequestMetrics {
 	t0 := time.Now()
 
 	payload, _ := json.Marshal(map[string]any{
@@ -206,7 +213,7 @@ func doOpenAIRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) 
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.BaseURL+"/v1/chat/completions", bytes.NewReader(payload))
 	if err != nil {
-		return RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: ErrorTypeConnect}
+		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.PickToken())
@@ -214,13 +221,13 @@ func doOpenAIRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) 
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
-		return RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
+		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
 	}
 	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return RequestMetrics{
+		return types.RequestMetrics{
 			Success:      false,
 			TotalLatency: time.Since(t0),
 			Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
@@ -232,7 +239,7 @@ func doOpenAIRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) 
 }
 
 // doGeminiRequest 向 /v1beta/models/{model}:streamGenerateContent 发起 SSE 流式请求。
-func doGeminiRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) RequestMetrics {
+func doGeminiRequest(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec) types.RequestMetrics {
 	t0 := time.Now()
 
 	payload, _ := json.Marshal(map[string]any{
@@ -250,7 +257,7 @@ func doGeminiRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) 
 	url := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse", cfg.BaseURL, model.Name)
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
-		return RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: ErrorTypeConnect}
+		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.PickToken())
@@ -258,13 +265,13 @@ func doGeminiRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) 
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
-		return RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
+		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
 	}
 	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return RequestMetrics{
+		return types.RequestMetrics{
 			Success:      false,
 			TotalLatency: time.Since(t0),
 			Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
@@ -276,7 +283,7 @@ func doGeminiRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) 
 }
 
 // doImageRequest 向 /v1/images/generations 发起同步请求。
-func doImageRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) RequestMetrics {
+func doImageRequest(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec) types.RequestMetrics {
 	t0 := time.Now()
 
 	payload, _ := json.Marshal(map[string]any{
@@ -291,20 +298,20 @@ func doImageRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) R
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.BaseURL+"/v1/images/generations", bytes.NewReader(payload))
 	if err != nil {
-		return RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: ErrorTypeConnect}
+		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.PickToken())
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
-		return RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
+		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
 	}
 	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return RequestMetrics{
+		return types.RequestMetrics{
 			Success:      false,
 			TotalLatency: time.Since(t0),
 			Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
@@ -314,14 +321,14 @@ func doImageRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) R
 
 	// 读完响应体确保连接可复用
 	_, _ = io.Copy(io.Discard, resp.Body)
-	return RequestMetrics{
+	return types.RequestMetrics{
 		TotalLatency: time.Since(t0),
 		Success:      true,
 	}
 }
 
 // doOpenAIResponseRequest 向 /v1/responses 发起 SSE 流式请求（OpenAI Responses API）。
-func doOpenAIResponseRequest(ctx context.Context, cfg BenchmarkConfig, model ModelSpec) RequestMetrics {
+func doOpenAIResponseRequest(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec) types.RequestMetrics {
 	t0 := time.Now()
 
 	payload, _ := json.Marshal(map[string]any{
@@ -335,7 +342,7 @@ func doOpenAIResponseRequest(ctx context.Context, cfg BenchmarkConfig, model Mod
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.BaseURL+"/v1/responses", bytes.NewReader(payload))
 	if err != nil {
-		return RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: ErrorTypeConnect}
+		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.PickToken())
@@ -343,13 +350,13 @@ func doOpenAIResponseRequest(ctx context.Context, cfg BenchmarkConfig, model Mod
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
-		return RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
+		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
 	}
 	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return RequestMetrics{
+		return types.RequestMetrics{
 			Success:      false,
 			TotalLatency: time.Since(t0),
 			Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
@@ -364,7 +371,7 @@ func doOpenAIResponseRequest(ctx context.Context, cfg BenchmarkConfig, model Mod
 // 用来单独衡量网关/接入层本身（TLS 握手、鉴权、路由等）在各并发档位下的开销，
 // 和模型推理耗时解耦。
 // 请求头参照真实浏览器抓包，避免被网关按 UA/Referer/Sec-Fetch-* 拦截。
-func doBaselineRequest(ctx context.Context, cfg BenchmarkConfig, _ ModelSpec) RequestMetrics {
+func doBaselineRequest(ctx context.Context, cfg types.BenchmarkConfig, _ types.ModelSpec) types.RequestMetrics {
 	t0 := time.Now()
 
 	reqCtx, cancel := context.WithTimeout(ctx, streamTimeout)
@@ -372,7 +379,7 @@ func doBaselineRequest(ctx context.Context, cfg BenchmarkConfig, _ ModelSpec) Re
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, cfg.BaseURL+"/api/user-agreement", nil)
 	if err != nil {
-		return RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: ErrorTypeConnect}
+		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
 	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Sec-Fetch-Dest", "empty")
@@ -381,13 +388,13 @@ func doBaselineRequest(ctx context.Context, cfg BenchmarkConfig, _ ModelSpec) Re
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
-		return RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
+		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
 	}
 	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return RequestMetrics{
+		return types.RequestMetrics{
 			Success:      false,
 			TotalLatency: time.Since(t0),
 			Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
@@ -397,14 +404,14 @@ func doBaselineRequest(ctx context.Context, cfg BenchmarkConfig, _ ModelSpec) Re
 
 	// 读完响应体确保连接可复用
 	_, _ = io.Copy(io.Discard, resp.Body)
-	return RequestMetrics{
+	return types.RequestMetrics{
 		TotalLatency: time.Since(t0),
 		Success:      true,
 	}
 }
 
 // parseStreamMetrics 消费 SSE 流，提取 TTFT / tokens / e2e。
-func parseStreamMetrics(t0 time.Time, body io.Reader) RequestMetrics {
+func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 	var firstByteMs float64
 	tracker := &firstByteTracker{r: body, t0: t0, firstByte: &firstByteMs}
 
@@ -451,11 +458,11 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) RequestMetrics {
 	// 流读取中途出错（连接被重置/网络中断等），不能当作正常结束处理，
 	// 否则已收到的部分内容会让请求被误判为成功（只是输出被截断）。
 	if scanErr := scanner.Err(); scanErr != nil {
-		return RequestMetrics{
+		return types.RequestMetrics{
 			Success:      false,
 			TotalLatency: time.Duration(e2eMs * float64(time.Millisecond)),
 			Error:        scanErr.Error(),
-			ErrorType:    ErrorTypeStreamBroken,
+			ErrorType:    types.ErrorTypeStreamBroken,
 		}
 	}
 
@@ -476,15 +483,15 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) RequestMetrics {
 	}
 
 	if ttftMs <= 0 {
-		return RequestMetrics{
+		return types.RequestMetrics{
 			Success:      false,
 			TotalLatency: time.Duration(e2eMs * float64(time.Millisecond)),
 			Error:        "no output content received",
-			ErrorType:    ErrorTypeNoContent,
+			ErrorType:    types.ErrorTypeNoContent,
 		}
 	}
 
-	return RequestMetrics{
+	return types.RequestMetrics{
 		TTFT:              time.Duration(ttftMs * float64(time.Millisecond)),
 		TotalLatency:      time.Duration(e2eMs * float64(time.Millisecond)),
 		InputTokens:       promptT,

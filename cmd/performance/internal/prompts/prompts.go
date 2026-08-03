@@ -1,4 +1,4 @@
-package main
+package prompts
 
 import (
 	"fmt"
@@ -35,6 +35,31 @@ var dynamicPromptCorpus = []string{
 	"Sharding partitions a dataset across multiple database instances so that no single node has to store or serve the entire dataset. Choosing a good shard key is critical, because a poor choice can create hot shards that receive disproportionate traffic while others sit nearly idle.",
 	"Autoscaling policies react to metrics like CPU utilization or queue depth to add or remove capacity automatically, but naive policies can oscillate rapidly if the metric is noisy or the scaling cooldown is too short, wasting resources on constant scale-up and scale-down cycles instead of settling into a stable state.",
 	"API versioning strategies range from URL path versions to header-based negotiation, and each comes with different maintenance costs. Whatever scheme is chosen, the harder problem is usually organizational: deciding how long old versions must be supported and communicating deprecation timelines clearly to every downstream consumer.",
+}
+
+// BuildDynamicPrompt 从语料库中随机乱序拼接段落，直到达到目标 token 数（按
+// approxCharsPerToken 近似换算的字符数），并在开头附加随机 nonce 防止上游按
+// 内容命中缓存。targetTokens <= 0 时退化为一个默认长度（约 2000 token）。
+func BuildDynamicPrompt(targetTokens int) string {
+	if targetTokens <= 0 {
+		targetTokens = 2000
+	}
+	targetChars := targetTokens * approxCharsPerToken
+
+	var sb strings.Builder
+	_, _ = fmt.Fprintf(&sb, "[bench-nonce %d-%d] ", time.Now().UnixNano(), rand.IntN(1_000_000_000))
+
+	order := rand.Perm(len(dynamicPromptCorpus))
+	for i := 0; sb.Len() < targetChars; i++ {
+		if i > 0 && i%len(order) == 0 {
+			order = rand.Perm(len(dynamicPromptCorpus))
+		}
+		sb.WriteString(dynamicPromptCorpus[order[i%len(order)]])
+		sb.WriteString(" ")
+	}
+
+	sb.WriteString("\n\nBased on the passages above, write a concise summary in your own words.")
+	return sb.String()
 }
 
 // codexSystemPrompt 模拟标准 AI Agent 开发工具（如 Codex CLI）在每次会话中固定
@@ -98,34 +123,9 @@ var codexUserQuestions = []string{
 	"Why is memory usage growing over time in this service?",
 }
 
-// buildCodexPrompt 拼接 codexSystemPrompt 与随机抽取的一条 codexUserQuestions，
+// BuildCodexPrompt 拼接 codexSystemPrompt 与随机抽取的一条 codexUserQuestions，
 // 模拟多用户使用同一类 AI Agent 开发工具、发送高相似度请求的真实流量模式。
-func buildCodexPrompt() string {
+func BuildCodexPrompt() string {
 	q := codexUserQuestions[rand.IntN(len(codexUserQuestions))]
 	return codexSystemPrompt + "\n" + q
-}
-
-// buildDynamicPrompt 从语料库中随机乱序拼接段落，直到达到目标 token 数（按
-// approxCharsPerToken 近似换算的字符数），并在开头附加随机 nonce 防止上游按
-// 内容命中缓存。targetTokens <= 0 时退化为一个默认长度（约 2000 token）。
-func buildDynamicPrompt(targetTokens int) string {
-	if targetTokens <= 0 {
-		targetTokens = 2000
-	}
-	targetChars := targetTokens * approxCharsPerToken
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "[bench-nonce %d-%d] ", time.Now().UnixNano(), rand.IntN(1_000_000_000))
-
-	order := rand.Perm(len(dynamicPromptCorpus))
-	for i := 0; sb.Len() < targetChars; i++ {
-		if i > 0 && i%len(order) == 0 {
-			order = rand.Perm(len(dynamicPromptCorpus))
-		}
-		sb.WriteString(dynamicPromptCorpus[order[i%len(order)]])
-		sb.WriteString(" ")
-	}
-
-	sb.WriteString("\n\nBased on the passages above, write a concise summary in your own words.")
-	return sb.String()
 }

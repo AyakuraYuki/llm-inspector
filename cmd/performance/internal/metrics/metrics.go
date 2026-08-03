@@ -1,98 +1,23 @@
-package main
+package metrics
 
 import (
 	"math"
+	"slices"
 	"sort"
 	"time"
+
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 )
 
-// percentileStats 计算一组时延样本的 P50/P95/P99/Avg/Min/Max。
-func percentileStats(durations []time.Duration) PercentileStats {
-	n := len(durations)
-	if n == 0 {
-		return PercentileStats{}
-	}
-
-	sorted := make([]time.Duration, n)
-	copy(sorted, durations)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-
-	var total time.Duration
-	for _, d := range sorted {
-		total += d
-	}
-
-	pct := func(p float64) time.Duration {
-		idx := int(math.Ceil(float64(n)*p)) - 1
-		if idx < 0 {
-			idx = 0
-		}
-		if idx >= n {
-			idx = n - 1
-		}
-		return sorted[idx]
-	}
-
-	return PercentileStats{
-		P50:  pct(0.50),
-		P95:  pct(0.95),
-		P99:  pct(0.99),
-		P995: pct(0.995),
-		P999: pct(0.999),
-		Avg:  total / time.Duration(n),
-		Min:  sorted[0],
-		Max:  sorted[n-1],
-		N:    n,
-	}
-}
-
-// floatPercentileStats 计算一组 float64 样本的 P50/P95/P99/Avg。
-func floatPercentileStats(values []float64) FloatStats {
-	n := len(values)
-	if n == 0 {
-		return FloatStats{}
-	}
-
-	sorted := make([]float64, n)
-	copy(sorted, values)
-	sort.Float64s(sorted)
-
-	var total float64
-	for _, v := range sorted {
-		total += v
-	}
-
-	pct := func(p float64) float64 {
-		idx := int(math.Ceil(float64(n)*p)) - 1
-		if idx < 0 {
-			idx = 0
-		}
-		if idx >= n {
-			idx = n - 1
-		}
-		return sorted[idx]
-	}
-
-	return FloatStats{
-		P50:  pct(0.50),
-		P95:  pct(0.95),
-		P99:  pct(0.99),
-		P995: pct(0.995),
-		P999: pct(0.999),
-		Avg:  total / float64(n),
-		N:    n,
-	}
-}
-
-// aggregateMetrics 将原始请求结果聚合为汇聚指标。
-func aggregateMetrics(result BenchmarkResult) AggregatedMetrics {
-	agg := AggregatedMetrics{
+// AggregateMetrics 将原始请求结果聚合为汇聚指标。
+func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
+	agg := types.AggregatedMetrics{
 		Model:       result.Model,
 		Provider:    result.Provider,
 		Concurrency: result.Concurrency,
 		Elapsed:     result.Elapsed,
 		Total:       len(result.Metrics),
-		ErrorCounts: make(map[ErrorType]int),
+		ErrorCounts: make(map[types.ErrorType]int),
 	}
 
 	var (
@@ -107,13 +32,13 @@ func aggregateMetrics(result BenchmarkResult) AggregatedMetrics {
 		totalCachedToks int64
 	)
 
-	isStreaming := result.Provider != ProviderOpenAIImage
+	isStreaming := result.Provider != types.ProviderOpenAIImage
 
 	for _, m := range result.Metrics {
 		latencies = append(latencies, m.TotalLatency)
 		if !m.Success {
 			agg.Failed++
-			if m.ErrorType != ErrorTypeNone {
+			if m.ErrorType != types.ErrorTypeNone {
 				agg.ErrorCounts[m.ErrorType]++
 			}
 			agg.FailedDetails = append(agg.FailedDetails, m)
@@ -189,4 +114,76 @@ func aggregateMetrics(result BenchmarkResult) AggregatedMetrics {
 	}
 
 	return agg
+}
+
+// percentileStats 计算一组时延样本的 P50/P95/P99/Avg/Min/Max。
+func percentileStats(durations []time.Duration) types.PercentileStats {
+	n := len(durations)
+	if n == 0 {
+		return types.PercentileStats{}
+	}
+
+	sorted := make([]time.Duration, n)
+	copy(sorted, durations)
+	slices.Sort(sorted)
+
+	var total time.Duration
+	for _, d := range sorted {
+		total += d
+	}
+
+	pct := func(p float64) time.Duration {
+		idx := max(int(math.Ceil(float64(n)*p))-1, 0)
+		if idx >= n {
+			idx = n - 1
+		}
+		return sorted[idx]
+	}
+
+	return types.PercentileStats{
+		P50:  pct(0.50),
+		P95:  pct(0.95),
+		P99:  pct(0.99),
+		P995: pct(0.995),
+		P999: pct(0.999),
+		Avg:  total / time.Duration(n),
+		Min:  sorted[0],
+		Max:  sorted[n-1],
+		N:    n,
+	}
+}
+
+// floatPercentileStats 计算一组 float64 样本的 P50/P95/P99/Avg。
+func floatPercentileStats(values []float64) types.FloatStats {
+	n := len(values)
+	if n == 0 {
+		return types.FloatStats{}
+	}
+
+	sorted := make([]float64, n)
+	copy(sorted, values)
+	sort.Float64s(sorted)
+
+	var total float64
+	for _, v := range sorted {
+		total += v
+	}
+
+	pct := func(p float64) float64 {
+		idx := max(int(math.Ceil(float64(n)*p))-1, 0)
+		if idx >= n {
+			idx = n - 1
+		}
+		return sorted[idx]
+	}
+
+	return types.FloatStats{
+		P50:  pct(0.50),
+		P95:  pct(0.95),
+		P99:  pct(0.99),
+		P995: pct(0.995),
+		P999: pct(0.999),
+		Avg:  total / float64(n),
+		N:    n,
+	}
 }

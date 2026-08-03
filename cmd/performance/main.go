@@ -13,6 +13,11 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/report"
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/reporter"
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/runner"
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 )
 
 const (
@@ -49,6 +54,8 @@ func main() {
 	)
 	flag.Parse()
 
+	report.SetExcludedModel(excludedModel)
+
 	if err := validatePromptFlags(*dynamicPrompt, *codexPrompt); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		flag.Usage()
@@ -84,7 +91,7 @@ func main() {
 	}
 
 	// 过滤排除名单
-	var active []ModelSpec
+	var active []types.ModelSpec
 	for _, m := range models {
 		name := strings.ToLower(m.Name)
 		if strings.Contains(name, excludedModel) {
@@ -99,7 +106,7 @@ func main() {
 	}
 
 	var concurrency []int
-	for _, v := range strings.Split(*concurrencyInput, ",") {
+	for v := range strings.SplitSeq(*concurrencyInput, ",") {
 		num, err := strconv.Atoi(v)
 		if err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, "error: 无效的并发数配置")
@@ -112,7 +119,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfg := BenchmarkConfig{
+	cfg := types.BenchmarkConfig{
 		BaseURL:          *baseURL,
 		Tokens:           tokens,
 		Models:           active,
@@ -130,7 +137,7 @@ func main() {
 
 	runAt := time.Now()
 
-	var results []AggregatedMetrics
+	var results []types.AggregatedMetrics
 	if useTUI(*noTUI) {
 		results, err = runWithTUI(cfg)
 	} else {
@@ -145,7 +152,7 @@ func main() {
 		return
 	}
 
-	printReport(results)
+	report.PrintReport(results)
 
 	if !*noExcel {
 		outPath := *output
@@ -153,7 +160,7 @@ func main() {
 			outPath = fmt.Sprintf("bench-%s.xlsx", runAt.Format("20060102T150405"))
 		}
 		fmt.Printf("\n导出 Excel → %s\n", outPath)
-		if err := exportExcel(cfg, results, runAt, outPath); err != nil {
+		if err := report.ExportExcel(cfg, results, runAt, outPath); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Excel 导出失败: %v\n", err)
 		} else {
 			fmt.Printf("Excel 已保存: %s\n", outPath)
@@ -172,7 +179,7 @@ func useTUI(noTUI bool) bool {
 
 // runWithConsole 以纯文本控制台模式运行压测。
 // 第一次 Ctrl+C 优雅中止（返回已完成部分结果），第二次直接终止进程。
-func runWithConsole(cfg BenchmarkConfig) ([]AggregatedMetrics, error) {
+func runWithConsole(cfg types.BenchmarkConfig) ([]types.AggregatedMetrics, error) {
 	printHeader(cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -182,28 +189,28 @@ func runWithConsole(cfg BenchmarkConfig) ([]AggregatedMetrics, error) {
 	}()
 	defer stop()
 
-	return runBenchmark(ctx, cfg, &consoleReporter{})
+	return runner.RunBenchmark(ctx, cfg, &reporter.ConsoleReporter{})
 }
 
 // runWithTUI 启动 TUI，压测在后台协程中运行，事件通过 tuiReporter 写入共享状态。
 // TUI 退出后（正常结束或用户中止）再把配置头和报告打印到普通终端输出里，方便留存。
-func runWithTUI(cfg BenchmarkConfig) ([]AggregatedMetrics, error) {
+func runWithTUI(cfg types.BenchmarkConfig) ([]types.AggregatedMetrics, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	state := newTuiState()
-	prog := tea.NewProgram(newTuiModel(state, cancel, cfg), tea.WithAltScreen())
+	state := reporter.NewTuiState()
+	prog := tea.NewProgram(reporter.NewTuiModel(state, cancel, cfg), tea.WithAltScreen())
 
 	type outcome struct {
-		results []AggregatedMetrics
+		results []types.AggregatedMetrics
 		err     error
 	}
 	resCh := make(chan outcome, 1)
-	rep := &tuiReporter{state: state, prog: prog}
+	rep := &reporter.TUIReporter{State: state, Prog: prog}
 	go func() {
-		results, err := runBenchmark(ctx, cfg, rep)
+		results, err := runner.RunBenchmark(ctx, cfg, rep)
 		resCh <- outcome{results, err}
-		prog.Send(benchDoneMsg{})
+		prog.Send(reporter.BenchDoneMsg{})
 	}()
 
 	if _, err := prog.Run(); err != nil {
@@ -212,9 +219,9 @@ func runWithTUI(cfg BenchmarkConfig) ([]AggregatedMetrics, error) {
 	cancel() // TUI 异常退出时确保压测协程也能收敛
 	out := <-resCh
 
-	state.mu.Lock()
-	aborted := state.aborting
-	state.mu.Unlock()
+	state.Lock()
+	aborted := state.IsAborted()
+	state.Unlock()
 
 	printHeader(cfg)
 	if aborted && out.err == nil {
@@ -223,7 +230,7 @@ func runWithTUI(cfg BenchmarkConfig) ([]AggregatedMetrics, error) {
 	return out.results, out.err
 }
 
-func printHeader(cfg BenchmarkConfig) {
+func printHeader(cfg types.BenchmarkConfig) {
 	fmt.Printf("\nNewAPI API Benchmark\n")
 	fmt.Printf("========================\n")
 	fmt.Printf("Base URL    : %s\n", cfg.BaseURL)
@@ -318,7 +325,7 @@ func resolveTokens(single, filePath string) ([]string, error) {
 
 // parseModels 解析 JSON 格式的模型列表，如 [{"claude-opus-4-6":"anthropic"}]。
 // 每个对象恰好一个键：模型名 → provider。
-func parseModels(raw string) ([]ModelSpec, error) {
+func parseModels(raw string) ([]types.ModelSpec, error) {
 	var items []map[string]string
 	if err := json.Unmarshal([]byte(raw), &items); err != nil {
 		return nil, fmt.Errorf("期望 JSON 数组: %w", err)
@@ -327,14 +334,14 @@ func parseModels(raw string) ([]ModelSpec, error) {
 		return nil, fmt.Errorf("模型数组为空")
 	}
 
-	var models []ModelSpec
+	var models []types.ModelSpec
 	for i, item := range items {
 		for name, prov := range item {
-			p := Provider(strings.ToLower(strings.TrimSpace(prov)))
-			if _, ok := doSSERequests[p]; !ok {
+			p := types.Provider(strings.ToLower(strings.TrimSpace(prov)))
+			if !runner.IsSupportedProvider(p) {
 				return nil, fmt.Errorf("第 %d 项：未知 provider %q（合法值：anthropic / openai / openai-image / openai-response / gemini / __baseline__）", i, prov)
 			}
-			models = append(models, ModelSpec{Name: name, Provider: p})
+			models = append(models, types.ModelSpec{Name: name, Provider: p})
 		}
 	}
 	return models, nil

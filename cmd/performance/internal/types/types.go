@@ -1,8 +1,10 @@
-package main
+package types
 
 import (
 	"math/rand/v2"
 	"time"
+
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/prompts"
 )
 
 // ErrorType 分类请求失败原因
@@ -25,8 +27,8 @@ const (
 	ErrorTypeNoContent    ErrorType = "no_content"    // 流式响应正常结束但无可读内容
 )
 
-// errorTypeOrder 定义错误类型在报表/进度展示中的固定顺序。
-var errorTypeOrder = []ErrorType{
+// ErrorTypeOrder 定义错误类型在报表/进度展示中的固定顺序。
+var ErrorTypeOrder = []ErrorType{
 	ErrorTypeTimeout, ErrorTypeNetTimeout, ErrorTypeCanceled, ErrorTypeDNS,
 	ErrorTypeConnRefused, ErrorTypeConnReset, ErrorTypeTLS, ErrorTypeConnect,
 	ErrorTypeRateLimit, ErrorTypeServerError, ErrorTypeHTTP,
@@ -93,9 +95,9 @@ func (c *BenchmarkConfig) PickToken() string {
 func (c *BenchmarkConfig) BuildPrompt() string {
 	switch {
 	case c.DynamicPrompt:
-		return buildDynamicPrompt(c.PromptTokens)
+		return prompts.BuildDynamicPrompt(c.PromptTokens)
 	case c.CodexPrompt:
-		return buildCodexPrompt()
+		return prompts.BuildCodexPrompt()
 	default:
 		return c.Prompt
 	}
