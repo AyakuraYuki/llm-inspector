@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	defaultBaseURL     = "https://supertoken.shop"
+	defaultBaseURL     = "https://api.openai.com"
 	defaultDuration    = 60 * time.Second
 	defaultConcurrency = "500,1000,2000,5000,10000,20000"
 	excludedModel      = "gpt-image-2"
@@ -271,22 +271,22 @@ func validatePromptFlags(dynamicPrompt, codexPrompt bool) error {
 		}
 	})
 
+	countTrues := func(values ...bool) (count int) {
+		count = 0
+		for _, v := range values {
+			if v {
+				count++
+			}
+		}
+		return count
+	}
+
 	trues := countTrues(promptSetExplicitly, dynamicPrompt, codexPrompt)
 	if trues > 1 {
 		return fmt.Errorf("-prompt, -dynamic-prompt, -codex-prompt 不可同时使用")
 	}
 
 	return nil
-}
-
-func countTrues(b ...bool) (count int) {
-	count = 0
-	for _, v := range b {
-		if v {
-			count++
-		}
-	}
-	return count
 }
 
 // resolveTokens 从 -token 或 -token-file 构建 token 列表，两者互斥且必填其一。
@@ -339,7 +339,7 @@ func parseModels(raw string) ([]types.ModelSpec, error) {
 		for name, prov := range item {
 			p := types.Provider(strings.ToLower(strings.TrimSpace(prov)))
 			if !runner.IsSupportedProvider(p) {
-				return nil, fmt.Errorf("第 %d 项：未知 provider %q（合法值：anthropic / openai / openai-image / openai-response / gemini / __baseline__）", i, prov)
+				return nil, fmt.Errorf("第 %d 项：未知 provider %q（合法值：%s）", i, prov, runner.RegisteredProviders())
 			}
 			models = append(models, types.ModelSpec{Name: name, Provider: p})
 		}

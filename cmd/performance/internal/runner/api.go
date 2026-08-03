@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -135,6 +137,10 @@ var doSSERequests = map[types.Provider]doSSERequest{
 func IsSupportedProvider(p types.Provider) bool {
 	_, ok := doSSERequests[p]
 	return ok
+}
+
+func RegisteredProviders() []types.Provider {
+	return slices.Sorted(maps.Keys(doSSERequests))
 }
 
 // firstByteTracker 包装 io.Reader，精确记录首字节到达时刻。
