@@ -49,14 +49,15 @@ cp configs/eval.example.yml eval.yml   # edit target.base_url / api_key / model
 
 # performance: run a load test
 cd cmd/performance
-go run . -token "your-api-key" -models '[{"gpt-4o":"openai"}]'
+cp configs/config.example.yaml config.yaml   # edit models / tokens / base_url / concurrency
+go run . -config config.yaml
 ```
 
 See each module's README for configuration options, scoring rubrics, and report formats:
 
 - [`cmd/benchmark/README.md`](cmd/benchmark/README.md)
 - [`cmd/evaluation/README.md`](cmd/evaluation/README.md)
-- The `performance` module has no standalone README yet — run with `-h` / `--help` to see all available flags.
+- The `performance` module has no standalone README yet — all runtime parameters live in the YAML config; see [`cmd/performance/configs/config.example.yaml`](cmd/performance/configs/config.example.yaml) for every option.
 
 ## License
 

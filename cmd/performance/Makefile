@@ -7,8 +7,7 @@ GOARCH ?= amd64
 
 build:
 	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build -ldflags "-s -w" -o $(DIST)/$(BINARY)-$(GOOS)_$(GOARCH) .
-	@cp configs/models.example.json $(DIST)/models.json
-	@cp configs/tokens.example.json $(DIST)/tokens.json
+	@cp configs/config.example.yaml $(DIST)/config.yaml
 
 clean:
 	@go clean -cache

@@ -48,14 +48,15 @@ cp configs/eval.example.yml eval.yml   # 修改 target 的 base_url / api_key / 
 
 # performance：运行一次压测
 cd cmd/performance
-go run . -token "你的 API key" -models '[{"gpt-4o":"openai"}]'
+cp configs/config.example.yaml config.yaml   # 修改 models / tokens / base_url / concurrency
+go run . -config config.yaml
 ```
 
 配置项、评分口径、报告格式等详见各模块 README：
 
 - [`cmd/benchmark/README.md`](cmd/benchmark/README.md)
 - [`cmd/evaluation/README.md`](cmd/evaluation/README.md)
-- `performance` 模块目前暂无独立 README，可用 `-h` / `--help` 查看全部可用参数。
+- `performance` 模块目前暂无独立 README，全部运行参数都在 YAML 配置里，可参见 [`cmd/performance/configs/config.example.yaml`](cmd/performance/configs/config.example.yaml) 了解每一项。
 
 ## 许可证
 

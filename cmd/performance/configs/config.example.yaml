@@ -1,0 +1,52 @@
+# performance 压测工具配置文件
+# 用法：performance -config config.yaml
+
+# API 服务地址
+base_url: "https://api.openai.com"
+
+# 每个并发档位的测试持续时长（Go duration，如 60s、2m、1m30s）
+duration: 60s
+
+# 并发档位列表，逐档运行
+concurrency: [500, 1000, 2000, 5000, 10000, 20000]
+
+# 文本端点的 prompt 配置
+prompt:
+  # 生成方式，三选一：
+  #   text    —— 使用下方 text 的固定文本
+  #   dynamic —— 每次请求现场拼装约 tokens 个 token 的随机长文本，用于长上下文压测
+  #   codex   —— 类 Codex 系统提示词 + 随机简短提问，模拟高相似度请求场景
+  mode: "text"
+  # mode=text 时使用的固定 prompt
+  text: "Explain in plain English what API latency and throughput mean for a developer integrating LLM APIs. Write about 120 words. Do not use bullet points."
+  # mode=dynamic 时生成文本的目标近似 token 数
+  tokens: 2000
+
+# 图片生成端点的测试 prompt
+image_prompt: "A single red circle on white background, minimal flat design."
+
+# 正式测试前是否执行预热阶段（并发=10，时长由 warmup_duration 控制）
+warmup: true
+# 预热阶段持续时长
+warmup_duration: 10s
+
+# 每个并发档位之间的冷却等待时间
+cooldown: 5s
+
+# Excel 输出路径（留空则自动生成时间戳文件名，如 bench-20260618T150405.xlsx）
+output: ""
+# 跳过 Excel 导出，仅打印终端报告
+no_excel: false
+# 禁用 TUI，使用纯文本控制台输出（stdout 非终端时自动禁用）
+no_tui: false
+
+# 待测模型列表（必填，至少一个）
+models:
+  - name: "gpt-5.6-sol"
+    provider: "openai"
+  - name: "claude-sonnet-5"
+    provider: "anthropic"
+
+# Bearer token 列表（必填，至少一个；多个时每次请求随机选用）
+tokens:
+  - "sk-abcdef0123456789"
