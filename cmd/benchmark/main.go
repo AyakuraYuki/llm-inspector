@@ -471,37 +471,83 @@ func saveIndividualReports(results []BenchmarkResult, reportDir string) {
 	logf("Individual reports saved to: %s/ (%d success, %d failed)", reportDir, successCount, failCount)
 }
 
-// extractAnswer 从模型回答中提取 \boxed{} 中的答案
+// reasoningCloseTags 是各家模型思考内容的常见闭合标签。
+// 只匹配闭合标签而不做成对匹配，是因为部分模型或网关会丢失起始标签，仅保留闭合标签。
+var reasoningCloseTags = []string{
+	"</think>",
+	"</thinking>",
+	"</reasoning>",
+	"</thought>",
+	"◁/think▷",
+	"[/THINK]",
+}
+
+// stripReasoning 剔除模型回答中的思考内容，返回最后一个思考闭合标签之后的正文。
+// 思考内容里可能出现干扰判题的 \boxed{}（甚至是空的），而最终答案总是在思考结束之后给出。
+func stripReasoning(response string) string {
+	cut := -1 // 最靠后的闭合标签的结束位置
+	for _, tag := range reasoningCloseTags {
+		if idx := strings.LastIndex(response, tag); idx != -1 {
+			if end := idx + len(tag); end > cut {
+				cut = end
+			}
+		}
+	}
+	if cut == -1 {
+		return response
+	}
+	return response[cut:]
+}
+
+// extractAnswer 从模型回答中提取 \boxed{} 中的答案。
+// 优先在剔除思考内容后的正文中提取；若正文中没有 \boxed{}（例如思考标签异常
+// 或回答被截断），再回退到在完整回答中提取。
 func extractAnswer(response string) string {
-	// 查找 \boxed{...} 模式
-	// 支持嵌套的大括号
-	start := strings.Index(response, "\\boxed{")
-	if start == -1 {
-		return ""
+	if answer := extractLastBoxed(stripReasoning(response)); answer != "" {
+		return answer
 	}
+	return extractLastBoxed(response)
+}
 
-	start += len("\\boxed{")
-	braceCount := 1
-	end := start
+// extractLastBoxed 提取文本中最后一个内容非空的 \boxed{...}，支持嵌套的大括号。
+// 取最后一个而不是第一个，是因为模型可能在推导过程中多次提及 \boxed{}，
+// 而最终答案在结尾给出。
+func extractLastBoxed(text string) string {
+	const marker = "\\boxed{"
 
-	for end < len(response) && braceCount > 0 {
-		if response[end] == '{' {
-			braceCount++
-		} else if response[end] == '}' {
-			braceCount--
+	for searchEnd := len(text); searchEnd > 0; {
+		start := strings.LastIndex(text[:searchEnd], marker)
+		if start == -1 {
+			return ""
 		}
-		if braceCount > 0 {
-			end++
-		}
-	}
+		searchEnd = start // 本次提取失败时，从这里继续向前查找上一个 \boxed{
 
-	if braceCount == 0 {
-		answer := response[start:end]
+		start += len(marker)
+		braceCount := 1
+		end := start
+
+		for end < len(text) && braceCount > 0 {
+			if text[end] == '{' {
+				braceCount++
+			} else if text[end] == '}' {
+				braceCount--
+			}
+			if braceCount > 0 {
+				end++
+			}
+		}
+
+		if braceCount != 0 {
+			continue // 大括号未闭合（例如回答被截断），尝试更前面的 \boxed{
+		}
+
 		// 清理答案：移除多余的空格和换行
-		answer = strings.TrimSpace(answer)
+		answer := strings.TrimSpace(text[start:end])
 		answer = strings.ReplaceAll(answer, "\n", " ")
 		answer = strings.ReplaceAll(answer, "  ", " ")
-		return answer
+		if answer != "" {
+			return answer
+		}
 	}
 
 	return ""
