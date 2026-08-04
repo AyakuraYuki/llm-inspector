@@ -451,7 +451,7 @@ func saveIndividualReports(results []BenchmarkResult, reportDir string) {
 			if r.FinishReason == "null" || r.FinishReason == "" {
 				report.WriteString(" ⚠ WARNING: Abnormal termination")
 			} else if r.FinishReason != "stop" {
-				report.WriteString(fmt.Sprintf(" ⚠ WARNING: Non-normal finish"))
+				report.WriteString(" ⚠ WARNING: Non-normal finish")
 			}
 			report.WriteString("\n")
 		}
