@@ -7,7 +7,7 @@ GOARCH ?= amd64
 
 build:
 	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build -ldflags "-s -w" -o $(DIST)/$(BINARY)-$(GOOS)_$(GOARCH) .
-	@cp configs/eval.example.yml $(DIST)/eval.yml
+	@cp configs/config.example.yml $(DIST)/config.yml
 
 clean:
 	@go clean -cache
