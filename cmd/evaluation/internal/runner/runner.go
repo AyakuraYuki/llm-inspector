@@ -121,7 +121,13 @@ func Run(ctx context.Context, cfg *config.Config, only map[string]bool) (*core.R
 		return availability.Run(ctx, p, badKey)
 	})
 	runLayer("L2", cfg.Layers.Protocol.Enabled, func() core.LayerResult {
-		return protocol.Run(ctx, p)
+		constraints := &protocol.ModelConstraints{
+			RequiredTemperature:         cfg.Target.Constraints.RequiredTemperature,
+			DisableTemperatureZeroCheck: cfg.Target.Constraints.DisableTemperatureZeroCheck,
+			MinTemperature:              cfg.Target.Constraints.MinTemperature,
+			MaxTemperature:              cfg.Target.Constraints.MaxTemperature,
+		}
+		return protocol.Run(ctx, p, constraints)
 	})
 	runLayer("L3", cfg.Layers.Capability.Enabled, func() core.LayerResult {
 		return capability.Run(ctx, p, cfg.Layers.Capability, judge)

@@ -22,11 +22,24 @@ type Config struct {
 
 // TargetConfig 描述一个模型服务端点。
 type TargetConfig struct {
-	BaseURL  string `yaml:"base_url"`
-	APIKey   string `yaml:"api_key"`
-	Model    string `yaml:"model"`
-	Protocol string `yaml:"protocol"` // openai（默认）/ anthropic / gemini
-	Timeout  string `yaml:"timeout"`  // 如 "60s"，默认 60s
+	BaseURL     string           `yaml:"base_url"`
+	APIKey      string           `yaml:"api_key"`
+	Model       string           `yaml:"model"`
+	Protocol    string           `yaml:"protocol"`    // openai（默认）/ anthropic / gemini
+	Timeout     string           `yaml:"timeout"`     // 如 "60s"，默认 60s
+	Constraints ModelConstraints `yaml:"constraints"` // 模型特定的参数约束
+}
+
+// ModelConstraints 定义模型的参数约束，用于覆盖默认测试行为。
+type ModelConstraints struct {
+	// RequiredTemperature 强制使用的 temperature 值（某些模型不允许 temperature=0）
+	RequiredTemperature *float64 `yaml:"required_temperature"`
+	// DisableTemperatureZeroCheck 禁用 temperature=0 一致性检查
+	DisableTemperatureZeroCheck bool `yaml:"disable_temperature_zero_check"`
+	// MinTemperature temperature 最小值
+	MinTemperature *float64 `yaml:"min_temperature"`
+	// MaxTemperature temperature 最大值
+	MaxTemperature *float64 `yaml:"max_temperature"`
 }
 
 // ProtocolNormalized 返回规范化后的协议名（缺省 openai）。

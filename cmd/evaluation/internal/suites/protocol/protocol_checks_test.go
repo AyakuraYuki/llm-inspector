@@ -57,7 +57,7 @@ func TestCheckTemperatureZero(t *testing.T) {
 		p := &fakeProvider{chatFn: func(*provider.Request) (*provider.Result, error) {
 			return &provider.Result{Content: "42", FinishReason: "stop"}, nil
 		}}
-		r := checkTemperatureZero(t.Context(), p)
+		r := checkTemperatureZero(t.Context(), p, nil)
 		if r.Status != core.StatusPass || r.Score != 1 {
 			t.Errorf("status=%s score=%v, want pass/1", r.Status, r.Score)
 		}
@@ -71,7 +71,7 @@ func TestCheckTemperatureZero(t *testing.T) {
 			i++
 			return &provider.Result{Content: ans, FinishReason: "stop"}, nil
 		}}
-		r := checkTemperatureZero(t.Context(), p)
+		r := checkTemperatureZero(t.Context(), p, nil)
 		if r.Status != core.StatusPass {
 			t.Errorf("数值抖动不应判 fail, status=%s", r.Status)
 		}
@@ -88,7 +88,7 @@ func TestCheckTemperatureZero(t *testing.T) {
 		p := &fakeProvider{chatFn: func(*provider.Request) (*provider.Result, error) {
 			return nil, errors.New("connection refused")
 		}}
-		r := checkTemperatureZero(t.Context(), p)
+		r := checkTemperatureZero(t.Context(), p, nil)
 		if r.Status != core.StatusFail || r.Score != 0 {
 			t.Errorf("status=%s score=%v, want fail/0", r.Status, r.Score)
 		}

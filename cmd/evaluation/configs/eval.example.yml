@@ -3,8 +3,19 @@ target:
   base_url: http://localhost:8000/v1   # 端点地址
   api_key: sk-xxx
   model: qwen2.5-72b-instruct
-  protocol: openai                     # openai（默认）/ anthropic / gemini
+  # 模型特定约束配置
+  constraints:
+    # 强制使用的 temperature 值（某些模型不允许 temperature=0）
+    required_temperature: 1.0
+    # 禁用 temperature=0 一致性检查（当模型不支持 temperature=0 时）
+    disable_temperature_zero_check: false
+    # temperature 最小值（可选，用于验证）
+    # min_temperature: 0.1
+    # temperature 最大值（可选，用于验证）
+    # max_temperature: 1.0
+  protocol: openai # openai（默认）/ anthropic / gemini
   timeout: 60s
+
 # Anthropic 原生示例：
 # target:
 #   base_url: https://api.anthropic.com   # 缺省自动补 /v1

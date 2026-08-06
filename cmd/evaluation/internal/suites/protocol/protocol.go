@@ -21,7 +21,7 @@ import (
 const contentBudget = 1024
 
 // Run 执行 L2 全部检查。
-func Run(ctx context.Context, p provider.Provider) core.LayerResult {
+func Run(ctx context.Context, p provider.Provider, constraints *ModelConstraints) core.LayerResult {
 	start := time.Now()
 	layer := core.LayerResult{ID: "L2", Name: "协议兼容性", Enabled: true}
 
@@ -29,7 +29,7 @@ func Run(ctx context.Context, p provider.Provider) core.LayerResult {
 		checkStreaming(ctx, p),
 		checkSystemPrompt(ctx, p),
 		checkMaxTokens(ctx, p),
-		checkTemperatureZero(ctx, p),
+		checkTemperatureZero(ctx, p, constraints),
 		checkMultiTurn(ctx, p),
 		checkJSONMode(ctx, p),
 		checkToolCalling(ctx, p),
@@ -37,6 +37,14 @@ func Run(ctx context.Context, p provider.Provider) core.LayerResult {
 	)
 	layer.DurationMS = float64(time.Since(start).Microseconds()) / 1000
 	return layer
+}
+
+// ModelConstraints 定义模型的参数约束，从 config 包传入。
+type ModelConstraints struct {
+	RequiredTemperature         *float64
+	DisableTemperatureZeroCheck bool
+	MinTemperature              *float64
+	MaxTemperature              *float64
 }
 
 func timed(name string, weight float64, fn func() core.CheckResult) core.CheckResult {
@@ -170,14 +178,31 @@ func checkMaxTokens(ctx context.Context, p provider.Provider) core.CheckResult {
 // checkTemperatureZero 验证 temperature 参数被接受，并观察 temperature=0 下的输出一致性。
 // 注意：GPU 推理在 temp=0 下不保证逐位确定（批处理数值抖动是普遍现实），
 // 因此本检查以"请求成功即参数被接受"为通过标准，一致率仅作为得分与指标呈现。
-func checkTemperatureZero(ctx context.Context, p provider.Provider) core.CheckResult {
+// 如果 constraints 指定了模型特定约束，则跳过或调整此检查。
+func checkTemperatureZero(ctx context.Context, p provider.Provider, constraints *ModelConstraints) core.CheckResult {
 	return timed("temperature_zero", 1, func() core.CheckResult {
+		// 检查是否禁用此检查
+		if constraints != nil && constraints.DisableTemperatureZeroCheck {
+			return core.CheckResult{
+				Status: core.StatusSkip,
+				Score:  0,
+				Detail: "模型约束已禁用 temperature=0 检查",
+			}
+		}
+
 		const samples = 3
-		zero := 0.0
+		// 根据约束决定使用的 temperature 值
+		var tempValue float64
+		if constraints != nil && constraints.RequiredTemperature != nil {
+			tempValue = *constraints.RequiredTemperature
+		} else {
+			tempValue = 0.0
+		}
+
 		req := &provider.Request{
 			Messages:    []provider.Message{{Role: "user", Content: "说一个 1 到 1000000 之间的整数，只输出数字"}},
 			MaxTokens:   contentBudget,
-			Temperature: &zero,
+			Temperature: &tempValue,
 		}
 		answers := map[string]int{}
 		var errs []string
@@ -209,11 +234,26 @@ func checkTemperatureZero(ctx context.Context, p provider.Provider) core.CheckRe
 			total += n
 		}
 		agreement := float64(best) / float64(total)
-		detail := fmt.Sprintf("%d 次采样全部一致", total)
-		if len(answers) > 1 {
-			detail = fmt.Sprintf("%d 次采样出现 %d 种输出（temp=0 下的数值抖动属常见服务侧行为，非协议缺陷）",
-				total, len(answers))
+
+		// 根据是否使用约束指定的 temperature 调整详细信息
+		var detail string
+		if constraints != nil && constraints.RequiredTemperature != nil {
+			// 使用了模型约束指定的 temperature
+			detail = fmt.Sprintf("使用模型要求的 temperature=%.1f，%d 次采样", tempValue, total)
+			if len(answers) == 1 {
+				detail += "全部一致"
+			} else {
+				detail += fmt.Sprintf("出现 %d 种输出（在 temperature=%.1f 下预期行为）", len(answers), tempValue)
+			}
+		} else {
+			// 默认的 temperature=0 测试
+			detail = fmt.Sprintf("%d 次采样全部一致", total)
+			if len(answers) > 1 {
+				detail = fmt.Sprintf("%d 次采样出现 %d 种输出（temp=0 下的数值抖动属常见服务侧行为，非协议缺陷）",
+					total, len(answers))
+			}
 		}
+
 		if empty > 0 {
 			detail += fmt.Sprintf("；%d 次输出为空", empty)
 		}
@@ -222,11 +262,12 @@ func checkTemperatureZero(ctx context.Context, p provider.Provider) core.CheckRe
 		}
 		return core.CheckResult{Status: core.StatusPass, Score: agreement, Detail: detail,
 			Metrics: map[string]any{
-				"samples":   total,
-				"distinct":  len(answers),
-				"agreement": agreement,
-				"empty":     empty,
-				"errors":    len(errs),
+				"samples":     total,
+				"distinct":    len(answers),
+				"agreement":   agreement,
+				"empty":       empty,
+				"errors":      len(errs),
+				"temperature": tempValue,
 			}}
 	})
 }
