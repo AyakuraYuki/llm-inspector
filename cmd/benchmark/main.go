@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sashabaranov/go-openai"
+	"github.com/stretchr/testify/assert/yaml"
 )
 
 // progressReportInterval 是心跳监控器输出当前进度的间隔
@@ -49,28 +52,43 @@ type BenchmarkResult struct {
 	Error           string        `json:"error,omitempty"`           // 错误信息
 }
 
+type Config struct {
+	BaseURL string `yaml:"base_url"`
+	APIKey  string `yaml:"api_key"`
+	Model   string `yaml:"model"`
+}
+
+func (cfg *Config) validate() error {
+	if cfg.BaseURL == "" {
+		return errors.New("缺少 base_url")
+	}
+	if cfg.APIKey == "" {
+		return errors.New("缺少 api_key")
+	}
+	if cfg.Model == "" {
+		return errors.New("缺少 model")
+	}
+	return nil
+}
+
 func main() {
+	configPath := flag.String("config", "", "启动配置 YAML（必填）")
+	flag.Parse()
+	if configPath == nil || *configPath == "" {
+		_, _ = fmt.Fprintln(os.Stderr, "错误: 缺少 -config")
+		os.Exit(2)
+	}
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "配置错误:", err)
+		os.Exit(2)
+	}
+
 	// 读取配置
 	config := BenchmarkConfig{
 		MaxTokens:     65536,
 		MaxWorkers:    1,
 		ThinkingStyle: "enabled", // 启用思考模式
-	}
-
-	// 从环境变量读取 API 配置
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		log.Fatal("OPENAI_API_KEY environment variable is required")
-	}
-
-	baseURL := os.Getenv("OPENAI_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
-	}
-
-	modelName := os.Getenv("MODEL_NAME")
-	if modelName == "" {
-		modelName = "gpt-4"
 	}
 
 	// 读取问题列表
@@ -82,16 +100,16 @@ func main() {
 	logf("Loaded %d questions", len(questions))
 	logf("Config: max_tokens=%d, max_workers=%d, thinking_style=%s",
 		config.MaxTokens, config.MaxWorkers, config.ThinkingStyle)
-	logf("Model: %s, Base URL: %s", modelName, baseURL)
+	logf("Model: %s, Base URL: %s", cfg.Model, cfg.BaseURL)
 
 	// 创建 OpenAI 客户端
-	clientConfig := openai.DefaultConfig(apiKey)
-	clientConfig.BaseURL = baseURL
+	clientConfig := openai.DefaultConfig(cfg.APIKey)
+	clientConfig.BaseURL = cfg.BaseURL
 	client := openai.NewClientWithConfig(clientConfig)
 
 	// 运行 benchmark
 	logf("Benchmark started")
-	results := runBenchmark(client, modelName, questions, config)
+	results := runBenchmark(client, cfg.Model, questions, config)
 	logf("Benchmark finished")
 
 	// 创建统一的报告目录，本次运行的所有输出都存放在此
@@ -108,6 +126,21 @@ func main() {
 
 	// 计算统计信息
 	printStatistics(results)
+}
+
+func loadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("读取配置失败: %w", err)
+	}
+	var cfg Config
+	if err = yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("解析配置失败: %w", err)
+	}
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
 }
 
 // loadQuestions 从 JSON 文件加载问题

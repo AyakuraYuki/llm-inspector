@@ -1,0 +1,11 @@
+# benchmark 模型能力测试工具配置文件
+# 用法：benchmark -config config.yml
+
+# API 服务地址
+base_url: "https://api.openai.com/v1"
+
+# Bearer token
+api_key: ""
+
+# 待测模型名称
+model: "gpt-4"
