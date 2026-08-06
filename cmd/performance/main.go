@@ -53,7 +53,7 @@ func main() {
 	}
 	bench.Models = active
 
-	runAt := time.Now()
+	startAt := time.Now()
 
 	var results []types.AggregatedMetrics
 	if useTUI(cfg.NoTUI) {
@@ -72,17 +72,20 @@ func main() {
 
 	report.PrintReport(results)
 
-	if !cfg.NoExcel {
-		outPath := cfg.Output
-		if outPath == "" {
-			outPath = fmt.Sprintf("bench-%s.xlsx", runAt.Format("20060102T150405"))
-		}
-		fmt.Printf("\n导出 Excel → %s\n", outPath)
-		if err := report.ExportExcel(bench, results, runAt, outPath); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Excel 导出失败: %v\n", err)
-		} else {
-			fmt.Printf("Excel 已保存: %s\n", outPath)
-		}
+	if cfg.NoExcel {
+		return // 跳过导出excel报告的流程
+	}
+
+	// 导出excel
+	outPath := cfg.Output
+	if outPath == "" {
+		outPath = fmt.Sprintf("bench-%s.xlsx", startAt.Format("20060102T150405"))
+	}
+	fmt.Printf("\n导出 Excel → %s\n", outPath)
+	if err := report.ExportExcel(bench, results, startAt, outPath); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Excel 导出失败: %v\n", err)
+	} else {
+		fmt.Printf("Excel 已保存: %s\n", outPath)
 	}
 }
 
@@ -116,15 +119,18 @@ func runWithTUI(cfg types.BenchmarkConfig) ([]types.AggregatedMetrics, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	state := reporter.NewTuiState()
-	prog := tea.NewProgram(reporter.NewTuiModel(state, cancel, cfg), tea.WithAltScreen())
-
 	type outcome struct {
 		results []types.AggregatedMetrics
 		err     error
 	}
-	resCh := make(chan outcome, 1)
-	rep := &reporter.TUIReporter{State: state, Prog: prog}
+
+	var (
+		state = reporter.NewTuiState()
+		prog  = tea.NewProgram(reporter.NewTuiModel(state, cancel, cfg), tea.WithAltScreen())
+		resCh = make(chan outcome, 1)
+		rep   = &reporter.TUIReporter{State: state, Prog: prog}
+	)
+
 	go func() {
 		results, err := runner.RunBenchmark(ctx, cfg, rep)
 		resCh <- outcome{results, err}
