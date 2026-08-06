@@ -17,6 +17,7 @@ type Config struct {
 	Layers     LayersConfig     `yaml:"layers"`
 	Thresholds ThresholdsConfig `yaml:"thresholds"`
 	Output     OutputConfig     `yaml:"output"`
+	Tool       string           `yaml:"-"`
 }
 
 // TargetConfig 描述一个模型服务端点。
@@ -110,7 +111,7 @@ type OutputConfig struct {
 }
 
 // Load 从文件加载配置并填充默认值。
-func Load(path string) (*Config, error) {
+func Load(path string, programName string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("读取配置失败: %w", err)
@@ -123,6 +124,7 @@ func Load(path string) (*Config, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	cfg.Tool = programName
 	return &cfg, nil
 }
 

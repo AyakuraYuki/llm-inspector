@@ -18,7 +18,7 @@ import (
 )
 
 // Version 工具版本号。
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // LayerInfo 描述一层及其检查项，供 list 命令展示。
 type LayerInfo struct {
@@ -60,7 +60,7 @@ func Run(ctx context.Context, cfg *config.Config, only map[string]bool) (*core.R
 
 	startedAt := time.Now()
 	r := &core.Report{
-		Tool:      "llm-eval",
+		Tool:      cfg.Tool,
 		Version:   Version,
 		Target:    core.TargetInfo{BaseURL: cfg.Target.BaseURL, Model: cfg.Target.Model, Protocol: p.Protocol()},
 		StartedAt: startedAt.Format(time.RFC3339),

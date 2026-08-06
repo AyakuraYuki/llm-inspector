@@ -24,22 +24,22 @@ L2 的协议差异说明：JSON 输出在 openai/gemini 走原生参数，Anthro
 ## 构建
 
 ```bash
-go build -o llm-eval ./cmd/llm-eval
+go build -o evaluation ./cmd/evaluation
 ```
 
 ## 快速开始
 
 ```bash
 cp configs/example.yaml eval.yaml   # 修改 target 的 base_url / api_key / model
-./llm-eval run --config eval.yaml
+./evaluation run --config eval.yaml
 ```
 
 其他命令：
 
 ```bash
-./llm-eval list                          # 查看全部评测层与检查项
-./llm-eval run --config eval.yaml --layers L1,L2      # 只跑指定层
-./llm-eval run --config eval.yaml --dataset my.yaml   # 用自定义题库替换 L3 内建题库
+./evaluation list                          # 查看全部评测层与检查项
+./evaluation run --config eval.yaml --layers L1,L2      # 只跑指定层
+./evaluation run --config eval.yaml --dataset my.yaml   # 用自定义题库替换 L3 内建题库
 ```
 
 退出码：评测结论为 `pass` 时退出 0，否则退出 1（可直接接入 CI）。

@@ -284,7 +284,7 @@ func TestRunPipelineEndToEnd(t *testing.T) {
 	srv := newMockServer(t)
 	defer srv.Close()
 
-	cfg, err := config.Load(writeTestConfig(t, srv.URL))
+	cfg, err := config.Load(writeTestConfig(t, srv.URL), filepath.Base(os.Args[0]))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ func TestRunPipelineEndToEnd(t *testing.T) {
 
 func TestRunPipelineGateAbort(t *testing.T) {
 	srv := newMockServer(t)
-	cfg, err := config.Load(writeTestConfig(t, srv.URL))
+	cfg, err := config.Load(writeTestConfig(t, srv.URL), filepath.Base(os.Args[0]))
 	if err != nil {
 		t.Fatal(err)
 	}

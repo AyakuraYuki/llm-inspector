@@ -8,11 +8,11 @@
 
 每个工具都在 `cmd/` 下以独立 Go module 的形式存在，详细用法见各模块自己的 README。
 
-| 模块                       | 路径                                 | 说明                                                                                                                                                                          |
-|----------------------------|--------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `benchmark`                | [`cmd/benchmark`](cmd/benchmark)     | 基于 OpenAI-Compatible API 的基准测试工具，使用固定题库（2025 AIME I/II 数学题）对模型发起测试，统计 TTFT/TPS/TPM 并从 `\boxed{}` 中提取答案进行验证。                        |
-| `evaluation`（`llm-eval`） | [`cmd/evaluation`](cmd/evaluation)   | 五层（L1-L5）大语言模型可用性与能力评测工具，支持 OpenAI 兼容、Anthropic Messages API、Gemini `generateContent` API 三种协议的目标端点，输出可直接接入 CI 的 pass/fail 结论。 |
-| `performance`              | [`cmd/performance`](cmd/performance) | 带终端 TUI 界面的并发压测工具，支持多模型/多 token/多并发档位组合测试，并可导出 Excel 报告。                                                                                  |
+| 模块          | 路径                                 | 说明                                                                                                                                                                          |
+|---------------|--------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `benchmark`   | [`cmd/benchmark`](cmd/benchmark)     | 基于 OpenAI-Compatible API 的基准测试工具，使用固定题库（2025 AIME I/II 数学题）对模型发起测试，统计 TTFT/TPS/TPM 并从 `\boxed{}` 中提取答案进行验证。                        |
+| `evaluation`  | [`cmd/evaluation`](cmd/evaluation)   | 五层（L1-L5）大语言模型可用性与能力评测工具，支持 OpenAI 兼容、Anthropic Messages API、Gemini `generateContent` API 三种协议的目标端点，输出可直接接入 CI 的 pass/fail 结论。 |
+| `performance` | [`cmd/performance`](cmd/performance) | 带终端 TUI 界面的并发压测工具，支持多模型/多 token/多并发档位组合测试，并可导出 Excel 报告。                                                                                  |
 
 ## 仓库结构
 
@@ -20,7 +20,7 @@
 llm-inspector/
 ├── cmd/
 │   ├── benchmark/     # AIME 基准测试工具
-│   ├── evaluation/    # llm-eval：五层可用性与能力评测工具
+│   ├── evaluation/    # 五层可用性与能力评测工具
 │   └── performance/   # 带 TUI 与 Excel 导出的压测工具
 ├── LICENSE
 └── README.md
@@ -42,9 +42,9 @@ go run main.go
 
 # evaluation：运行五层评测
 cd cmd/evaluation
-go build -o llm-eval .
+go build -o evaluation .
 cp configs/eval.example.yml eval.yml   # 修改 target 的 base_url / api_key / model
-./llm-eval run --config eval.yml
+./evaluation run --config eval.yml
 
 # performance：运行一次压测
 cd cmd/performance

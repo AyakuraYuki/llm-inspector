@@ -127,20 +127,15 @@ func checkConcurrency(ctx context.Context, p provider.Provider, cfg config.Perfo
 	levels := make([]level, 0, len(cfg.Concurrency))
 
 	for _, c := range cfg.Concurrency {
-		total := c * 4
-		if total < 4 {
-			total = 4
-		}
+		total := max(c*4, 4)
 		latencies := make([]float64, total)
 		tokens := make([]float64, total)
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		jobs := make(chan int)
 		wallStart := time.Now()
-		for w := 0; w < c; w++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range c {
+			wg.Go(func() {
 				for i := range jobs {
 					s := time.Now()
 					resp, err := p.Chat(ctx, &provider.Request{
@@ -156,9 +151,9 @@ func checkConcurrency(ctx context.Context, p provider.Provider, cfg config.Perfo
 					}
 					mu.Unlock()
 				}
-			}()
+			})
 		}
-		for i := 0; i < total; i++ {
+		for i := range total {
 			jobs <- i
 		}
 		close(jobs)
@@ -168,7 +163,7 @@ func checkConcurrency(ctx context.Context, p provider.Provider, cfg config.Perfo
 		var okLat []float64
 		var tokSum float64
 		errs := 0
-		for i := 0; i < total; i++ {
+		for i := range total {
 			if latencies[i] < 0 {
 				errs++
 			} else {
@@ -213,15 +208,18 @@ func checkConcurrency(ctx context.Context, p provider.Provider, cfg config.Perfo
 
 // checkContextProbe 以指数梯度探测实际可用上下文长度，并记录各档延迟。
 func checkContextProbe(ctx context.Context, p provider.Provider, cfg config.PerformanceConfig) core.CheckResult {
-	start := time.Now()
-	sizes := []int{}
+	var (
+		start         = time.Now()
+		sizes         []int
+		passed        = 0
+		maxOK         = 0
+		latencyByStep = map[string]float64{}
+		stopReason    string
+	)
+
 	for s := 1024; s <= cfg.MaxProbeTokens; s *= 2 {
 		sizes = append(sizes, s)
 	}
-	passed := 0
-	maxOK := 0
-	latencyByStep := map[string]float64{}
-	var stopReason string
 
 	for _, size := range sizes {
 		prompt := buildFiller(size) + "\n\n以上是一段无意义文本，无需阅读。请只回复 OK。"
@@ -269,10 +267,7 @@ func checkContextProbe(ctx context.Context, p provider.Provider, cfg config.Perf
 func buildFiller(n int) string {
 	const unit = "lorem ipsum dolor sit amet consectetur adipiscing elit " // 8 词
 	words := n * 3 / 4
-	repeats := words / 8
-	if repeats < 1 {
-		repeats = 1
-	}
+	repeats := max(words/8, 1)
 	return strings.Repeat(unit, repeats)
 }
 

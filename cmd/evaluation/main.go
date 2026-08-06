@@ -1,10 +1,10 @@
-// llm-eval 是大语言模型可用性评测工具的 CLI 入口。
+// 大语言模型可用性评测工具的 CLI 入口。
 //
 // 用法:
 //
-//	llm-eval run --config eval.yaml [--layers L1,L3] [--output ./reports] [--dataset data.yaml]
-//	llm-eval list
-//	llm-eval version
+//	go run ./main.go run --config eval.yaml [--layers L1,L3] [--output ./reports] [--dataset data.yaml]
+//	go run ./main.go list
+//	go run ./main.go version
 package main
 
 import (
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -22,9 +23,18 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/runner"
 )
 
+var programName string
+
 func main() {
+	if exe, err := os.Executable(); err == nil {
+		programName = filepath.Base(exe)
+	}
+	if programName == "" {
+		programName = filepath.Base(os.Args[0])
+	}
+
 	if len(os.Args) < 2 {
-		usage()
+		usage(programName)
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -33,30 +43,30 @@ func main() {
 	case "list":
 		listCmd()
 	case "version":
-		fmt.Println("llm-eval", runner.Version)
+		fmt.Println(programName, runner.Version)
 	case "-h", "--help", "help":
-		usage()
+		usage(programName)
 	default:
-		fmt.Fprintf(os.Stderr, "未知命令: %s\n", os.Args[1])
-		usage()
+		_, _ = fmt.Fprintf(os.Stderr, "未知命令: %s\n", os.Args[1])
+		usage(programName)
 		os.Exit(2)
 	}
 }
 
-func usage() {
-	fmt.Fprintf(os.Stderr, `llm-eval — 大语言模型可用性评测工具
+func usage(programName string) {
+	_, _ = fmt.Fprintf(os.Stderr, `%[1]s — 大语言模型可用性评测工具
 
 用法:
-  llm-eval run --config <配置文件> [选项]   执行评测
-  llm-eval list                            列出全部评测层与检查项
-  llm-eval version                         显示版本
+  %[1]s run --config <配置文件> [选项]   执行评测
+  %[1]s list                            列出全部评测层与检查项
+  %[1]s version                         显示版本
 
 run 选项:
   --config    评测配置 YAML（必填）
   --layers    只执行指定层，逗号分隔，如 L1,L3（默认全部启用的层）
   --dataset   覆盖 L3 数据集路径
   --output    覆盖报告输出目录
-`)
+`, programName)
 }
 
 func runCmd(args []string) int {
@@ -69,13 +79,13 @@ func runCmd(args []string) int {
 		return 2
 	}
 	if *configPath == "" {
-		fmt.Fprintln(os.Stderr, "错误: 缺少 --config")
+		_, _ = fmt.Fprintln(os.Stderr, "错误: 缺少 --config")
 		return 2
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.Load(*configPath, programName)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "配置错误:", err)
+		_, _ = fmt.Fprintln(os.Stderr, "配置错误:", err)
 		return 2
 	}
 	if *dataset != "" {
@@ -88,7 +98,7 @@ func runCmd(args []string) int {
 	var only map[string]bool
 	if *layersFlag != "" {
 		only = map[string]bool{}
-		for _, id := range strings.Split(*layersFlag, ",") {
+		for id := range strings.SplitSeq(*layersFlag, ",") {
 			id = strings.ToUpper(strings.TrimSpace(id))
 			if !strings.HasPrefix(id, "L") {
 				id = "L" + id
@@ -104,14 +114,14 @@ func runCmd(args []string) int {
 	start := time.Now()
 	r, err := runner.Run(ctx, cfg, only)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "评测失败:", err)
+		_, _ = fmt.Fprintln(os.Stderr, "评测失败:", err)
 		return 1
 	}
 	report.Console(os.Stdout, r)
 
 	outDir, err := report.Save(cfg.Output.Dir, cfg.Output.Formats, r)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "保存报告失败:", err)
+		_, _ = fmt.Fprintln(os.Stderr, "保存报告失败:", err)
 		return 1
 	}
 	fmt.Printf("报告已保存: %s（总耗时 %.1fs）\n", outDir, time.Since(start).Seconds())

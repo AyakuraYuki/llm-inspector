@@ -23,7 +23,7 @@ func newGeminiE2EServer(t *testing.T) *httptest.Server {
 		if r.Header.Get("x-goog-api-key") != "Bearer-good" && r.Header.Get("x-goog-api-key") != "test-key" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(400)
-			fmt.Fprint(w, `{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT"}}`)
+			_, _ = fmt.Fprint(w, `{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT"}}`)
 			return false
 		}
 		return true
@@ -33,7 +33,7 @@ func newGeminiE2EServer(t *testing.T) *httptest.Server {
 		if !auth(w, r) {
 			return
 		}
-		fmt.Fprint(w, `{"models":[{"name":"models/gemini-mock"}]}`)
+		_, _ = fmt.Fprint(w, `{"models":[{"name":"models/gemini-mock"}]}`)
 	})
 
 	mux.HandleFunc("/v1beta/models/", func(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +45,7 @@ func newGeminiE2EServer(t *testing.T) *httptest.Server {
 		if model == "nonexistent-model-00000000" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(404)
-			fmt.Fprint(w, `{"error":{"code":404,"message":"not found","status":"NOT_FOUND"}}`)
+			_, _ = fmt.Fprint(w, `{"error":{"code":404,"message":"not found","status":"NOT_FOUND"}}`)
 			return
 		}
 
@@ -93,13 +93,13 @@ func newGeminiE2EServer(t *testing.T) *httptest.Server {
 		}
 
 		write := func(ans, fr string, extraParts string) {
-			fmt.Fprintf(w, `{"candidates":[{"content":{"role":"model","parts":[%s]},"finishReason":%q}],%s}`,
+			_, _ = fmt.Fprintf(w, `{"candidates":[{"content":{"role":"model","parts":[%s]},"finishReason":%q}],%s}`,
 				extraParts+`{"text":`+quote(ans)+`}`, fr, usage)
 		}
 
 		// 工具调用
 		if len(req.Tools) > 0 {
-			fmt.Fprintf(w, `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"Paris"}}}]},"finishReason":"STOP"}],%s}`, usage)
+			_, _ = fmt.Fprintf(w, `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"Paris"}}}]},"finishReason":"STOP"}],%s}`, usage)
 			return
 		}
 
@@ -113,8 +113,9 @@ func newGeminiE2EServer(t *testing.T) *httptest.Server {
 		if action == "streamGenerateContent" {
 			w.Header().Set("Content-Type", "text/event-stream")
 			half := len(answer) / 2
-			fmt.Fprintf(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":%s}]}}]}\n\n", quote(answer[:half]))
-			fmt.Fprintf(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":%s}]},\"finishReason\":%q}],%s}\n\n",
+			_, _ = fmt.Fprintf(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":%s}]}}]}\n\n",
+				quote(answer[:half]))
+			_, _ = fmt.Fprintf(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":%s}]},\"finishReason\":%q}],%s}\n\n",
 				quote(answer[half:]), finish, usage)
 			return
 		}
@@ -177,7 +178,7 @@ thresholds: {min_layer_score: 0.6}
 		t.Fatal(err)
 	}
 
-	cfg, err := config.Load(cfgPath)
+	cfg, err := config.Load(cfgPath, filepath.Base(os.Args[0]))
 	if err != nil {
 		t.Fatal(err)
 	}

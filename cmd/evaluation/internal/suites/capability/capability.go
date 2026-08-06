@@ -75,21 +75,16 @@ func Run(ctx context.Context, p provider.Provider, cfg config.CapabilityConfig, 
 	var completed int32 // 原子计数器
 	var wg sync.WaitGroup
 	jobs := make(chan int)
-	workers := cfg.Concurrency
-	if workers < 1 {
-		workers = 1
-	}
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	workers := max(cfg.Concurrency, 1)
+	for range workers {
+		wg.Go(func() {
 			for i := range jobs {
 				checks[i] = runCase(ctx, p, judge, &cases[i])
 				// 原子递增并输出进度
 				done := atomic.AddInt32(&completed, 1)
 				fmt.Printf("  [%d/%d] %s: %.0f%%\n", done, len(cases), cases[i].ID, checks[i].Score*100)
 			}
-		}()
+		})
 	}
 	for i := range cases {
 		jobs <- i

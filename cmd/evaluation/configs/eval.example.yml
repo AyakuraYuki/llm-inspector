@@ -1,4 +1,4 @@
-# llm-eval 评测配置示例
+# 配置示例
 target:
   base_url: http://localhost:8000/v1   # 端点地址
   api_key: sk-xxx
@@ -25,23 +25,28 @@ target:
 #   model: gpt-4o
 
 layers:
-  availability:           # L1：任一失败即中止后续评测
+  # L1：任一失败即中止后续评测
+  availability:
     enabled: true
-  protocol:               # L2
+  # L2
+  protocol:
     enabled: true
-  capability:             # L3
+  # L3
+  capability:
     enabled: true
     # dataset: datasets/smoke.yaml     # 不填则使用内建题库
     concurrency: 4
-  stability:              # L4
+  # L4
+  stability:
     enabled: true
     samples: 5
     soak_requests: 50
     temperature: 1.0
-  performance:            # L5
+  # L5
+  performance:
     enabled: true
     runs: 20
-    concurrency: [1, 4, 16]
+    concurrency: [ 1, 4, 16 ]
     max_probe_tokens: 32768
     slo:
       ttft_p99_ms: 2000
@@ -54,4 +59,4 @@ thresholds:
 
 output:
   dir: ./reports
-  formats: [json, markdown]
+  formats: [ json, markdown ]

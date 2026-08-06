@@ -9,11 +9,11 @@ load/stress testing.
 
 Each tool lives in its own directory under `cmd/` as an independent Go module. See each module's own README for full usage details.
 
-| Module                    | Path                                 | Description                                                                                                                                                                                               |
-|---------------------------|--------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `benchmark`               | [`cmd/benchmark`](cmd/benchmark)     | OpenAI-compatible benchmark tool that runs a fixed problem set (2025 AIME I/II math problems) against a model, measuring TTFT/TPS/TPM and verifying answers extracted from `\boxed{}`.                    |
-| `evaluation` (`llm-eval`) | [`cmd/evaluation`](cmd/evaluation)   | Five-layer (L1-L5) LLM availability and capability evaluator. Supports OpenAI-compatible, Anthropic Messages API, and Gemini `generateContent` API targets; produces a pass/fail verdict suitable for CI. |
-| `performance`             | [`cmd/performance`](cmd/performance) | Concurrent load-testing tool with a terminal UI, multi-model / multi-token / multi-concurrency benchmarking, and Excel report export.                                                                     |
+| Module        | Path                                 | Description                                                                                                                                                                                               |
+|---------------|--------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `benchmark`   | [`cmd/benchmark`](cmd/benchmark)     | OpenAI-compatible benchmark tool that runs a fixed problem set (2025 AIME I/II math problems) against a model, measuring TTFT/TPS/TPM and verifying answers extracted from `\boxed{}`.                    |
+| `evaluation`  | [`cmd/evaluation`](cmd/evaluation)   | Five-layer (L1-L5) LLM availability and capability evaluator. Supports OpenAI-compatible, Anthropic Messages API, and Gemini `generateContent` API targets; produces a pass/fail verdict suitable for CI. |
+| `performance` | [`cmd/performance`](cmd/performance) | Concurrent load-testing tool with a terminal UI, multi-model / multi-token / multi-concurrency benchmarking, and Excel report export.                                                                     |
 
 ## Repository layout
 
@@ -21,7 +21,7 @@ Each tool lives in its own directory under `cmd/` as an independent Go module. S
 llm-inspector/
 ├── cmd/
 │   ├── benchmark/     # AIME benchmark tool
-│   ├── evaluation/    # llm-eval: 5-layer availability & capability evaluator
+│   ├── evaluation/    # 5-layer availability & capability evaluator
 │   └── performance/   # Load-testing tool with TUI + Excel export
 ├── LICENSE
 └── README.md
@@ -43,9 +43,9 @@ go run main.go
 
 # evaluation: run the 5-layer evaluation
 cd cmd/evaluation
-go build -o llm-eval .
+go build -o evaluation .
 cp configs/eval.example.yml eval.yml   # edit target.base_url / api_key / model
-./llm-eval run --config eval.yml
+./evaluation run --config eval.yml
 
 # performance: run a load test
 cd cmd/performance
@@ -57,7 +57,8 @@ See each module's README for configuration options, scoring rubrics, and report 
 
 - [`cmd/benchmark/README.md`](cmd/benchmark/README.md)
 - [`cmd/evaluation/README.md`](cmd/evaluation/README.md)
-- The `performance` module has no standalone README yet — all runtime parameters live in the YAML config; see [`cmd/performance/configs/config.example.yaml`](cmd/performance/configs/config.example.yaml) for every option.
+- The `performance` module has no standalone README yet — all runtime parameters live in the YAML config; see [
+  `cmd/performance/configs/config.example.yaml`](cmd/performance/configs/config.example.yaml) for every option.
 
 ## License
 

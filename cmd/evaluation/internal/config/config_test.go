@@ -7,7 +7,7 @@ import (
 )
 
 func TestLoadExampleConfig(t *testing.T) {
-	cfg, err := Load(filepath.Join("..", "..", "configs", "example.yaml"))
+	cfg, err := Load(filepath.Join("..", "..", "configs", "eval.example.yml"), filepath.Base(os.Args[0]))
 	if err != nil {
 		t.Fatalf("加载示例配置失败: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestLoadDefaultsOnMinimal(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(path)
+	cfg, err := Load(path, filepath.Base(os.Args[0]))
 	if err != nil {
 		t.Fatalf("加载最小配置失败: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestLoadInvalid(t *testing.T) {
 	if err := os.WriteFile(path, []byte("target:\n  base_url: ''\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path); err == nil {
+	if _, err := Load(path, filepath.Base(os.Args[0])); err == nil {
 		t.Fatal("缺少 base_url 应报错")
 	}
 }
