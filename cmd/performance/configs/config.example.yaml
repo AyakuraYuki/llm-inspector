@@ -8,7 +8,7 @@ base_url: "https://api.openai.com"
 duration: 60s
 
 # 并发档位列表，逐档运行
-concurrency: [500, 1000, 2000, 5000, 10000, 20000]
+concurrency: [10, 20, 30, 40, 50, 75, 100, 120, 150]
 
 # 文本端点的 prompt 配置
 prompt:

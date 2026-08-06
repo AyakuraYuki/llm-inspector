@@ -38,7 +38,7 @@ const (
 	defaultImagePrompt = "A single red circle on white background, minimal flat design."
 )
 
-var defaultConcurrency = []int{500, 1000, 2000, 5000, 10000, 20000}
+var defaultConcurrency = []int{10, 20, 30, 40, 50, 75, 100, 120, 150}
 
 // Config 是 YAML 配置文件的完整结构。
 type Config struct {
