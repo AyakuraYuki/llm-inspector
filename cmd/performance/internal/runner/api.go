@@ -45,9 +45,9 @@ func newTransport(maxConcurrency int) *http.Transport {
 }
 
 // sharedClient 复用连接池；超时由 context 控制。
-// 初始按预热并发（warmupConcurrency）建池，正式压测前会由
+// 初始仅按小容量建池，preflight/正式压测开始前会由
 // configureSharedClient 按本次实际最大并发重建。
-var sharedClient = &http.Client{Transport: newTransport(warmupConcurrency)}
+var sharedClient = &http.Client{Transport: newTransport(16)}
 
 // configureSharedClient 按本次压测将要用到的最大并发数重建连接池。
 // 应在解析完 -concurrency 参数、preflightCheck/正式压测开始之前调用一次。
@@ -119,6 +119,11 @@ func classifyHTTPStatus(code int) types.ErrorType {
 const (
 	streamTimeout = 30 * time.Minute
 	imageTimeout  = 30 * time.Minute
+
+	// maxOutputTokens 统一各协议的输出长度上限。压测对比的是服务性能，
+	// 若输出长度不受控（模型想写多长写多长），E2E 时延/TPOT/TPS 会混入
+	// 生成长度的自然波动，同一模型的分位数失真，跨协议横向对比也不公平。
+	maxOutputTokens = 8192
 )
 
 type doSSERequest func(context.Context, types.BenchmarkConfig, types.ModelSpec) types.RequestMetrics
@@ -167,7 +172,7 @@ func doAnthropicRequest(ctx context.Context, cfg types.BenchmarkConfig, model ty
 
 	payload, _ := json.Marshal(map[string]any{
 		"model":      model.Name,
-		"max_tokens": 512,
+		"max_tokens": maxOutputTokens,
 		"stream":     true,
 		"messages":   []map[string]any{{"role": "user", "content": cfg.BuildPrompt()}},
 	})
@@ -207,8 +212,12 @@ func doAnthropicRequest(ctx context.Context, cfg types.BenchmarkConfig, model ty
 func doOpenAIRequest(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec) types.RequestMetrics {
 	t0 := time.Now()
 
+	// 用 max_tokens 而非 OpenAI 新版的 max_completion_tokens：前者是
+	// OpenAI 兼容生态（NewAPI 等网关及各家上游）普遍接受的字段，
+	// 网关会按需为 o 系列等模型转换字段名
 	payload, _ := json.Marshal(map[string]any{
 		"model":          model.Name,
+		"max_tokens":     maxOutputTokens,
 		"stream":         true,
 		"stream_options": map[string]bool{"include_usage": true},
 		"messages":       []map[string]any{{"role": "user", "content": cfg.BuildPrompt()}},
@@ -255,6 +264,7 @@ func doGeminiRequest(ctx context.Context, cfg types.BenchmarkConfig, model types
 				"parts": []map[string]any{{"text": cfg.BuildPrompt()}},
 			},
 		},
+		"generationConfig": map[string]any{"maxOutputTokens": maxOutputTokens},
 	})
 
 	reqCtx, cancel := context.WithTimeout(ctx, streamTimeout)
@@ -338,9 +348,10 @@ func doOpenAIResponseRequest(ctx context.Context, cfg types.BenchmarkConfig, mod
 	t0 := time.Now()
 
 	payload, _ := json.Marshal(map[string]any{
-		"model":  model.Name,
-		"input":  cfg.BuildPrompt(),
-		"stream": true,
+		"model":             model.Name,
+		"input":             cfg.BuildPrompt(),
+		"max_output_tokens": maxOutputTokens,
+		"stream":            true,
 	})
 
 	reqCtx, cancel := context.WithTimeout(ctx, streamTimeout)
@@ -422,23 +433,35 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 	tracker := &firstByteTracker{r: body, t0: t0, firstByte: &firstByteMs}
 
 	var (
-		ttftMs    float64
-		ttftSet   bool
-		promptT   int
-		compT     int
-		cachedT   int
-		usageSet  bool
-		textParts []string
+		ttftMs       float64
+		ttftSet      bool
+		promptT      int
+		compT        int
+		cachedT      int
+		usageSet     bool
+		terminalSeen bool
+		upstreamErr  string
+		textParts    []string
 	)
 
 	scanner := bufio.NewScanner(tracker)
-	scanner.Buffer(make([]byte, 512*1024), 512*1024)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		if isSSEDoneLine(line) {
+			terminalSeen = true
+			continue
+		}
 		obj := parseSSELine(line)
 		if obj == nil {
 			continue
+		}
+		if msg, found := sseErrorInfo(obj); found && upstreamErr == "" {
+			upstreamErr = msg
+		}
+		if sseIsTerminal(obj) {
+			terminalSeen = true
 		}
 		if !ttftSet && sseHasOutputContent(obj) {
 			ttftMs = time.Since(t0).Seconds() * 1000
@@ -472,28 +495,51 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 		}
 	}
 
-	// 回退：用首字节时间估算 TTFT
-	if !ttftSet {
-		if firstByteMs > 0 {
-			ttftMs = firstByteMs
-		} else {
-			ttftMs = e2eMs
+	// HTTP 200 建流之后网关才发现上游失败时，只能以流内错误事件收尾。
+	// 这类请求的输出被截断甚至为空，若照常记成功，会虚高成功率，
+	// 且偏短的 E2E/token 会拉低时延分位数、污染 TPOT/TPS 分布。
+	if upstreamErr != "" {
+		return types.RequestMetrics{
+			Success:      false,
+			TotalLatency: time.Duration(e2eMs * float64(time.Millisecond)),
+			Error:        "upstream error event: " + upstreamErr,
+			ErrorType:    types.ErrorTypeUpstreamError,
 		}
 	}
+
+	// 全程未解析到任何输出内容时，不能用首字节时间冒充 TTFT 把空生成记成成功：
+	// 首字节往往只是 message_start/ping 之类的元数据事件，既拉低 TTFT 分位数，
+	// 又让空响应混进成功率和 QPS。仅当 usage 明确报告了输出 token（内容可能是
+	// 本程序未识别的事件格式）时，才回退用首字节时间近似 TTFT 并按成功处理。
+	if !ttftSet {
+		if usageSet && compT > 0 && firstByteMs > 0 {
+			ttftMs = firstByteMs
+		} else {
+			return types.RequestMetrics{
+				Success:      false,
+				TotalLatency: time.Duration(e2eMs * float64(time.Millisecond)),
+				Error:        "stream ended without output content",
+				ErrorType:    types.ErrorTypeNoContent,
+			}
+		}
+	}
+
+	// 流干净地 EOF 但全程未出现协议终止标记：多半是网关/上游把连接提前
+	// 掐断，输出被无声截断。按成功处理会让这些偏短的请求污染分位数。
+	if !terminalSeen {
+		return types.RequestMetrics{
+			Success:      false,
+			TotalLatency: time.Duration(e2eMs * float64(time.Millisecond)),
+			Error:        "stream ended without terminal marker ([DONE]/finish_reason/message_stop/finishReason/response.completed)",
+			ErrorType:    types.ErrorTypeStreamTruncated,
+		}
+	}
+
 	// 无 usage 时用字符数粗估
 	if !usageSet && len(textParts) > 0 {
 		joined := strings.Join(textParts, "")
 		if strings.TrimSpace(joined) != "" {
 			compT = max(1, len(joined)/4)
-		}
-	}
-
-	if ttftMs <= 0 {
-		return types.RequestMetrics{
-			Success:      false,
-			TotalLatency: time.Duration(e2eMs * float64(time.Millisecond)),
-			Error:        "no output content received",
-			ErrorType:    types.ErrorTypeNoContent,
 		}
 	}
 
@@ -505,6 +551,82 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 		CachedInputTokens: max(0, cachedT),
 		Success:           true,
 	}
+}
+
+// isSSEDoneLine 判断是否为 OpenAI 兼容协议的流终止标记行（data: [DONE]）。
+func isSSEDoneLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if strings.HasPrefix(line, "data:") {
+		line = strings.TrimSpace(line[5:])
+	}
+	return line == "[DONE]"
+}
+
+// sseIsTerminal 判断 SSE 事件是否为协议定义的正常终止信号。各协议在生成结束时
+// 必然给出终止标记：OpenAI 兼容协议为 choices[].finish_reason（外加其后的 [DONE]
+// 行，见 isSSEDoneLine）；Anthropic 为 message_delta.delta.stop_reason 与
+// message_stop；Gemini 为 candidates[].finishReason；Responses API 为
+// response.completed / response.incomplete。全程未见任何终止标记的流按截断处理。
+func sseIsTerminal(obj map[string]any) bool {
+	switch t, _ := obj["type"].(string); t {
+	case "message_stop", "response.completed", "response.incomplete":
+		return true
+	case "message_delta":
+		if delta, ok := obj["delta"].(map[string]any); ok {
+			if sr, _ := delta["stop_reason"].(string); sr != "" {
+				return true
+			}
+		}
+	}
+	if choices, ok := obj["choices"].([]any); ok && len(choices) > 0 {
+		if c, ok := choices[0].(map[string]any); ok {
+			if fr, _ := c["finish_reason"].(string); fr != "" {
+				return true
+			}
+		}
+	}
+	if candidates, ok := obj["candidates"].([]any); ok && len(candidates) > 0 {
+		if cand, ok := candidates[0].(map[string]any); ok {
+			if fr, _ := cand["finishReason"].(string); fr != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// sseErrorInfo 识别流内的错误事件。网关常在 HTTP 200 建流后才发现上游失败，
+// 只能以错误事件形式发回：OpenAI 兼容协议/Gemini 为顶层 {"error":{...}}，
+// Anthropic 为 {"type":"error","error":{...}}，Responses API 为
+// {"type":"error",...} 或 {"type":"response.failed","response":{"error":{...}}}。
+func sseErrorInfo(obj map[string]any) (msg string, found bool) {
+	if e, ok := obj["error"].(map[string]any); ok {
+		return errorObjMessage(e), true
+	}
+	switch t, _ := obj["type"].(string); t {
+	case "error":
+		if m, _ := obj["message"].(string); m != "" {
+			return m, true
+		}
+		return "error event", true
+	case "response.failed":
+		if r, ok := obj["response"].(map[string]any); ok {
+			if e, ok := r["error"].(map[string]any); ok {
+				return errorObjMessage(e), true
+			}
+		}
+		return "response.failed", true
+	}
+	return "", false
+}
+
+// errorObjMessage 从错误对象中提取 message，取不到时序列化整个对象兜底。
+func errorObjMessage(e map[string]any) string {
+	if m, _ := e["message"].(string); m != "" {
+		return m
+	}
+	b, _ := json.Marshal(e)
+	return string(b)
 }
 
 // parseSSELine 将 SSE 数据行解析为 JSON 对象，遇到空行/注释/[DONE] 返回 nil。
@@ -565,14 +687,17 @@ func sseHasOutputContent(obj map[string]any) bool {
 	}
 	// Gemini: candidates[].content.parts[].text
 	// 思考内容同样落在 parts[].text 里（配合 thought:true 标记），此处按文本非空
-	// 统一判断，天然覆盖思考内容，无需额外分支
+	// 统一判断，天然覆盖思考内容，无需额外分支；逐个扫描所有 parts，
+	// 避免首个 part 为空文本时漏判
 	if candidates, ok := obj["candidates"].([]any); ok && len(candidates) > 0 {
 		if cand, ok := candidates[0].(map[string]any); ok {
 			if content, ok := cand["content"].(map[string]any); ok {
-				if parts, ok := content["parts"].([]any); ok && len(parts) > 0 {
-					if part, ok := parts[0].(map[string]any); ok {
-						if text, _ := part["text"].(string); text != "" {
-							return true
+				if parts, ok := content["parts"].([]any); ok {
+					for _, p := range parts {
+						if part, ok := p.(map[string]any); ok {
+							if text, _ := part["text"].(string); text != "" {
+								return true
+							}
 						}
 					}
 				}
@@ -637,12 +762,17 @@ func consumeSSEUsage(obj map[string]any, textParts *[]string) (promptT, compT, c
 		}
 	}
 
-	// Gemini: usageMetadata.candidatesTokenCount / cachedContentTokenCount
+	// Gemini: usageMetadata.candidatesTokenCount / thoughtsTokenCount / cachedContentTokenCount
 	if meta, ok := obj["usageMetadata"].(map[string]any); ok {
 		if compT < 0 {
 			c := intFromMap(meta, "candidatesTokenCount")
-			if c >= 0 {
-				compT = c
+			// candidatesTokenCount 不含思考 token（Gemini 单独记在 thoughtsTokenCount），
+			// 而 OpenAI 的 completion_tokens、Anthropic 的 output_tokens 均含思考 token。
+			// 思考时间在生成窗口里、token 却不在分母里会系统性抬高 TPOT、压低 TPS，
+			// 这里补上思考 token 保证跨协议可比。
+			th := intFromMap(meta, "thoughtsTokenCount")
+			if c >= 0 || th > 0 {
+				compT = max(c, 0) + max(th, 0)
 				promptT = max(0, intFromMap(meta, "promptTokenCount"))
 				source = "usage"
 			}

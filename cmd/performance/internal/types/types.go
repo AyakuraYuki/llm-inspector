@@ -11,28 +11,30 @@ import (
 type ErrorType string
 
 const (
-	ErrorTypeNone         ErrorType = ""
-	ErrorTypeTimeout      ErrorType = "timeout"       // 请求超时（context deadline）
-	ErrorTypeNetTimeout   ErrorType = "net_timeout"   // 网络层超时（net.Error.Timeout()，排除下面几类更具体的原因）
-	ErrorTypeCanceled     ErrorType = "canceled"      // 请求被取消（context.Canceled，通常是压测中止）
-	ErrorTypeDNS          ErrorType = "dns_error"     // DNS 解析失败
-	ErrorTypeConnRefused  ErrorType = "conn_refused"  // 连接被拒绝（端口未监听/服务下线）
-	ErrorTypeConnReset    ErrorType = "conn_reset"    // 连接被对端重置/broken pipe（可能发生在发送或读取阶段）
-	ErrorTypeTLS          ErrorType = "tls_error"     // TLS 握手/证书错误
-	ErrorTypeConnect      ErrorType = "connect"       // 其他拨号失败（兜底分类）
-	ErrorTypeRateLimit    ErrorType = "rate_limited"  // HTTP 429
-	ErrorTypeServerError  ErrorType = "server_error"  // HTTP 5xx
-	ErrorTypeHTTP         ErrorType = "http_error"    // 其他非 200 HTTP 状态码（如 4xx）
-	ErrorTypeStreamBroken ErrorType = "stream_broken" // 流读取中途中断（scanner 报错，非正常结束）
-	ErrorTypeNoContent    ErrorType = "no_content"    // 流式响应正常结束但无可读内容
+	ErrorTypeNone            ErrorType = ""
+	ErrorTypeTimeout         ErrorType = "timeout"          // 请求超时（context deadline）
+	ErrorTypeNetTimeout      ErrorType = "net_timeout"      // 网络层超时（net.Error.Timeout()，排除下面几类更具体的原因）
+	ErrorTypeCanceled        ErrorType = "canceled"         // 请求被取消（context.Canceled，通常是压测中止）
+	ErrorTypeDNS             ErrorType = "dns_error"        // DNS 解析失败
+	ErrorTypeConnRefused     ErrorType = "conn_refused"     // 连接被拒绝（端口未监听/服务下线）
+	ErrorTypeConnReset       ErrorType = "conn_reset"       // 连接被对端重置/broken pipe（可能发生在发送或读取阶段）
+	ErrorTypeTLS             ErrorType = "tls_error"        // TLS 握手/证书错误
+	ErrorTypeConnect         ErrorType = "connect"          // 其他拨号失败（兜底分类）
+	ErrorTypeRateLimit       ErrorType = "rate_limited"     // HTTP 429
+	ErrorTypeServerError     ErrorType = "server_error"     // HTTP 5xx
+	ErrorTypeHTTP            ErrorType = "http_error"       // 其他非 200 HTTP 状态码（如 4xx）
+	ErrorTypeStreamBroken    ErrorType = "stream_broken"    // 流读取中途中断（scanner 报错，非正常结束）
+	ErrorTypeStreamTruncated ErrorType = "stream_truncated" // 流正常 EOF 但未出现协议终止标记（[DONE]/message_stop/finish_reason 等），疑似被上游/网关无声截断
+	ErrorTypeUpstreamError   ErrorType = "upstream_error"   // HTTP 200 建流后收到流内错误事件（网关转发上游失败的常见形态）
+	ErrorTypeNoContent       ErrorType = "no_content"       // 流式响应正常结束但无可读内容
 )
 
 // ErrorTypeOrder 定义错误类型在报表/进度展示中的固定顺序。
 var ErrorTypeOrder = []ErrorType{
 	ErrorTypeTimeout, ErrorTypeNetTimeout, ErrorTypeCanceled, ErrorTypeDNS,
 	ErrorTypeConnRefused, ErrorTypeConnReset, ErrorTypeTLS, ErrorTypeConnect,
-	ErrorTypeRateLimit, ErrorTypeServerError, ErrorTypeHTTP,
-	ErrorTypeStreamBroken, ErrorTypeNoContent,
+	ErrorTypeRateLimit, ErrorTypeServerError, ErrorTypeHTTP, ErrorTypeUpstreamError,
+	ErrorTypeStreamBroken, ErrorTypeStreamTruncated, ErrorTypeNoContent,
 }
 
 // Provider 标识接口协议类型
@@ -55,7 +57,7 @@ type ModelSpec struct {
 
 // RequestMetrics 记录单次请求的原始指标
 type RequestMetrics struct {
-	Timestamp         time.Time     // 请求发起时刻，仅用于错误明细排查
+	Timestamp         time.Time     // 请求发起时刻，用于吞吐窗口判定和错误明细排查
 	TTFT              time.Duration // 首 token 时延（图片生成为 0）
 	TotalLatency      time.Duration // 端到端总时延
 	InputTokens       int           // 输入 token 数（图片生成为 0，无 usage 上报时为 0）
@@ -108,7 +110,9 @@ type BenchmarkResult struct {
 	Model       string
 	Provider    Provider
 	Concurrency int
-	Elapsed     time.Duration
+	Start       time.Time     // 档位开始时刻
+	Window      time.Duration // 名义压测时长（吞吐统计窗口的上限）
+	Elapsed     time.Duration // 实际运行时长（含 deadline 后在途请求的排空期）
 	Metrics     []RequestMetrics
 }
 
@@ -141,7 +145,9 @@ type AggregatedMetrics struct {
 	Model         string
 	Provider      Provider
 	Concurrency   int
-	Elapsed       time.Duration
+	Start         time.Time     // 档位开始时刻，用于报表排查时段性波动
+	Elapsed       time.Duration // 实际运行时长（含 deadline 后在途请求的排空期）
+	Window        time.Duration // 吞吐统计窗口（正常档位为名义压测时长，中止档位为实际运行时长）
 	Total         int
 	Success       int
 	Failed        int
@@ -149,7 +155,7 @@ type AggregatedMetrics struct {
 	FailedDetails []RequestMetrics // 每条失败请求的原始记录，用于错误明细 sheet
 
 	// 仅流式端点有效
-	TTFT       PercentileStats
+	TTFT       PercentileStats // 首 token 时延，仅统计成功请求
 	TPOT       PercentileStats // Time Per Output Token（gen_window / output_tokens）
 	TpsPr      FloatStats      // per-request tokens/s 分位数
 	TpmPr      FloatStats      // per-request tokens/min 分位数
@@ -157,9 +163,9 @@ type AggregatedMetrics struct {
 	CacheHitPr FloatStats      // per-request 缓存命中率（cached_input_tokens / input_tokens * 100）分位数，仅上报了缓存字段的 provider 有效
 
 	// 所有端点均有
-	Latency PercentileStats
+	Latency PercentileStats // 端到端时延，仅统计成功请求（失败时延见 FailedDetails）
 
-	// 系统级吞吐量（整个窗口的总量 / elapsed）
+	// 系统级吞吐量（吞吐窗口内完成的总量 / Window）
 	TPS float64
 	TPM float64
 	QPS float64

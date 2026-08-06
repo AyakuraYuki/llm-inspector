@@ -32,8 +32,8 @@ func printOne(agg types.AggregatedMetrics) {
 	fmt.Printf("\n%s\n", strings.Repeat("-", colWidth))
 	fmt.Printf("  Model: %s  |  Provider: %s  |  Concurrency: %d\n",
 		agg.Model, agg.Provider, agg.Concurrency)
-	fmt.Printf("  Elapsed: %s  |  Requests: %d total, %d ok, %d failed (%.1f%% error)\n",
-		formatDuration(agg.Elapsed), agg.Total, agg.Success, agg.Failed, errPct)
+	fmt.Printf("  Elapsed: %s  |  Window: %s  |  Requests: %d total, %d ok, %d failed (%.1f%% error)\n",
+		formatDuration(agg.Elapsed), formatDuration(agg.Window), agg.Total, agg.Success, agg.Failed, errPct)
 	fmt.Printf("%s\n", strings.Repeat("-", colWidth))
 
 	if isStreaming {
@@ -59,6 +59,11 @@ func printOne(agg types.AggregatedMetrics) {
 
 		fmt.Printf("  %s\n", strings.Repeat("-", colWidth-2))
 		fmt.Printf("  QPS: %.4f req/s  |  QPM: %.2f req/min\n", agg.QPS, agg.QPM)
+	}
+
+	// 吞吐口径按"窗口内完成"计数，E2E 时延占窗口比例过高时结果偏低，需醒目提示
+	if note := throughputBiasNote(agg); note != "" {
+		fmt.Printf("  [WARN] %s\n", note)
 	}
 
 	// 失败原因分类
@@ -124,6 +129,21 @@ func printSummaryTable(results []types.AggregatedMetrics) {
 	}
 
 	fmt.Printf("%s\n\n", strings.Repeat("=", colWidth))
+}
+
+// throughputBiasNote 在平均 E2E 时延占吞吐窗口比例过高时返回警告文案。
+// QPS/TPS 只统计"窗口内完成"的请求,而压测从零起步,窗口前段约一个平均时延内
+// 不可能有任何请求完成,吞吐因此被系统性低估约 Avg/Window 的比例;
+// E2E 逼近窗口时 QPS/TPS 会趋近 0,只能通过加大 duration 稀释偏差。
+func throughputBiasNote(agg types.AggregatedMetrics) string {
+	if agg.Window <= 0 || agg.Latency.Avg <= 0 {
+		return ""
+	}
+	ratio := float64(agg.Latency.Avg) / float64(agg.Window)
+	if ratio < 0.2 {
+		return ""
+	}
+	return fmt.Sprintf("平均 E2E 时延达吞吐窗口的 %.0f%%，QPS/TPS 被系统性低估约同等比例，建议加大 duration 后重测", ratio*100)
 }
 
 func formatDuration(d time.Duration) string {

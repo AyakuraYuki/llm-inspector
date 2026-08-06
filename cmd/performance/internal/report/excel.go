@@ -91,7 +91,7 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 	rows = append(rows, []any{"- TPOT", "每 token 生成耗时（gen_window/tokens）"})
 	rows = append(rows, []any{"- TPS", "per-request tokens/s（P50/P95/P99/P99.5/P99.9）"})
 	rows = append(rows, []any{"- TPM", "per-request tokens/min（P50/P95/P99/P99.5/P99.9）"})
-	rows = append(rows, []any{"- System TPS", "总 tokens/elapsed"})
+	rows = append(rows, []any{"- System TPS", "吞吐窗口内完成的总 tokens/窗口时长（窗口外完成的长尾请求不计入）"})
 	rows = append(rows, []any{"- QPS（又称RPS）", "系统级 req/s"})
 	rows = append(rows, []any{"- QPM（又称RPM）", "系统级 req/min"})
 	rows = append(rows, []any{"- I/O Ratio", "输出/输入 token 比（output_tokens/input_tokens，per-request 分位数及 System 总量比）"})
@@ -226,14 +226,17 @@ func writeIORSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "QPS压测(TPS·req)"
 	headers := []any{
-		"模型 ID", "Provider", "类型", "并发数",
-		"持续时长(s)", "QPS(req/s)", "QPM(req/min)", "成功率(%)",
-		"成功请求数", "失败请求数",
+		"模型 ID", "Provider", "类型", "并发数", "开始时间",
+		"实际时长(s)", "吞吐窗口(s)", "QPS(req/s)", "QPM(req/min)", "成功率(%)",
+		"成功请求数", "失败请求数", "备注",
 	}
 	xlSetRow(f, sh, 1, headers, hdrStyle)
 	_ = f.SetColWidth(sh, "A", "A", 30)
 	_ = f.SetColWidth(sh, "B", "C", 14)
-	_ = f.SetColWidth(sh, "D", "J", 12)
+	_ = f.SetColWidth(sh, "D", "D", 10)
+	_ = f.SetColWidth(sh, "E", "E", 22)
+	_ = f.SetColWidth(sh, "F", "L", 12)
+	_ = f.SetColWidth(sh, "M", "M", 55)
 
 	row := 2
 	for _, agg := range results {
@@ -245,17 +248,24 @@ func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 		if agg.Total > 0 {
 			successPct = float64(agg.Success) / float64(agg.Total) * 100
 		}
+		startStr := ""
+		if !agg.Start.IsZero() {
+			startStr = agg.Start.Format("2006-01-02 15:04:05")
+		}
 		xlSetRow(f, sh, row, []any{
 			agg.Model,
 			string(agg.Provider),
 			category,
 			agg.Concurrency,
+			startStr,
 			round2(agg.Elapsed.Seconds()),
+			round2(agg.Window.Seconds()),
 			round3(agg.QPS),
 			round2(agg.QPM),
 			round1(successPct),
 			agg.Success,
 			agg.Failed,
+			throughputBiasNote(agg),
 		}, 0)
 		row++
 	}

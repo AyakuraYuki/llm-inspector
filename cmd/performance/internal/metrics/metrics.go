@@ -15,10 +15,21 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 		Model:       result.Model,
 		Provider:    result.Provider,
 		Concurrency: result.Concurrency,
+		Start:       result.Start,
 		Elapsed:     result.Elapsed,
 		Total:       len(result.Metrics),
 		ErrorCounts: make(map[types.ErrorType]int),
 	}
+
+	// 吞吐统计窗口：正常结束的档位取名义压测时长，提前中止的档位取实际运行时长。
+	// deadline 前发出、deadline 后才完成的长尾请求仍计入时延分位数，但不计入
+	// QPS/TPS——排空期内并发持续衰减，若按整个 Elapsed 摊分母会系统性低估吞吐。
+	window := result.Elapsed
+	if result.Window > 0 && result.Window < window {
+		window = result.Window
+	}
+	agg.Window = window
+	cutoff := result.Start.Add(window)
 
 	var (
 		ttfts           []time.Duration
@@ -30,12 +41,13 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 		totalToks       int64
 		totalInputToks  int64
 		totalCachedToks int64
+		winSuccess      int
+		winToks         int64
 	)
 
 	isStreaming := result.Provider != types.ProviderOpenAIImage
 
 	for _, m := range result.Metrics {
-		latencies = append(latencies, m.TotalLatency)
 		if !m.Success {
 			agg.Failed++
 			if m.ErrorType != types.ErrorTypeNone {
@@ -45,9 +57,16 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 			continue
 		}
 		agg.Success++
+		// 时延分位数只统计成功请求：快速失败（毫秒级 4xx）会拉低 P50，
+		// 超时失败会拉爆 P99，混入后分布失真；失败时延保留在 FailedDetails 里。
+		latencies = append(latencies, m.TotalLatency)
 		totalToks += int64(m.OutputTokens)
 		totalInputToks += int64(m.InputTokens)
 		totalCachedToks += int64(m.CachedInputTokens)
+		if result.Start.IsZero() || !m.Timestamp.Add(m.TotalLatency).After(cutoff) {
+			winSuccess++
+			winToks += int64(m.OutputTokens)
+		}
 
 		if isStreaming {
 			if m.TTFT > 0 {
@@ -91,12 +110,12 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 	// per-request 缓存命中率分位数
 	agg.CacheHitPr = floatPercentileStats(cacheHitValues)
 
-	// 系统级吞吐量
-	if secs := result.Elapsed.Seconds(); secs > 0 {
-		agg.QPS = float64(agg.Success) / secs
+	// 系统级吞吐量：只统计吞吐窗口内完成的请求，分母为窗口时长
+	if secs := window.Seconds(); secs > 0 {
+		agg.QPS = float64(winSuccess) / secs
 		agg.QPM = agg.QPS * 60
-		if isStreaming && totalToks > 0 {
-			agg.TPS = float64(totalToks) / secs
+		if isStreaming && winToks > 0 {
+			agg.TPS = float64(winToks) / secs
 			agg.TPM = agg.TPS * 60
 		}
 	}
