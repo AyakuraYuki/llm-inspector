@@ -17,6 +17,8 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 	"github.com/stretchr/testify/assert/yaml"
+
+	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/util"
 )
 
 // progressReportInterval 是心跳监控器输出当前进度的间隔
@@ -24,9 +26,9 @@ const progressReportInterval = 30 * time.Second
 
 // BenchmarkConfig 包含 benchmark 运行配置
 type BenchmarkConfig struct {
-	MaxTokens     int    `json:"max_tokens"`
-	MaxWorkers    int    `json:"max_workers"`
-	ThinkingStyle string `json:"thinking_style"`
+	MaxTokens       int    `json:"max_tokens"`
+	MaxWorkers      int    `json:"max_workers"`
+	ReasoningEffort string `json:"reasoning_effort"`
 }
 
 // Question 表示一个问题及其答案
@@ -53,9 +55,12 @@ type BenchmarkResult struct {
 }
 
 type Config struct {
-	BaseURL string `yaml:"base_url"`
-	APIKey  string `yaml:"api_key"`
-	Model   string `yaml:"model"`
+	BaseURL         string `yaml:"base_url"`
+	APIKey          string `yaml:"api_key"`
+	Model           string `yaml:"model"`
+	MaxTokens       int    `yaml:"max_tokens"`
+	MaxWorkers      int    `yaml:"max_workers"`
+	ReasoningEffort string `json:"reasoning_effort"`
 }
 
 func (cfg *Config) validate() error {
@@ -86,9 +91,9 @@ func main() {
 
 	// 读取配置
 	config := BenchmarkConfig{
-		MaxTokens:     65536,
-		MaxWorkers:    1,
-		ThinkingStyle: "enabled", // 启用思考模式
+		MaxTokens:       util.Ternary(cfg.MaxTokens > 0, cfg.MaxTokens, 65536),
+		MaxWorkers:      max(cfg.MaxWorkers, 1),
+		ReasoningEffort: cfg.ReasoningEffort,
 	}
 
 	// 读取问题列表
@@ -98,8 +103,7 @@ func main() {
 	}
 
 	logf("Loaded %d questions", len(questions))
-	logf("Config: max_tokens=%d, max_workers=%d, thinking_style=%s",
-		config.MaxTokens, config.MaxWorkers, config.ThinkingStyle)
+	logf("Config: max_tokens=%d, max_workers=%d", config.MaxTokens, config.MaxWorkers)
 	logf("Model: %s, Base URL: %s", cfg.Model, cfg.BaseURL)
 
 	// 创建 OpenAI 客户端
@@ -137,7 +141,7 @@ func loadConfig(path string) (*Config, error) {
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("解析配置失败: %w", err)
 	}
-	if err := cfg.validate(); err != nil {
+	if err = cfg.validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -229,8 +233,8 @@ func benchmarkQuestion(client *openai.Client, model string, q Question, index in
 
 	// 创建请求
 	req := openai.ChatCompletionRequest{
-		Model:     model,
-		MaxTokens: config.MaxTokens,
+		Model:               model,
+		MaxCompletionTokens: config.MaxTokens,
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleUser,
@@ -239,6 +243,9 @@ func benchmarkQuestion(client *openai.Client, model string, q Question, index in
 		},
 		Stream: true,
 	}
+	if config.ReasoningEffort != "" {
+		req.ReasoningEffort = strings.ToLower(config.ReasoningEffort)
+	}
 
 	// 发送流式请求
 	stream, err := client.CreateChatCompletionStream(ctx, req)
@@ -246,7 +253,7 @@ func benchmarkQuestion(client *openai.Client, model string, q Question, index in
 		result.Error = fmt.Sprintf("Failed to create stream: %v", err)
 		return result
 	}
-	defer stream.Close()
+	defer func(stream *openai.ChatCompletionStream) { _ = stream.Close() }(stream)
 
 	var firstTokenTime time.Time
 	var totalTokens int

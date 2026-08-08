@@ -9,3 +9,13 @@ api_key: ""
 
 # 待测模型名称
 model: "gpt-4"
+
+# 最大输出token数限制
+max_tokens: 65536
+
+# 测试进程数
+max_workers: 1
+
+# 思考强度
+# 可选，支持 low | medium | high，部分模型支持 max，具体参考模型规格
+reasoning_effort: high
