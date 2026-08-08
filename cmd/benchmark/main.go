@@ -69,6 +69,7 @@ const progressReportInterval = 30 * time.Second
 
 // Question 表示一个问题及其答案
 type Question struct {
+	Dataset  string  `json:"dataset" yaml:"dataset"`
 	Question string  `json:"question" yaml:"question"`
 	Answer   *string `json:"answer" yaml:"answer"` // 可能为 null
 }
@@ -76,6 +77,7 @@ type Question struct {
 // BenchmarkResult 包含单个问题的测试结果
 type BenchmarkResult struct {
 	QuestionIndex   int           `json:"question_index"`
+	Dataset         string        `json:"dataset"`
 	Question        string        `json:"question"`
 	ExpectedAnswer  *string       `json:"expected_answer,omitempty"` // 标准答案
 	ModelAnswer     string        `json:"model_answer"`              // 模型的完整回答
@@ -109,10 +111,14 @@ func main() {
 	// 读取问题列表
 	var questions []Question
 	for _, dataset := range cfg.HFDataset {
-		q, _ := loadAIMEProblemsFromHFDataset(dataset)
-		questions = append(questions, q...)
+		problems, _ := loadAIMEProblemsFromHFDataset(dataset)
+		questions = append(questions, problems...)
 	}
-	questions = append(questions, cfg.CustomQuestions...)
+	for _, question := range cfg.CustomQuestions {
+		// 自定义问题清单标记数据集名称
+		question.Dataset = "__custom_questions__"
+		questions = append(questions, question)
+	}
 
 	logf("Loaded %d questions", len(questions))
 	logf("Config: max_tokens=%d, max_workers=%d", config.MaxTokens, config.MaxWorkers)
@@ -181,6 +187,7 @@ func loadAIMEProblemsFromHFDataset(dataset string) ([]Question, error) {
 	var questions []Question
 	for _, r := range result.Rows {
 		questions = append(questions, Question{
+			Dataset:  dataset,
 			Question: fmt.Sprintf("%s\n\nPlease reason step by step, and put your final answer within \\boxed{}.", r.Row.Problem),
 			Answer:   new(r.Row.Answer),
 		})
@@ -249,6 +256,7 @@ func runBenchmark(client *openai.Client, model string, questions []Question, con
 func benchmarkQuestion(client *openai.Client, model string, q Question, index int, config BenchmarkConfig) BenchmarkResult {
 	result := BenchmarkResult{
 		QuestionIndex:  index,
+		Dataset:        q.Dataset,
 		Question:       q.Question,
 		ExpectedAnswer: q.Answer,
 	}
@@ -412,7 +420,7 @@ func saveIndividualReports(results []BenchmarkResult, reportDir string) {
 
 	for _, r := range results {
 		// 生成报告文件名
-		filename := fmt.Sprintf("%s/question_%03d.txt", reportDir, r.QuestionIndex+1)
+		filename := fmt.Sprintf("%s/question_%03d_%s.txt", reportDir, r.QuestionIndex+1, r.Dataset)
 
 		// 构建报告内容
 		var report strings.Builder
