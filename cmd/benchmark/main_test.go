@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"fmt"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestExtractAnswer(t *testing.T) {
 	tests := []struct {
@@ -116,5 +122,16 @@ func TestStripReasoning(t *testing.T) {
 				t.Errorf("stripReasoning() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func Test_loadQuestionFromHuggingFaceDatasetJSON(t *testing.T) {
+	dataset := filepath.Join("configs", "aime26.json")
+	questions, err := loadQuestionFromHuggingFaceDatasetJSON(dataset)
+	assert.NoError(t, err)
+	assert.Len(t, questions, 30)
+	for i, question := range questions {
+		fmt.Printf("%d: %s\n", i+1, question.Question)
+		fmt.Println()
 	}
 }

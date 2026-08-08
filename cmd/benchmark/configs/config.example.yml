@@ -19,3 +19,12 @@ max_workers: 1
 # 思考强度
 # 可选，支持 low | medium | high，部分模型支持 max，具体参考模型规格
 reasoning_effort: high
+
+# huggingface 数据集
+hf_dataset:
+  - aime25.json
+
+# 自定义问题清单
+custom_questions:
+  - { question: "Explain quantum entanglement in one paragraph." }
+  - { question: "What is 2+3?\n\nPlease reason step by step, and put your final answer within \boxed{}.", answer: "5" }

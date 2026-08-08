@@ -21,6 +21,18 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/util"
 )
 
+// Config 从 YAML 加载运行所需的配置
+type Config struct {
+	BaseURL         string     `yaml:"base_url"`
+	APIKey          string     `yaml:"api_key"`
+	Model           string     `yaml:"model"`
+	MaxTokens       int        `yaml:"max_tokens"`
+	MaxWorkers      int        `yaml:"max_workers"`
+	ReasoningEffort string     `yaml:"reasoning_effort"`
+	HFDataset       []string   `yaml:"hf_dataset"`
+	CustomQuestions []Question `yaml:"custom_questions"`
+}
+
 // progressReportInterval 是心跳监控器输出当前进度的间隔
 const progressReportInterval = 30 * time.Second
 
@@ -33,8 +45,8 @@ type BenchmarkConfig struct {
 
 // Question 表示一个问题及其答案
 type Question struct {
-	Question string  `json:"question"`
-	Answer   *string `json:"answer"` // 可能为 null
+	Question string  `json:"question" yaml:"question"`
+	Answer   *string `json:"answer" yaml:"answer"` // 可能为 null
 }
 
 // BenchmarkResult 包含单个问题的测试结果
@@ -52,15 +64,6 @@ type BenchmarkResult struct {
 	TPS             float64       `json:"tps"`                       // Tokens Per Second
 	TPM             float64       `json:"tpm"`                       // Tokens Per Minute
 	Error           string        `json:"error,omitempty"`           // 错误信息
-}
-
-type Config struct {
-	BaseURL         string `yaml:"base_url"`
-	APIKey          string `yaml:"api_key"`
-	Model           string `yaml:"model"`
-	MaxTokens       int    `yaml:"max_tokens"`
-	MaxWorkers      int    `yaml:"max_workers"`
-	ReasoningEffort string `json:"reasoning_effort"`
 }
 
 func (cfg *Config) validate() error {
@@ -97,9 +100,15 @@ func main() {
 	}
 
 	// 读取问题列表
-	questions, err := loadQuestions("questions.json")
-	if err != nil {
-		log.Fatalf("Failed to load questions: %v", err)
+	var questions []Question
+	for _, dataset := range cfg.HFDataset {
+		q, _ := loadQuestionFromHuggingFaceDatasetJSON(dataset)
+		questions = append(questions, q...)
+	}
+	questions = append(questions, cfg.CustomQuestions...)
+	if len(questions) == 0 {
+		_, _ = fmt.Fprintln(os.Stderr, "缺少检测问题列表")
+		os.Exit(2)
 	}
 
 	logf("Loaded %d questions", len(questions))
@@ -147,16 +156,31 @@ func loadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// loadQuestions 从 JSON 文件加载问题
-func loadQuestions(filename string) ([]Question, error) {
-	data, err := os.ReadFile(filename)
+func loadQuestionFromHuggingFaceDatasetJSON(dataset string) ([]Question, error) {
+	data, err := os.ReadFile(dataset)
 	if err != nil {
 		return nil, err
 	}
 
-	var questions []Question
-	if err = json.Unmarshal(data, &questions); err != nil {
+	var result struct {
+		Rows []struct {
+			Row struct {
+				Problem string `json:"problem"`
+				Answer  string `json:"answer"`
+			} `json:"row"`
+		} `json:"rows"`
+	}
+
+	if err = json.Unmarshal(data, &result); err != nil {
 		return nil, err
+	}
+
+	var questions []Question
+	for _, r := range result.Rows {
+		questions = append(questions, Question{
+			Question: fmt.Sprintf("%s\n\nPlease reason step by step, and put your final answer within \\boxed{}.", r.Row.Problem),
+			Answer:   new(r.Row.Answer),
+		})
 	}
 
 	return questions, nil
