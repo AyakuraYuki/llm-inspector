@@ -122,10 +122,8 @@ func Run(ctx context.Context, cfg *config.Config, only map[string]bool) (*core.R
 	})
 	runLayer("L2", cfg.Layers.Protocol.Enabled, func() core.LayerResult {
 		constraints := &protocol.ModelConstraints{
-			RequiredTemperature:         cfg.Target.Constraints.RequiredTemperature,
 			DisableTemperatureZeroCheck: cfg.Target.Constraints.DisableTemperatureZeroCheck,
-			MinTemperature:              cfg.Target.Constraints.MinTemperature,
-			MaxTemperature:              cfg.Target.Constraints.MaxTemperature,
+			SpecifiedTemperature:        cfg.Target.Constraints.SpecifiedTemperature,
 		}
 		return protocol.Run(ctx, p, constraints)
 	})

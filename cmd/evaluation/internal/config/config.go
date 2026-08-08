@@ -32,14 +32,8 @@ type TargetConfig struct {
 
 // ModelConstraints 定义模型的参数约束，用于覆盖默认测试行为。
 type ModelConstraints struct {
-	// RequiredTemperature 强制使用的 temperature 值（某些模型不允许 temperature=0）
-	RequiredTemperature *float64 `yaml:"required_temperature"`
-	// DisableTemperatureZeroCheck 禁用 temperature=0 一致性检查
-	DisableTemperatureZeroCheck bool `yaml:"disable_temperature_zero_check"`
-	// MinTemperature temperature 最小值
-	MinTemperature *float64 `yaml:"min_temperature"`
-	// MaxTemperature temperature 最大值
-	MaxTemperature *float64 `yaml:"max_temperature"`
+	DisableTemperatureZeroCheck bool     `yaml:"disable_temperature_zero_check"` // 禁用 temperature=0 一致性检查
+	SpecifiedTemperature        *float64 `yaml:"specified_temperature"`          // 可选的指定 temperature 值（未配置则跳过指定温度检查）
 }
 
 // ProtocolNormalized 返回规范化后的协议名（缺省 openai）。

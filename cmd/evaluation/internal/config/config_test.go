@@ -7,7 +7,7 @@ import (
 )
 
 func TestLoadExampleConfig(t *testing.T) {
-	cfg, err := Load(filepath.Join("..", "..", "configs", "eval.example.yml"), filepath.Base(os.Args[0]))
+	cfg, err := Load(filepath.Join("..", "..", "configs", "config.example.yml"), filepath.Base(os.Args[0]))
 	if err != nil {
 		t.Fatalf("加载示例配置失败: %v", err)
 	}

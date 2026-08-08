@@ -168,6 +168,8 @@ target:
   model: gemini-mock
   protocol: gemini
   timeout: 10s
+  constraints:
+    specified_temperature: 1.0
 layers:
   capability: {%s}
   stability: {%s}

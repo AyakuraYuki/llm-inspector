@@ -5,14 +5,10 @@ target:
   model: qwen2.5-72b-instruct
   # 模型特定约束配置
   constraints:
-    # 强制使用的 temperature 值（某些模型不允许 temperature=0）
-    required_temperature: 1.0
     # 禁用 temperature=0 一致性检查（当模型不支持 temperature=0 时）
     disable_temperature_zero_check: false
-    # temperature 最小值（可选，用于验证）
-    # min_temperature: 0.1
-    # temperature 最大值（可选，用于验证）
-    # max_temperature: 1.0
+    # 可选的指定 temperature 检查（未配置则跳过；配置后额外执行一次指定温度下的采样验证）
+    # specified_temperature: 1.0
   protocol: openai # openai（默认）/ anthropic / gemini
   timeout: 60s
 
