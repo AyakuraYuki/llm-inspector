@@ -33,8 +33,21 @@ type Config struct {
 	CustomQuestions []Question `yaml:"custom_questions"`
 }
 
-// progressReportInterval 是心跳监控器输出当前进度的间隔
-const progressReportInterval = 30 * time.Second
+func (cfg *Config) validate() error {
+	if cfg.BaseURL == "" {
+		return errors.New("缺少 base_url")
+	}
+	if cfg.APIKey == "" {
+		return errors.New("缺少 api_key")
+	}
+	if cfg.Model == "" {
+		return errors.New("缺少 model")
+	}
+	if len(cfg.HFDataset) == 0 && len(cfg.CustomQuestions) == 0 {
+		return errors.New("缺少测试数据集")
+	}
+	return nil
+}
 
 // BenchmarkConfig 包含 benchmark 运行配置
 type BenchmarkConfig struct {
@@ -42,6 +55,17 @@ type BenchmarkConfig struct {
 	MaxWorkers      int    `json:"max_workers"`
 	ReasoningEffort string `json:"reasoning_effort"`
 }
+
+func (cfg *Config) BenchmarkConfig() BenchmarkConfig {
+	return BenchmarkConfig{
+		MaxTokens:       util.Ternary(cfg.MaxTokens > 0, cfg.MaxTokens, 65536),
+		MaxWorkers:      max(cfg.MaxWorkers, 1),
+		ReasoningEffort: cfg.ReasoningEffort,
+	}
+}
+
+// progressReportInterval 是心跳监控器输出当前进度的间隔
+const progressReportInterval = 30 * time.Second
 
 // Question 表示一个问题及其答案
 type Question struct {
@@ -66,19 +90,6 @@ type BenchmarkResult struct {
 	Error           string        `json:"error,omitempty"`           // 错误信息
 }
 
-func (cfg *Config) validate() error {
-	if cfg.BaseURL == "" {
-		return errors.New("缺少 base_url")
-	}
-	if cfg.APIKey == "" {
-		return errors.New("缺少 api_key")
-	}
-	if cfg.Model == "" {
-		return errors.New("缺少 model")
-	}
-	return nil
-}
-
 func main() {
 	configPath := flag.String("config", "", "启动配置 YAML（必填）")
 	flag.Parse()
@@ -86,30 +97,22 @@ func main() {
 		_, _ = fmt.Fprintln(os.Stderr, "错误: 缺少 -config")
 		os.Exit(2)
 	}
+
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "配置错误:", err)
 		os.Exit(2)
 	}
 
-	// 读取配置
-	config := BenchmarkConfig{
-		MaxTokens:       util.Ternary(cfg.MaxTokens > 0, cfg.MaxTokens, 65536),
-		MaxWorkers:      max(cfg.MaxWorkers, 1),
-		ReasoningEffort: cfg.ReasoningEffort,
-	}
+	config := cfg.BenchmarkConfig()
 
 	// 读取问题列表
 	var questions []Question
 	for _, dataset := range cfg.HFDataset {
-		q, _ := loadQuestionFromHuggingFaceDatasetJSON(dataset)
+		q, _ := loadAIMEProblemsFromHFDataset(dataset)
 		questions = append(questions, q...)
 	}
 	questions = append(questions, cfg.CustomQuestions...)
-	if len(questions) == 0 {
-		_, _ = fmt.Fprintln(os.Stderr, "缺少检测问题列表")
-		os.Exit(2)
-	}
 
 	logf("Loaded %d questions", len(questions))
 	logf("Config: max_tokens=%d, max_workers=%d", config.MaxTokens, config.MaxWorkers)
@@ -156,7 +159,7 @@ func loadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-func loadQuestionFromHuggingFaceDatasetJSON(dataset string) ([]Question, error) {
+func loadAIMEProblemsFromHFDataset(dataset string) ([]Question, error) {
 	data, err := os.ReadFile(dataset)
 	if err != nil {
 		return nil, err

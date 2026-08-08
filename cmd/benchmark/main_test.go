@@ -127,7 +127,7 @@ func TestStripReasoning(t *testing.T) {
 
 func Test_loadQuestionFromHuggingFaceDatasetJSON(t *testing.T) {
 	dataset := filepath.Join("configs", "aime26.json")
-	questions, err := loadQuestionFromHuggingFaceDatasetJSON(dataset)
+	questions, err := loadAIMEProblemsFromHFDataset(dataset)
 	assert.NoError(t, err)
 	assert.Len(t, questions, 30)
 	for i, question := range questions {
