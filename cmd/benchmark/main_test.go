@@ -125,6 +125,16 @@ func TestStripReasoning(t *testing.T) {
 	}
 }
 
+func Test_loadConfig(t *testing.T) {
+	cfg, err := loadConfig(filepath.Join("configs", "config.example.yml"))
+	assert.NoError(t, err)
+	assert.Len(t, cfg.CustomQuestions, 2)
+	for i, question := range cfg.CustomQuestions {
+		fmt.Printf("%d: %s\n", i+1, question.Question)
+		fmt.Println()
+	}
+}
+
 func Test_loadQuestionFromHuggingFaceDatasetJSON(t *testing.T) {
 	dataset := filepath.Join("configs", "aime26.json")
 	questions, err := loadAIMEProblemsFromHFDataset(dataset)
