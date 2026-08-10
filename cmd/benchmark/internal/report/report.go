@@ -15,6 +15,7 @@ import (
 func OutputResults(results []types.BenchmarkResult, reportDir string) {
 	// 转换为可序列化的格式
 	type SerializableResult struct {
+		Dataset         string  `json:"dataset"`
 		QuestionIndex   int     `json:"question_index"`
 		Question        string  `json:"question"`
 		ExpectedAnswer  *string `json:"expected_answer,omitempty"`
@@ -33,6 +34,7 @@ func OutputResults(results []types.BenchmarkResult, reportDir string) {
 	serializableResults := make([]SerializableResult, len(results))
 	for i, r := range results {
 		serializableResults[i] = SerializableResult{
+			Dataset:         r.Dataset,
 			QuestionIndex:   r.QuestionIndex,
 			Question:        r.Question,
 			ExpectedAnswer:  r.ExpectedAnswer,
