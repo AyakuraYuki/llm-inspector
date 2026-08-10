@@ -1,28 +1,35 @@
 # benchmark 模型能力测试工具配置文件
 # 用法：benchmark -config config.yml
 
-# API 服务地址
-base_url: "https://api.openai.com/v1"
+base_url: "https://api.openai.com/v1" # API 服务地址
+api_key: "sk-xxx"                     # Bearer token
+model: "gpt-4"                        # 待测模型名称
+max_tokens: 65536                     # 最大输出token数限制
+max_workers: 1                        # 测试进程数
+reasoning_effort: high                # 思考强度，支持 low | medium | high | max (部分模型)，具体参考模型规格
 
-# Bearer token
-api_key: "sk-xxx"
-
-# 待测模型名称
-model: "gpt-4"
-
-# 最大输出token数限制
-max_tokens: 65536
-
-# 测试进程数
-max_workers: 1
-
-# 思考强度
-# 可选，支持 low | medium | high，部分模型支持 max，具体参考模型规格
-reasoning_effort: high
-
-# huggingface 数据集
-hf_dataset:
-  - aime25.json
+# 使用预设数据集，数据集来自 huggingface
+dataset:
+  aime25: true                        # 2025 AIME 题库
+  aime26: false                       # 2026 AIME 题库
+  mmlu_pro:
+    enabled: false                    # 使用 MMLU-Pro 题库
+    use_validation: false             # 使用 MMLU-Pro 验证题库
+    use_pickup: false                 # 从 MMLU-Pro 题库随机摘选问题
+    biology: 5                        # 摘选 n 个生物学分类的问题
+    business: 5                       # 摘选 n 个商务商业分类的问题
+    chemistry: 5                      # 摘选 n 个化学分类的问题
+    computer_science: 5               # 摘选 n 个计算机科学分类的问题
+    economics: 5                      # 摘选 n 个经济学分类的问题
+    engineering: 5                    # 摘选 n 个工程学分类的问题
+    health: 5                         # 摘选 n 个健康学分类的问题
+    history: 5                        # 摘选 n 个历史分类的问题
+    law: 5                            # 摘选 n 个法律分类的问题
+    math: 5                           # 摘选 n 个数学分类的问题
+    philosophy: 5                     # 摘选 n 个哲学分类的问题
+    physics: 5                        # 摘选 n 个物理分类的问题
+    psychology: 5                     # 摘选 n 个心理学分类的问题
+    other: 5                          # 摘选 n 个其他分类的问题
 
 # 自定义问题清单
 custom_questions:

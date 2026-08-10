@@ -192,3 +192,4 @@ Temporary Items
 
 build
 .claude
+cmd/benchmark/internal/dataset/hf/
