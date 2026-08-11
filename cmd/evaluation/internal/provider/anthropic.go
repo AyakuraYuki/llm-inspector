@@ -63,7 +63,7 @@ type anthropicRequest struct {
 	System      string               `json:"system,omitempty"`
 	Messages    []anthropicMessage   `json:"messages"`
 	Temperature *float64             `json:"temperature,omitempty"`
-	Stream      bool                 `json:"stream,omitempty"`
+	Stream      bool                 `json:"stream"`
 	Tools       []anthropicTool      `json:"tools,omitempty"`
 	ToolChoice  *anthropicToolChoice `json:"tool_choice,omitempty"`
 }
