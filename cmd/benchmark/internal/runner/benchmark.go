@@ -16,6 +16,8 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/types"
 )
 
+const TimeoutPerRequest = 30 * time.Minute
+
 func RunBenchmark(client *openai.Client, model string, questions []types.Question, benchmarkCfg config.BenchmarkConfig) []types.BenchmarkResult {
 	results := make([]types.BenchmarkResult, len(questions))
 	var wg sync.WaitGroup
@@ -81,7 +83,7 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 	}
 
 	// 设置超时时间为30分钟
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutPerRequest)
 	defer cancel()
 	startTime := time.Now()
 
