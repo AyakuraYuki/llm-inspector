@@ -2,6 +2,8 @@ package reporter
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,15 +15,17 @@ const ReportInterval = 30 * time.Second
 
 // PrintStatistics 打印统计信息
 func PrintStatistics(results []types.BenchmarkResult) {
-	var totalTTFT, totalTime time.Duration
-	var totalTokens int
-	var totalTPS, totalTPM float64
-	successCount := 0
-	correctCount := 0
-	questionsWithAnswer := 0
-
-	// finish_reason 统计
-	finishReasonCounts := make(map[string]int)
+	var (
+		totalTTFT, totalTime       time.Duration
+		totalTokens                int
+		totalTPS, totalTPM         float64
+		successCount               = 0
+		correctCount               = 0
+		questionsWithAnswer        = 0
+		finishReasonCounts         = make(map[string]int) // finish_reason 统计
+		datasetQuestionsWithAnswer = make(map[string]int) // 数据集包含答案的问题数量
+		datasetCorrectCount        = make(map[string]int) // 数据集答对数量
+	)
 
 	for _, r := range results {
 		if r.Error == "" {
@@ -40,8 +44,10 @@ func PrintStatistics(results []types.BenchmarkResult) {
 			// 统计答案正确性
 			if r.ExpectedAnswer != nil {
 				questionsWithAnswer++
+				datasetQuestionsWithAnswer[r.Dataset]++
 				if r.IsCorrect != nil && *r.IsCorrect {
 					correctCount++
+					datasetCorrectCount[r.Dataset]++
 				}
 			}
 		}
@@ -75,6 +81,11 @@ func PrintStatistics(results []types.BenchmarkResult) {
 		fmt.Printf("Correct answers: %d\n", correctCount)
 		fmt.Printf("Wrong answers: %d\n", questionsWithAnswer-correctCount)
 		fmt.Printf("Accuracy: %.2f%%\n", accuracy)
+		fmt.Printf("In datasets:\n")
+		for _, dataset := range slices.Sorted(maps.Keys(datasetQuestionsWithAnswer)) {
+			datasetAccuracy := float64(datasetCorrectCount[dataset]) / float64(datasetQuestionsWithAnswer[dataset]) * 100
+			fmt.Printf("  - %s: %d/%d (%.2f%%)\n", dataset, datasetCorrectCount[dataset], datasetQuestionsWithAnswer[dataset], datasetAccuracy)
+		}
 		fmt.Println()
 	}
 
