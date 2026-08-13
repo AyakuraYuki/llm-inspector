@@ -133,9 +133,15 @@ func (p *openaiProvider) buildParams(req *Request, stream bool) openai.ChatCompl
 			},
 		})
 	}
-	if len(params.Tools) > 0 && (req.ToolsChoice == "any" || req.ToolsChoice == "required") {
-		params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
-			OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoRequired)),
+	if len(params.Tools) > 0 {
+		if strings.EqualFold(req.ToolsChoice, "any") {
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoAuto)),
+			}
+		} else if strings.EqualFold(req.ToolsChoice, "required") {
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoRequired)),
+			}
 		}
 	}
 	if req.ParallelToolCalls != nil {

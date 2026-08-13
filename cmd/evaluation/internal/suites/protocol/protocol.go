@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 )
@@ -59,8 +60,8 @@ type ModelConstraints struct {
 	SpecifiedTemperature        *float64
 	// ThinkingEnableParams / ThinkingDisableParams 开启/关闭思考的厂商参数，
 	// 原样透传（openai/anthropic 顶层，gemini generationConfig）。
-	ThinkingEnableParams  map[string]any
-	ThinkingDisableParams map[string]any
+	ThinkingEnableParams  *config.ThinkingParams
+	ThinkingDisableParams *config.ThinkingParams
 	// ReasoningEfforts 模型声称支持的 reasoning_effort 值（仅 openai 协议探测）。
 	ReasoningEfforts []string
 	// DefaultMaxTokens 官方标称的 max_tokens 默认值，用于默认值探测。
@@ -148,11 +149,9 @@ func checkSystemPrompt(ctx context.Context, p provider.Provider) core.CheckResul
 			return core.CheckResult{Status: core.StatusPass, Score: 1, Detail: "system prompt 生效"}
 		}
 		if strings.TrimSpace(resp.Content) == "" {
-			return core.CheckResult{Status: core.StatusPass, Score: 0.5,
-				Detail: "system 角色被接受，但输出为空，无法验证前缀是否生效"}
+			return core.CheckResult{Status: core.StatusPass, Score: 0.5, Detail: "system 角色被接受，但输出为空，无法验证前缀是否生效"}
 		}
-		return core.CheckResult{Status: core.StatusPass, Score: 0.5,
-			Detail: "system 角色被接受，但模型未遵循前缀要求（可能是能力问题）"}
+		return core.CheckResult{Status: core.StatusPass, Score: 0.5, Detail: "system 角色被接受，但模型未遵循前缀要求（可能是能力问题）"}
 	})
 }
 

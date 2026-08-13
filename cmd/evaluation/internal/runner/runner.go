@@ -16,6 +16,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/performance"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/protocol"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/stability"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
 // Version 工具版本号。
@@ -75,18 +76,12 @@ func Run(ctx context.Context, cfg *config.Config, only map[string]bool) (*core.R
 		StartedAt: startedAt.Format(time.RFC3339),
 	}
 
-	selected := func(id string, enabled *bool) bool {
-		if len(only) > 0 && !only[id] {
-			return false
-		}
-		return config.Enabled(enabled)
-	}
 	skipRest := false
 	skipReason := ""
 
 	runLayer := func(id string, enabled *bool, fn func() core.LayerResult) {
 		lr := core.LayerResult{ID: id}
-		if !selected(id, enabled) {
+		if !util.Selected(only, id, enabled) {
 			if info, ok := catalogInfo(id); ok {
 				lr.Name = info.Name
 			}
@@ -154,7 +149,7 @@ func Run(ctx context.Context, cfg *config.Config, only map[string]bool) (*core.R
 	})
 
 	// 总评：已执行且未跳过层的加权平均
-	var sum, wsum float64
+	var sum, wSum float64
 	allPassed := true
 	executed := 0
 	for _, l := range r.Layers {
@@ -167,13 +162,13 @@ func Run(ctx context.Context, cfg *config.Config, only map[string]bool) (*core.R
 			w = 1
 		}
 		sum += l.Score * w
-		wsum += w
+		wSum += w
 		if !l.Passed {
 			allPassed = false
 		}
 	}
-	if wsum > 0 {
-		r.TotalScore = sum / wsum
+	if wSum > 0 {
+		r.TotalScore = sum / wSum
 	}
 	r.FinishedAt = time.Now().Format(time.RFC3339)
 	if r.Verdict == "" {

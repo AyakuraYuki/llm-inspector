@@ -38,7 +38,7 @@ type LayerResult struct {
 // Compute 根据各检查项计算层得分；threshold 为通过线。
 // 仅 pass/fail 状态的检查项参与加权平均。
 func (l *LayerResult) Compute(threshold float64) {
-	var sum, wsum float64
+	var sum, wSum float64
 	for _, c := range l.Checks {
 		if c.Status != StatusPass && c.Status != StatusFail {
 			continue
@@ -48,10 +48,10 @@ func (l *LayerResult) Compute(threshold float64) {
 			w = 1
 		}
 		sum += c.Score * w
-		wsum += w
+		wSum += w
 	}
-	if wsum > 0 {
-		l.Score = sum / wsum
+	if wSum > 0 {
+		l.Score = sum / wSum
 	} else {
 		l.Score = 1
 	}

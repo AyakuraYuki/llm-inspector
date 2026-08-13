@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 )
@@ -217,14 +218,13 @@ func checkToolResultRoundTrip(ctx context.Context, p provider.Provider) core.Che
 func checkThinkingControl(ctx context.Context, p provider.Provider, constraints *ModelConstraints) core.CheckResult {
 	return timed("thinking_control", 1, func() core.CheckResult {
 		if constraints == nil || (constraints.ThinkingEnableParams == nil && constraints.ThinkingDisableParams == nil) {
-			return core.CheckResult{Status: core.StatusSkip,
-				Detail: "未配置 thinking_enable_params/thinking_disable_params，跳过"}
+			return core.CheckResult{Status: core.StatusSkip, Detail: "未配置 thinking_enable_params/thinking_disable_params，跳过"}
 		}
-		ask := func(extra map[string]any) (*provider.Result, error) {
+		ask := func(extra *config.ThinkingParams) (*provider.Result, error) {
 			return p.Chat(ctx, &provider.Request{
 				Messages:    []provider.Message{{Role: "user", Content: "9.11 和 9.9 哪个大？简要说明理由。"}},
 				MaxTokens:   4096, // 思考会额外消耗预算
-				ExtraParams: extra,
+				ExtraParams: extra.ToMap(),
 			})
 		}
 
@@ -337,8 +337,7 @@ func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, constraints
 			return core.CheckResult{Status: core.StatusSkip, Detail: "未配置 default_max_tokens，跳过"}
 		}
 		if p.Protocol() == "anthropic" {
-			return core.CheckResult{Status: core.StatusSkip,
-				Detail: "anthropic 协议 max_tokens 必填，无默认值语义"}
+			return core.CheckResult{Status: core.StatusSkip, Detail: "anthropic 协议 max_tokens 必填，无默认值语义"}
 		}
 		resp, err := p.Chat(ctx, &provider.Request{
 			Messages: []provider.Message{{Role: "user", Content: "写一篇尽可能长的科幻小说，不要停，越长越好。"}},
@@ -358,18 +357,24 @@ func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, constraints
 			// 截断点应落在标称默认值的 ±10% 内
 			lo, hi := float64(want)*0.9, float64(want)*1.1
 			if float64(got) >= lo && float64(got) <= hi {
-				return core.CheckResult{Status: core.StatusPass, Score: 1,
+				return core.CheckResult{
+					Status:  core.StatusPass,
+					Score:   1,
 					Detail:  fmt.Sprintf("默认值截断于 %d tokens，与标称 %d 一致", got, want),
-					Metrics: metrics}
+					Metrics: metrics,
+				}
 			}
 			return failScore(fmt.Sprintf("默认值截断于 %d tokens，偏离标称 %d 超过 10%%", got, want))
 		}
 		if got > want {
 			return failScore(fmt.Sprintf("输出 %d tokens 已超过标称默认值 %d 且未截断，默认值未生效", got, want))
 		}
-		return core.CheckResult{Status: core.StatusPass, Score: 1,
+		return core.CheckResult{
+			Status:  core.StatusPass,
+			Score:   1,
 			Detail:  fmt.Sprintf("输出 %d tokens 自然结束，未触发默认值上限（只能确认默认值 ≥ %d）", got, got),
-			Metrics: metrics}
+			Metrics: metrics,
+		}
 	})
 }
 
@@ -390,18 +395,30 @@ func checkNoDefaultSystemPrompt(ctx context.Context, p provider.Provider) core.C
 		out := strings.TrimSpace(resp.Content)
 		metrics := map[string]any{"output": truncate(out, 120)}
 		if out == "" {
-			return core.CheckResult{Status: core.StatusPass, Score: 0.5,
-				Detail: "输出为空，无法判断（启发式探针）", Metrics: metrics}
+			return core.CheckResult{
+				Status:  core.StatusPass,
+				Score:   0.5,
+				Detail:  "输出为空，无法判断（启发式探针）",
+				Metrics: metrics,
+			}
 		}
 		// 明确否认：通过
 		for _, marker := range []string{"无", "没有", "no system", "not"} {
 			if strings.Contains(strings.ToLower(out), marker) {
-				return core.CheckResult{Status: core.StatusPass, Score: 1,
-					Detail: "模型自述未收到 system 指令（启发式判定）", Metrics: metrics}
+				return core.CheckResult{
+					Status:  core.StatusPass,
+					Score:   1,
+					Detail:  "模型自述未收到 system 指令（启发式判定）",
+					Metrics: metrics,
+				}
 			}
 		}
 		// 疑似复述出指令内容：半分并提示人工复核
-		return core.CheckResult{Status: core.StatusPass, Score: 0.5,
-			Detail: "模型输出疑似包含 system 指令内容，建议人工复核 metrics.output", Metrics: metrics}
+		return core.CheckResult{
+			Status:  core.StatusPass,
+			Score:   0.5,
+			Detail:  "模型输出疑似包含 system 指令内容，建议人工复核 metrics.output",
+			Metrics: metrics,
+		}
 	})
 }

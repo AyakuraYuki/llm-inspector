@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 )
@@ -64,8 +65,8 @@ func TestCheckStreamUsageOptions(t *testing.T) {
 
 func TestCheckThinkingControl(t *testing.T) {
 	constraints := &ModelConstraints{
-		ThinkingEnableParams:  map[string]any{"thinking": map[string]any{"type": "enabled"}},
-		ThinkingDisableParams: map[string]any{"thinking": map[string]any{"type": "disabled"}},
+		ThinkingEnableParams:  &config.ThinkingParams{Thinking: config.Thinking{Type: config.ThinkingEnabled}},
+		ThinkingDisableParams: &config.ThinkingParams{Thinking: config.Thinking{Type: config.ThinkingDisabled}},
 	}
 
 	t.Run("开关生效得满分", func(t *testing.T) {
