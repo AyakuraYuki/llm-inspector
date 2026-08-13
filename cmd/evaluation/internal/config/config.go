@@ -34,6 +34,18 @@ type TargetConfig struct {
 type ModelConstraints struct {
 	DisableTemperatureZeroCheck bool     `yaml:"disable_temperature_zero_check"` // 禁用 temperature=0 一致性检查
 	SpecifiedTemperature        *float64 `yaml:"specified_temperature"`          // 可选的指定 temperature 值（未配置则跳过指定温度检查）
+
+	// ThinkingEnableParams / ThinkingDisableParams 是开启/关闭思考的厂商参数
+	// （如 GLM 的 {thinking: {type: enabled}}），原样合并进请求体
+	// （openai/anthropic 顶层，gemini 的 generationConfig）。
+	// 两者都未配置时跳过 thinking 控制检查。
+	ThinkingEnableParams  map[string]any `yaml:"thinking_enable_params"`
+	ThinkingDisableParams map[string]any `yaml:"thinking_disable_params"`
+	// ReasoningEfforts 模型声称支持的 reasoning_effort 值（仅 openai 协议探测）。
+	ReasoningEfforts []string `yaml:"reasoning_efforts"`
+	// DefaultMaxTokens 官方标称的 max_tokens 默认值（如 GLM-5.2 为 32768）。
+	// 配置后 L2 会做默认值探测：不传 max_tokens 观察输出是否受该默认值约束。
+	DefaultMaxTokens int `yaml:"default_max_tokens"`
 }
 
 // ProtocolNormalized 返回规范化后的协议名（缺省 openai）。
@@ -69,6 +81,7 @@ type LayersConfig struct {
 	Capability   CapabilityConfig   `yaml:"capability"`
 	Stability    StabilityConfig    `yaml:"stability"`
 	Performance  PerformanceConfig  `yaml:"performance"`
+	Boundary     BoundaryConfig     `yaml:"boundary"`
 }
 
 type AvailabilityConfig struct {
@@ -76,6 +89,11 @@ type AvailabilityConfig struct {
 }
 
 type ProtocolConfig struct {
+	Enabled *bool `yaml:"enabled"`
+}
+
+// BoundaryConfig L6 参数边界与健壮性配置。
+type BoundaryConfig struct {
 	Enabled *bool `yaml:"enabled"`
 }
 

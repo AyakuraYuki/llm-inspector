@@ -17,9 +17,15 @@ import (
 )
 
 // Message 是一条对话消息。
+// role=assistant 时可携带 ToolCalls（工具调用回传场景）；
+// role=tool 时 Content 为工具执行结果，ToolCallID 关联此前的调用，
+// Name 为函数名（Gemini 的 functionResponse 需要函数名而非 ID）。
 type Message struct {
-	Role    string `json:"role" yaml:"role"`
-	Content string `json:"content" yaml:"content"`
+	Role       string     `json:"role" yaml:"role"`
+	Content    string     `json:"content" yaml:"content"`
+	Name       string     `json:"name,omitempty" yaml:"name,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty" yaml:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty" yaml:"tool_call_id,omitempty"`
 }
 
 // Tool 描述一个可供模型调用的函数。
@@ -30,27 +36,65 @@ type Tool struct {
 }
 
 // ToolCall 是模型返回的一次工具调用。
+// ID 用于把工具结果回传给模型（Gemini 无 ID 概念，用函数名代替）。
 type ToolCall struct {
+	ID        string `json:"id,omitempty"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
 }
 
+// JSONSchemaSpec 描述 response_format 的 json_schema 模式。
+// openai 走原生 response_format；gemini 走 generationConfig.responseSchema；
+// anthropic 无原生支持，由检查项走 prompt 诱导。
+type JSONSchemaSpec struct {
+	Name   string
+	Schema map[string]any
+	Strict bool
+}
+
 // Request 是一次聊天补全请求（协议无关）。
+// 指针类型的字段为 nil 时表示"不传该参数"，由服务端使用默认值。
 type Request struct {
 	Model       string // 为空则用 Provider 默认模型
 	Messages    []Message
-	MaxTokens   int
+	MaxTokens   int // <=0 时省略（Anthropic 协议要求必填，缺省补 1024）
 	Temperature *float64
-	JSONMode    bool
-	Tools       []Tool
+	TopP        *float64
+	// FrequencyPenalty / PresencePenalty 仅 openai 有对应参数，其他协议忽略。
+	FrequencyPenalty *float64
+	PresencePenalty  *float64
+	// Stop 停止词。openai=stop / anthropic=stop_sequences / gemini=stopSequences。
+	Stop []string
+	// Seed 采样种子。openai/gemini 支持，anthropic 忽略。
+	Seed *int64
+	// MaxCompletionTokens 是 openai 的 max_completion_tokens 兼容字段（仅 openai）。
+	MaxCompletionTokens int
+	JSONMode            bool
+	// JSONSchema 非 nil 时优先于 JSONMode。
+	JSONSchema *JSONSchemaSpec
+	Tools      []Tool
 	// ToolsChoice 工具调用策略：""/"auto" 由模型决定；"any"/"required" 强制调用一次。
 	ToolsChoice string
+	// ParallelToolCalls 是 openai 的并行工具调用开关（仅 openai 显式传参，
+	// anthropic/gemini 原生支持多工具调用块，无需参数）。
+	ParallelToolCalls *bool
+	// ReasoningEffort 思考力度（openai 的 reasoning_effort，仅 openai）。
+	ReasoningEffort string
+	// StreamIncludeUsage 控制 openai 的 stream_options.include_usage；
+	// nil 时默认 true（保持既有行为）。anthropic/gemini 的流式恒携带 usage。
+	StreamIncludeUsage *bool
+	// ExtraParams 厂商特有参数（如 thinking、do_sample、clear_thinking）。
+	// openai/anthropic 合并到请求体顶层；gemini 合并到 generationConfig。
+	ExtraParams map[string]any
 }
 
 // Result 是一次调用的统一结果，流式与非流式共用。
 // FinishReason 统一映射为 OpenAI 风格：stop / length / tool_calls。
 type Result struct {
-	Content          string
+	Content string
+	// ReasoningContent 思考内容（openai 方言的 reasoning_content /
+	// anthropic thinking 块 / gemini thought part），无思考输出时为空。
+	ReasoningContent string
 	FinishReason     string
 	ToolCalls        []ToolCall
 	PromptTokens     int64
@@ -72,6 +116,31 @@ type Provider interface {
 	Model() string
 	// Protocol 返回协议标识：openai / anthropic / gemini。
 	Protocol() string
+}
+
+// RawRequest 是一次"裸请求"：payload 原样序列化为请求体，
+// 绕过 SDK 的强类型校验，用于发送非法/畸形负载做边界测试。
+type RawRequest struct {
+	// Payload 请求体，原样 JSON 序列化（可含任意非法字段/类型）。
+	Payload map[string]any
+	// OmitAuth 为 true 时不携带任何鉴权头。
+	OmitAuth bool
+	// OverrideAuth 非空时替换默认鉴权凭据（OmitAuth 优先）。
+	OverrideAuth string
+}
+
+// RawResult 是裸请求的原始响应。
+type RawResult struct {
+	StatusCode int
+	Body       string // 截断至 maxErrorBody
+}
+
+// RawCaller 支持向 chat 端点发送裸请求的可选能力。
+// 三个内建 provider 均实现；边界测试（L6）通过类型断言获取。
+type RawCaller interface {
+	// RawChat 向本协议的 chat 端点 POST payload，返回原始状态码与响应体。
+	// 网络层错误返回 error；HTTP 层任何状态码（含 4xx/5xx）都不算 error。
+	RawChat(ctx context.Context, req *RawRequest) (*RawResult, error)
 }
 
 // HTTPError 是手写客户端的 HTTP 层错误。
@@ -138,6 +207,30 @@ func doJSON(ctx context.Context, hc *http.Client, method, url string, headers ma
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// rawPost 原样 POST payload 到 url，返回原始状态码与响应体（不视 4xx/5xx 为 error）。
+// headers 已由调用方按 RawRequest 的鉴权语义构造完毕。
+func rawPost(ctx context.Context, hc *http.Client, url string, headers map[string]string, payload map[string]any) (*RawResult, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求失败: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+	return &RawResult{StatusCode: resp.StatusCode, Body: string(b)}, nil
 }
 
 // ssePost 发起 POST 并按 SSE 逐条回调 data 载荷；[DONE] 或 EOF 结束。

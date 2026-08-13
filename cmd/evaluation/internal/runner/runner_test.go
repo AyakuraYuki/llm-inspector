@@ -3,6 +3,7 @@ package runner
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,13 +24,73 @@ type chatReq struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	} `json:"messages"`
-	MaxTokens     int  `json:"max_tokens"`
-	Stream        bool `json:"stream"`
+	MaxTokens     int             `json:"max_tokens"`
+	Stop          json.RawMessage `json:"stop"`
+	Stream        bool            `json:"stream"`
 	StreamOptions *struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options"`
 	ResponseFormat json.RawMessage `json:"response_format"`
 	Tools          json.RawMessage `json:"tools"`
+}
+
+// validateParams 模拟标准实现的参数校验：类型错误与越界值返回 400。
+// 返回空串表示通过。
+func validateParams(raw map[string]any) string {
+	numInRange := func(key string, lo, hi float64) string {
+		v, ok := raw[key]
+		if !ok || v == nil {
+			return ""
+		}
+		f, isNum := v.(float64)
+		if !isNum {
+			return key + " must be a number"
+		}
+		if f < lo || f > hi {
+			return fmt.Sprintf("%s must be in [%g, %g]", key, lo, hi)
+		}
+		return ""
+	}
+	if msg := numInRange("top_p", 0, 1); msg != "" {
+		return msg
+	}
+	if msg := numInRange("temperature", 0, 2); msg != "" {
+		return msg
+	}
+	if msg := numInRange("frequency_penalty", -2, 2); msg != "" {
+		return msg
+	}
+	if msg := numInRange("presence_penalty", -2, 2); msg != "" {
+		return msg
+	}
+	if v, ok := raw["max_tokens"]; ok && v != nil {
+		f, isNum := v.(float64)
+		if !isNum {
+			return "max_tokens must be an integer"
+		}
+		if f <= 0 || f > 1e8 {
+			return "max_tokens out of range"
+		}
+	}
+	msgs, ok := raw["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		return "messages must be a non-empty array"
+	}
+	validRoles := map[string]bool{"system": true, "user": true, "assistant": true, "tool": true}
+	for _, m := range msgs {
+		obj, isObj := m.(map[string]any)
+		if !isObj {
+			return "message must be an object"
+		}
+		role, hasRole := obj["role"].(string)
+		if !hasRole || !validRoles[role] {
+			return "invalid message role"
+		}
+		if c, present := obj["content"]; present && c == nil {
+			return "message content must not be null"
+		}
+	}
+	return ""
 }
 
 // newMockServer 返回一个行为可预测的 OpenAI 兼容 mock 服务。
@@ -52,8 +113,22 @@ func newMockServer(t *testing.T) *httptest.Server {
 			writeError(w, 401, "invalid api key")
 			return
 		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, 400, "bad request")
+			return
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(body, &raw); err != nil {
+			writeError(w, 400, "bad request")
+			return
+		}
+		if msg := validateParams(raw); msg != "" {
+			writeError(w, 400, msg)
+			return
+		}
 		var req chatReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.Unmarshal(body, &req); err != nil {
 			writeError(w, 400, "bad request")
 			return
 		}
@@ -71,17 +146,48 @@ func newMockServer(t *testing.T) *httptest.Server {
 
 		// tool calling
 		if len(req.Tools) > 0 && strings.Contains(last, "天气") {
+			// 工具结果回传：messages 中出现 role=tool 时给出引用结果的最终回答
+			for _, m := range req.Messages {
+				if m.Role == "tool" {
+					writeCompletion(w, &req, "巴黎现在气温 19°C，天气晴。", "stop", "")
+					return
+				}
+			}
+			// 并行调用：提供了 get_time 工具且要求同时查询时返回两个调用
+			if strings.Contains(string(req.Tools), "get_time") && strings.Contains(last, "同时") {
+				writeCompletion(w, &req, "", "tool_calls", `{"role":"assistant","content":"","tool_calls":[`+
+					`{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}},`+
+					`{"id":"call_2","type":"function","function":{"name":"get_time","arguments":"{\"city\":\"Paris\"}"}}]}`)
+				return
+			}
 			writeCompletion(w, &req, "", "tool_calls", `{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]}`)
 			return
 		}
 
-		// JSON mode
+		// JSON mode / json_schema
 		if len(req.ResponseFormat) > 0 {
+			if strings.Contains(string(req.ResponseFormat), "json_schema") {
+				writeCompletion(w, &req, `{"city":"Paris","country":"France","tags":["capital","art"]}`, "stop", "")
+				return
+			}
 			writeCompletion(w, &req, `{"city":"Paris"}`, "stop", "")
 			return
 		}
 
 		answer := routeAnswer(&req, last)
+		// stop 停止词：在停止词处截断
+		if len(req.Stop) > 0 {
+			var stops []string
+			var single string
+			if json.Unmarshal(req.Stop, &stops) != nil && json.Unmarshal(req.Stop, &single) == nil {
+				stops = []string{single}
+			}
+			for _, s := range stops {
+				if i := strings.Index(answer, s); i >= 0 {
+					answer = answer[:i]
+				}
+			}
+		}
 		finish := "stop"
 		if req.MaxTokens > 0 && req.MaxTokens <= 16 {
 			finish = "length"
@@ -127,6 +233,14 @@ func routeAnswer(req *chatReq, last string) string {
 		}
 	}
 	switch {
+	case strings.Contains(last, "一字不差地复述这句话："):
+		return strings.TrimSpace(strings.SplitN(last, "：", 2)[1])
+	case strings.Contains(last, "一字不差地复述："):
+		return strings.TrimSpace(strings.SplitN(last, "：", 2)[1])
+	case strings.Contains(last, "几行文字"):
+		return "2"
+	case strings.Contains(last, "system/系统 指令"):
+		return "无"
 	case strings.Contains(last, "17*23"):
 		return "395"
 	case strings.Contains(last, "23*17"):

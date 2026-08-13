@@ -89,9 +89,10 @@ type Report struct {
 
 // LayerWeight 各层在总评中的权重。
 var LayerWeight = map[string]float64{
-	"L1": 0.15,
+	"L1": 0.10,
 	"L2": 0.15,
 	"L3": 0.30,
-	"L4": 0.20,
-	"L5": 0.20,
+	"L4": 0.15,
+	"L5": 0.15,
+	"L6": 0.15,
 }

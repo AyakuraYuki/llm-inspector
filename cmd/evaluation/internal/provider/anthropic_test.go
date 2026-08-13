@@ -66,7 +66,7 @@ func newAnthropicServer(t *testing.T) *httptest.Server {
 		}
 
 		// system 提取检查
-		if req.System == "" && len(req.Messages) > 0 && strings.Contains(req.Messages[0].Content, "system 应被提取") {
+		if req.System == "" && len(req.Messages) > 0 && strings.Contains(fmt.Sprint(req.Messages[0].Content), "system 应被提取") {
 			fmt.Fprint(w, `{"error":"system not extracted"}`)
 			return
 		}

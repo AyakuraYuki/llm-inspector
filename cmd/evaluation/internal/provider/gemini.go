@@ -1,9 +1,11 @@
-// Gemini generateContent API 的 Provider 实现（手写 net/http，含 SSE 流式）。
 package provider
+
+// Gemini generateContent API 的 Provider 实现（手写 net/http，含 SSE 流式）。
 
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -38,13 +40,20 @@ func (c *geminiClient) headers() map[string]string {
 }
 
 type geminiPart struct {
-	Text         string              `json:"text,omitempty"`
-	FunctionCall *geminiFunctionCall `json:"functionCall,omitempty"`
+	Text             string                  `json:"text,omitempty"`
+	Thought          bool                    `json:"thought,omitempty"`
+	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
+	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
 }
 
 type geminiFunctionCall struct {
 	Name string         `json:"name"`
 	Args map[string]any `json:"args,omitempty"`
+}
+
+type geminiFunctionResponse struct {
+	Name     string         `json:"name"`
+	Response map[string]any `json:"response"`
 }
 
 type geminiContent struct {
@@ -53,9 +62,13 @@ type geminiContent struct {
 }
 
 type geminiGenerationConfig struct {
-	MaxOutputTokens  int      `json:"maxOutputTokens,omitempty"`
-	Temperature      *float64 `json:"temperature,omitempty"`
-	ResponseMIMEType string   `json:"responseMimeType,omitempty"`
+	MaxOutputTokens  int            `json:"maxOutputTokens,omitempty"`
+	Temperature      *float64       `json:"temperature,omitempty"`
+	TopP             *float64       `json:"topP,omitempty"`
+	StopSequences    []string       `json:"stopSequences,omitempty"`
+	Seed             *int64         `json:"seed,omitempty"`
+	ResponseMIMEType string         `json:"responseMimeType,omitempty"`
+	ResponseSchema   map[string]any `json:"responseSchema,omitempty"`
 }
 
 type geminiFunctionDeclaration struct {
@@ -95,7 +108,7 @@ type geminiResponse struct {
 	} `json:"usageMetadata"`
 }
 
-func (c *geminiClient) buildRequest(req *Request) geminiRequest {
+func (c *geminiClient) buildRequest(req *Request) (map[string]any, error) {
 	gr := geminiRequest{}
 	var systemParts []string
 	for _, m := range req.Messages {
@@ -103,9 +116,28 @@ func (c *geminiClient) buildRequest(req *Request) geminiRequest {
 		case "system":
 			systemParts = append(systemParts, m.Content)
 		case "assistant":
+			parts := []geminiPart{}
+			if m.Content != "" {
+				parts = append(parts, geminiPart{Text: m.Content})
+			}
+			for _, tc := range m.ToolCalls {
+				args := map[string]any{}
+				_ = json.Unmarshal([]byte(tc.Arguments), &args)
+				parts = append(parts, geminiPart{FunctionCall: &geminiFunctionCall{Name: tc.Name, Args: args}})
+			}
+			if len(parts) == 0 {
+				parts = append(parts, geminiPart{Text: ""})
+			}
+			gr.Contents = append(gr.Contents, geminiContent{Role: "model", Parts: parts})
+		case "tool":
+			// Gemini 用函数名关联结果；结果需为对象，字符串结果包一层
+			resp := map[string]any{}
+			if err := json.Unmarshal([]byte(m.Content), &resp); err != nil {
+				resp = map[string]any{"result": m.Content}
+			}
 			gr.Contents = append(gr.Contents, geminiContent{
-				Role:  "model",
-				Parts: []geminiPart{{Text: m.Content}},
+				Role:  "user",
+				Parts: []geminiPart{{FunctionResponse: &geminiFunctionResponse{Name: m.Name, Response: resp}}},
 			})
 		default:
 			gr.Contents = append(gr.Contents, geminiContent{
@@ -122,8 +154,14 @@ func (c *geminiClient) buildRequest(req *Request) geminiRequest {
 	gc := &geminiGenerationConfig{
 		MaxOutputTokens: req.MaxTokens,
 		Temperature:     req.Temperature,
+		TopP:            req.TopP,
+		StopSequences:   req.Stop,
+		Seed:            req.Seed,
 	}
-	if req.JSONMode {
+	if req.JSONSchema != nil {
+		gc.ResponseMIMEType = "application/json"
+		gc.ResponseSchema = req.JSONSchema.Schema
+	} else if req.JSONMode {
 		gc.ResponseMIMEType = "application/json"
 	}
 	gr.GenerationConfig = gc
@@ -139,7 +177,20 @@ func (c *geminiClient) buildRequest(req *Request) geminiRequest {
 			gr.ToolConfig = tc
 		}
 	}
-	return gr
+	body, err := mergeExtraParams(gr, nil)
+	if err != nil {
+		return nil, err
+	}
+	// Gemini 的厂商特有参数（如 thinkingConfig）位于 generationConfig 内
+	if len(req.ExtraParams) > 0 {
+		gcMap, _ := body["generationConfig"].(map[string]any)
+		if gcMap == nil {
+			gcMap = map[string]any{}
+		}
+		maps.Copy(gcMap, req.ExtraParams)
+		body["generationConfig"] = gcMap
+	}
+	return body, nil
 }
 
 // geminiFinishReason 映射为 OpenAI 风格的 finish_reason。
@@ -154,14 +205,19 @@ func geminiFinishReason(s string) string {
 	}
 }
 
-// applyResponse 把 Gemini 响应（完整或流式 chunk）合并进 Result。
+// applyGeminiResponse 把 Gemini 响应（完整或流式 chunk）合并进 Result。
 func applyGeminiResponse(r *Result, resp *geminiResponse, onText func(string)) {
 	if len(resp.Candidates) > 0 {
 		cand := resp.Candidates[0]
-		// 取最后一个 text part，避开可能的 thinking part
+		for _, part := range cand.Content.Parts {
+			if part.Thought && part.Text != "" {
+				r.ReasoningContent += part.Text
+			}
+		}
+		// 取最后一个非 thought 的 text part
 		for i := len(cand.Content.Parts) - 1; i >= 0; i-- {
 			part := cand.Content.Parts[i]
-			if part.Text != "" {
+			if part.Text != "" && !part.Thought {
 				onText(part.Text)
 				break
 			}
@@ -197,10 +253,12 @@ func (c *geminiClient) modelPath(req *Request) string {
 
 func (c *geminiClient) Chat(ctx context.Context, req *Request) (*Result, error) {
 	start := time.Now()
-	var resp geminiResponse
-	err := doJSON(ctx, c.hc, http.MethodPost, c.modelPath(req)+":generateContent", c.headers(),
-		c.buildRequest(req), &resp)
+	body, err := c.buildRequest(req)
 	if err != nil {
+		return nil, err
+	}
+	var resp geminiResponse
+	if err := doJSON(ctx, c.hc, http.MethodPost, c.modelPath(req)+":generateContent", c.headers(), body, &resp); err != nil {
 		return nil, err
 	}
 	r := &Result{LatencyMS: msSince(start)}
@@ -210,10 +268,13 @@ func (c *geminiClient) Chat(ctx context.Context, req *Request) (*Result, error) 
 
 func (c *geminiClient) Stream(ctx context.Context, req *Request) (*Result, error) {
 	start := time.Now()
+	body, err := c.buildRequest(req)
+	if err != nil {
+		return nil, err
+	}
 	r := &Result{TTFTMS: -1}
 	var sb strings.Builder
-	err := ssePost(ctx, c.hc, c.modelPath(req)+":streamGenerateContent?alt=sse", c.headers(),
-		c.buildRequest(req),
+	err = ssePost(ctx, c.hc, c.modelPath(req)+":streamGenerateContent?alt=sse", c.headers(), body,
 		func(data []byte) error {
 			var chunk geminiResponse
 			if err := json.Unmarshal(data, &chunk); err != nil {
@@ -252,4 +313,20 @@ func (c *geminiClient) Models(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
-var _ Provider = (*geminiClient)(nil)
+// RawChat 直接 POST :generateContent，绕过类型校验。
+func (c *geminiClient) RawChat(ctx context.Context, req *RawRequest) (*RawResult, error) {
+	headers := map[string]string{}
+	switch {
+	case req.OmitAuth:
+	case req.OverrideAuth != "":
+		headers["x-goog-api-key"] = req.OverrideAuth
+	default:
+		headers["x-goog-api-key"] = c.apiKey
+	}
+	return rawPost(ctx, c.hc, c.baseURL+"/models/"+c.model+":generateContent", headers, req.Payload)
+}
+
+var (
+	_ Provider  = (*geminiClient)(nil)
+	_ RawCaller = (*geminiClient)(nil)
+)

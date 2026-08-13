@@ -35,6 +35,19 @@ func Run(ctx context.Context, p provider.Provider, constraints *ModelConstraints
 		checkJSONMode(ctx, p),
 		checkToolCalling(ctx, p),
 		checkUsageField(ctx, p),
+		// 3.2 API 功能扩展
+		checkStopSequence(ctx, p),
+		checkSeedConsistency(ctx, p),
+		checkStreamUsageOptions(ctx, p),
+		checkEncodingUnicode(ctx, p),
+		// 3.1 整体基本要求扩展
+		checkJSONSchema(ctx, p),
+		checkParallelToolCalls(ctx, p),
+		checkToolResultRoundTrip(ctx, p),
+		checkThinkingControl(ctx, p, constraints),
+		checkReasoningEffort(ctx, p, constraints),
+		checkDefaultMaxTokens(ctx, p, constraints),
+		checkNoDefaultSystemPrompt(ctx, p),
 	)
 	layer.DurationMS = float64(time.Since(start).Microseconds()) / 1000
 	return layer
@@ -44,6 +57,14 @@ func Run(ctx context.Context, p provider.Provider, constraints *ModelConstraints
 type ModelConstraints struct {
 	DisableTemperatureZeroCheck bool
 	SpecifiedTemperature        *float64
+	// ThinkingEnableParams / ThinkingDisableParams 开启/关闭思考的厂商参数，
+	// 原样透传（openai/anthropic 顶层，gemini generationConfig）。
+	ThinkingEnableParams  map[string]any
+	ThinkingDisableParams map[string]any
+	// ReasoningEfforts 模型声称支持的 reasoning_effort 值（仅 openai 协议探测）。
+	ReasoningEfforts []string
+	// DefaultMaxTokens 官方标称的 max_tokens 默认值，用于默认值探测。
+	DefaultMaxTokens int
 }
 
 func timed(name string, weight float64, fn func() core.CheckResult) core.CheckResult {

@@ -1,9 +1,11 @@
-// Anthropic Messages API 的 Provider 实现（手写 net/http，含 SSE 流式）。
 package provider
+
+// Anthropic Messages API 的 Provider 实现（手写 net/http，含 SSE 流式）。
 
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -42,9 +44,11 @@ func (c *anthropicClient) headers() map[string]string {
 	}
 }
 
+// anthropicMessage 的 Content 为 string 或 []map[string]any（内容块数组，
+// 用于 tool_use / tool_result 回传场景）。
 type anthropicMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
 }
 
 type anthropicTool struct {
@@ -58,21 +62,25 @@ type anthropicToolChoice struct {
 }
 
 type anthropicRequest struct {
-	Model       string               `json:"model"`
-	MaxTokens   int                  `json:"max_tokens"`
-	System      string               `json:"system,omitempty"`
-	Messages    []anthropicMessage   `json:"messages"`
-	Temperature *float64             `json:"temperature,omitempty"`
-	Stream      bool                 `json:"stream"`
-	Tools       []anthropicTool      `json:"tools,omitempty"`
-	ToolChoice  *anthropicToolChoice `json:"tool_choice,omitempty"`
+	Model         string               `json:"model"`
+	MaxTokens     int                  `json:"max_tokens"`
+	System        string               `json:"system,omitempty"`
+	Messages      []anthropicMessage   `json:"messages"`
+	Temperature   *float64             `json:"temperature,omitempty"`
+	TopP          *float64             `json:"top_p,omitempty"`
+	StopSequences []string             `json:"stop_sequences,omitempty"`
+	Stream        bool                 `json:"stream"`
+	Tools         []anthropicTool      `json:"tools,omitempty"`
+	ToolChoice    *anthropicToolChoice `json:"tool_choice,omitempty"`
 }
 
 type anthropicContentBlock struct {
-	Type  string         `json:"type"`
-	Text  string         `json:"text"`
-	Name  string         `json:"name"`
-	Input map[string]any `json:"input"`
+	Type     string         `json:"type"`
+	Text     string         `json:"text"`
+	Thinking string         `json:"thinking"`
+	ID       string         `json:"id"`
+	Name     string         `json:"name"`
+	Input    map[string]any `json:"input"`
 }
 
 type anthropicUsage struct {
@@ -86,16 +94,18 @@ type anthropicResponse struct {
 	Usage      anthropicUsage          `json:"usage"`
 }
 
-func (c *anthropicClient) buildRequest(req *Request, stream bool) anthropicRequest {
+func (c *anthropicClient) buildRequest(req *Request, stream bool) (map[string]any, error) {
 	model := req.Model
 	if model == "" {
 		model = c.model
 	}
 	ar := anthropicRequest{
-		Model:       model,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		Stream:      stream,
+		Model:         model,
+		MaxTokens:     req.MaxTokens,
+		Temperature:   req.Temperature,
+		TopP:          req.TopP,
+		StopSequences: req.Stop,
+		Stream:        stream,
 	}
 	if ar.MaxTokens <= 0 {
 		ar.MaxTokens = 1024 // Anthropic 要求 max_tokens 必填
@@ -106,7 +116,26 @@ func (c *anthropicClient) buildRequest(req *Request, stream bool) anthropicReque
 		case "system":
 			systemParts = append(systemParts, m.Content)
 		case "assistant":
-			ar.Messages = append(ar.Messages, anthropicMessage{Role: "assistant", Content: m.Content})
+			if len(m.ToolCalls) > 0 {
+				var blocks []map[string]any
+				if m.Content != "" {
+					blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
+				}
+				for _, tc := range m.ToolCalls {
+					input := map[string]any{}
+					_ = json.Unmarshal([]byte(tc.Arguments), &input)
+					blocks = append(blocks, map[string]any{
+						"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": input,
+					})
+				}
+				ar.Messages = append(ar.Messages, anthropicMessage{Role: "assistant", Content: blocks})
+			} else {
+				ar.Messages = append(ar.Messages, anthropicMessage{Role: "assistant", Content: m.Content})
+			}
+		case "tool":
+			ar.Messages = append(ar.Messages, anthropicMessage{Role: "user", Content: []map[string]any{{
+				"type": "tool_result", "tool_use_id": m.ToolCallID, "content": m.Content,
+			}}})
 		default:
 			ar.Messages = append(ar.Messages, anthropicMessage{Role: "user", Content: m.Content})
 		}
@@ -122,7 +151,22 @@ func (c *anthropicClient) buildRequest(req *Request, stream bool) anthropicReque
 	if len(ar.Tools) > 0 && (req.ToolsChoice == "any" || req.ToolsChoice == "required") {
 		ar.ToolChoice = &anthropicToolChoice{Type: "any"}
 	}
-	return ar
+	return mergeExtraParams(ar, req.ExtraParams)
+}
+
+// mergeExtraParams 把请求结构体转为 map 并合并厂商特有参数（如 thinking）。
+// extras 中的键会覆盖结构体中的同名键。
+func mergeExtraParams(v any, extras map[string]any) (map[string]any, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{}
+	if err := json.Unmarshal(data, &body); err != nil {
+		return nil, err
+	}
+	maps.Copy(body, extras)
+	return body, nil
 }
 
 // anthropicStopReason 映射为 OpenAI 风格的 finish_reason。
@@ -141,10 +185,12 @@ func anthropicStopReason(s string) string {
 
 func (c *anthropicClient) Chat(ctx context.Context, req *Request) (*Result, error) {
 	start := time.Now()
-	var resp anthropicResponse
-	err := doJSON(ctx, c.hc, http.MethodPost, c.baseURL+"/messages", c.headers(),
-		c.buildRequest(req, false), &resp)
+	body, err := c.buildRequest(req, false)
 	if err != nil {
+		return nil, err
+	}
+	var resp anthropicResponse
+	if err := doJSON(ctx, c.hc, http.MethodPost, c.baseURL+"/messages", c.headers(), body, &resp); err != nil {
 		return nil, err
 	}
 	r := &Result{LatencyMS: msSince(start)}
@@ -152,9 +198,11 @@ func (c *anthropicClient) Chat(ctx context.Context, req *Request) (*Result, erro
 		switch b.Type {
 		case "text":
 			r.Content += b.Text
+		case "thinking":
+			r.ReasoningContent += b.Thinking
 		case "tool_use":
 			args, _ := json.Marshal(b.Input)
-			r.ToolCalls = append(r.ToolCalls, ToolCall{Name: b.Name, Arguments: string(args)})
+			r.ToolCalls = append(r.ToolCalls, ToolCall{ID: b.ID, Name: b.Name, Arguments: string(args)})
 		}
 	}
 	r.FinishReason = anthropicStopReason(resp.StopReason)
@@ -168,11 +216,13 @@ type anthropicStreamEvent struct {
 	Type         string `json:"type"`
 	ContentBlock struct {
 		Type string `json:"type"`
+		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"content_block"`
 	Delta struct {
 		Type        string `json:"type"`
 		Text        string `json:"text"`
+		Thinking    string `json:"thinking"`
 		PartialJSON string `json:"partial_json"`
 		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
@@ -184,11 +234,16 @@ type anthropicStreamEvent struct {
 
 func (c *anthropicClient) Stream(ctx context.Context, req *Request) (*Result, error) {
 	start := time.Now()
+	body, err := c.buildRequest(req, true)
+	if err != nil {
+		return nil, err
+	}
 	r := &Result{TTFTMS: -1}
-	var sb strings.Builder
+	var sb, rb strings.Builder
+	var toolID string
 	var toolName, toolArgs strings.Builder
 
-	err := ssePost(ctx, c.hc, c.baseURL+"/messages", c.headers(), c.buildRequest(req, true),
+	err = ssePost(ctx, c.hc, c.baseURL+"/messages", c.headers(), body,
 		func(data []byte) error {
 			var ev anthropicStreamEvent
 			if err := json.Unmarshal(data, &ev); err != nil {
@@ -200,6 +255,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req *Request) (*Result, er
 				r.PromptTokens = ev.Message.Usage.InputTokens
 			case "content_block_start":
 				if ev.ContentBlock.Type == "tool_use" {
+					toolID = ev.ContentBlock.ID
 					toolName.Reset()
 					toolName.WriteString(ev.ContentBlock.Name)
 					toolArgs.Reset()
@@ -211,6 +267,8 @@ func (c *anthropicClient) Stream(ctx context.Context, req *Request) (*Result, er
 						r.TTFTMS = msSince(start)
 					}
 					sb.WriteString(ev.Delta.Text)
+				case "thinking_delta":
+					rb.WriteString(ev.Delta.Thinking)
 				case "input_json_delta":
 					toolArgs.WriteString(ev.Delta.PartialJSON)
 				}
@@ -228,9 +286,10 @@ func (c *anthropicClient) Stream(ctx context.Context, req *Request) (*Result, er
 		return nil, err
 	}
 	if toolName.Len() > 0 {
-		r.ToolCalls = append(r.ToolCalls, ToolCall{Name: toolName.String(), Arguments: toolArgs.String()})
+		r.ToolCalls = append(r.ToolCalls, ToolCall{ID: toolID, Name: toolName.String(), Arguments: toolArgs.String()})
 	}
 	r.Content = sb.String()
+	r.ReasoningContent = rb.String()
 	r.LatencyMS = msSince(start)
 	return r, nil
 }
@@ -251,4 +310,20 @@ func (c *anthropicClient) Models(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
-var _ Provider = (*anthropicClient)(nil)
+// RawChat 直接 POST /messages，绕过类型校验。
+func (c *anthropicClient) RawChat(ctx context.Context, req *RawRequest) (*RawResult, error) {
+	headers := map[string]string{"anthropic-version": anthropicVersion}
+	switch {
+	case req.OmitAuth:
+	case req.OverrideAuth != "":
+		headers["x-api-key"] = req.OverrideAuth
+	default:
+		headers["x-api-key"] = c.apiKey
+	}
+	return rawPost(ctx, c.hc, c.baseURL+"/messages", headers, req.Payload)
+}
+
+var (
+	_ Provider  = (*anthropicClient)(nil)
+	_ RawCaller = (*anthropicClient)(nil)
+)

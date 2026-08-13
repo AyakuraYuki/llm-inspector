@@ -11,6 +11,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/scorer"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/availability"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/boundary"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/capability"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/performance"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/protocol"
@@ -18,7 +19,7 @@ import (
 )
 
 // Version 工具版本号。
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 // LayerInfo 描述一层及其检查项，供 list 命令展示。
 type LayerInfo struct {
@@ -31,10 +32,18 @@ type LayerInfo struct {
 func Catalog() []LayerInfo {
 	return []LayerInfo{
 		{"L1", "API 可用性", []string{"models_endpoint", "minimal_chat", "error_semantics", "model_listed"}},
-		{"L2", "协议兼容性", []string{"streaming_sse", "system_prompt", "max_tokens", "temperature_zero", "multi_turn", "json_mode", "tool_calling", "usage_field"}},
+		{"L2", "协议兼容性", []string{
+			"streaming_sse", "system_prompt", "max_tokens", "temperature_zero", "multi_turn", "json_mode", "tool_calling", "usage_field",
+			"stop_sequence", "seed_consistency", "stream_usage_options", "encoding_unicode",
+			"json_schema", "parallel_tool_calls", "tool_result_round_trip", "thinking_control", "reasoning_effort", "default_max_tokens", "no_default_system_prompt",
+		}},
 		{"L3", "模型能力", []string{"按数据集逐题执行（内建题库约 21 题，可用 --dataset 替换）"}},
 		{"L4", "稳定性", []string{"self_consistency", "prompt_perturbation", "soak_test", "adversarial_inputs"}},
 		{"L5", "模型性能", []string{"latency_ttft", "throughput", "concurrency_scaling", "context_probe"}},
+		{"L6", "参数边界与健壮性", []string{
+			"messages_boundary", "top_p_boundary", "frequency_penalty_boundary", "presence_penalty_boundary",
+			"temperature_boundary", "max_tokens_boundary", "max_completion_tokens_compat", "auth_boundary",
+		}},
 	}
 }
 
@@ -124,6 +133,10 @@ func Run(ctx context.Context, cfg *config.Config, only map[string]bool) (*core.R
 		constraints := &protocol.ModelConstraints{
 			DisableTemperatureZeroCheck: cfg.Target.Constraints.DisableTemperatureZeroCheck,
 			SpecifiedTemperature:        cfg.Target.Constraints.SpecifiedTemperature,
+			ThinkingEnableParams:        cfg.Target.Constraints.ThinkingEnableParams,
+			ThinkingDisableParams:       cfg.Target.Constraints.ThinkingDisableParams,
+			ReasoningEfforts:            cfg.Target.Constraints.ReasoningEfforts,
+			DefaultMaxTokens:            cfg.Target.Constraints.DefaultMaxTokens,
 		}
 		return protocol.Run(ctx, p, constraints)
 	})
@@ -135,6 +148,9 @@ func Run(ctx context.Context, cfg *config.Config, only map[string]bool) (*core.R
 	})
 	runLayer("L5", cfg.Layers.Performance.Enabled, func() core.LayerResult {
 		return performance.Run(ctx, p, cfg.Layers.Performance)
+	})
+	runLayer("L6", cfg.Layers.Boundary.Enabled, func() core.LayerResult {
+		return boundary.Run(ctx, p)
 	})
 
 	// 总评：已执行且未跳过层的加权平均

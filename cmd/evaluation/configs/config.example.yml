@@ -5,10 +5,13 @@ target:
   model: qwen2.5-72b-instruct
   # 模型特定约束配置
   constraints:
-    # 禁用 temperature=0 一致性检查（当模型不支持 temperature=0 时）
-    disable_temperature_zero_check: false
-    # 可选的指定 temperature 检查（未配置则跳过；配置后额外执行一次指定温度下的采样验证）
-    # specified_temperature: 1.0
+    disable_temperature_zero_check: false  # 禁用 temperature=0 一致性检查（当模型不支持 temperature=0 时）
+    # specified_temperature: 1.0  # 可选的指定 temperature 检查（未配置则跳过；配置后额外执行一次指定温度下的采样验证）
+    # 思考控制参数（未配置则跳过 thinking_control 检查）。原样合并进请求体：openai/anthropic 在顶层，gemini 在 generationConfig 内。
+    # thinking_enable_params: { thinking: { type: enabled } }
+    # thinking_disable_params: { thinking: { type: disabled } }
+    # reasoning_efforts: [ max, xhigh, high, medium, low, minimal, none ]  # 模型声称支持的 reasoning_effort 档位（未配置则跳过；仅 openai 协议探测）
+    # default_max_tokens: 32768  # 官方标称的 max_tokens 默认值（未配置则跳过 default_max_tokens 探测）
   protocol: openai # openai（默认）/ anthropic / gemini
   timeout: 60s
 
@@ -59,6 +62,9 @@ layers:
       ttft_p99_ms: 2000
       min_tokens_per_sec: 10
       max_error_rate: 0.01
+  # L6：参数边界与健壮性（非法输入应被显式拒绝；通过裸请求绕过 SDK 发送畸形负载）
+  boundary:
+    enabled: true
 
 thresholds:
   min_layer_score: 0.8    # 层通过线

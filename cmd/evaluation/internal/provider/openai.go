@@ -1,19 +1,26 @@
-// OpenAI 兼容协议的 Provider 实现（基于官方 SDK，禁用重试以观察服务真实行为）。
 package provider
+
+// OpenAI 兼容协议的 Provider 实现（基于官方 SDK，禁用重试以观察服务真实行为）。
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/shared"
 )
 
 type openaiProvider struct {
-	client openai.Client
-	model  string
+	client  openai.Client
+	baseURL string
+	apiKey  string
+	model   string
+	hc      *http.Client
 }
 
 // NewOpenAI 创建 OpenAI 兼容端点客户端。
@@ -24,7 +31,13 @@ func NewOpenAI(baseURL, apiKey, model string, timeout time.Duration) Provider {
 		option.WithMaxRetries(0),
 		option.WithRequestTimeout(timeout),
 	)
-	return &openaiProvider{client: c, model: model}
+	return &openaiProvider{
+		client:  c,
+		baseURL: strings.TrimRight(baseURL, "/"),
+		apiKey:  apiKey,
+		model:   model,
+		hc:      &http.Client{Timeout: timeout},
+	}
 }
 
 func (p *openaiProvider) Protocol() string { return "openai" }
@@ -43,7 +56,26 @@ func (p *openaiProvider) buildParams(req *Request, stream bool) openai.ChatCompl
 		case "system":
 			params.Messages = append(params.Messages, openai.SystemMessage(m.Content))
 		case "assistant":
-			params.Messages = append(params.Messages, openai.AssistantMessage(m.Content))
+			if len(m.ToolCalls) > 0 {
+				asst := openai.ChatCompletionAssistantMessageParam{}
+				if m.Content != "" {
+					asst.Content.OfString = openai.String(m.Content)
+				}
+				for _, tc := range m.ToolCalls {
+					asst.ToolCalls = append(asst.ToolCalls, openai.ChatCompletionMessageToolCallParam{
+						ID: tc.ID,
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{
+							Name:      tc.Name,
+							Arguments: tc.Arguments,
+						},
+					})
+				}
+				params.Messages = append(params.Messages, openai.ChatCompletionMessageParamUnion{OfAssistant: &asst})
+			} else {
+				params.Messages = append(params.Messages, openai.AssistantMessage(m.Content))
+			}
+		case "tool":
+			params.Messages = append(params.Messages, openai.ToolMessage(m.Content, m.ToolCallID))
 		default:
 			params.Messages = append(params.Messages, openai.UserMessage(m.Content))
 		}
@@ -51,10 +83,43 @@ func (p *openaiProvider) buildParams(req *Request, stream bool) openai.ChatCompl
 	if req.MaxTokens > 0 {
 		params.MaxTokens = openai.Int(int64(req.MaxTokens))
 	}
+	if req.MaxCompletionTokens > 0 {
+		params.MaxCompletionTokens = openai.Int(int64(req.MaxCompletionTokens))
+	}
 	if req.Temperature != nil {
 		params.Temperature = openai.Float(*req.Temperature)
 	}
-	if req.JSONMode {
+	if req.TopP != nil {
+		params.TopP = openai.Float(*req.TopP)
+	}
+	if req.FrequencyPenalty != nil {
+		params.FrequencyPenalty = openai.Float(*req.FrequencyPenalty)
+	}
+	if req.PresencePenalty != nil {
+		params.PresencePenalty = openai.Float(*req.PresencePenalty)
+	}
+	if req.Seed != nil {
+		params.Seed = openai.Int(*req.Seed)
+	}
+	if len(req.Stop) == 1 {
+		params.Stop.OfString = openai.String(req.Stop[0])
+	} else if len(req.Stop) > 1 {
+		params.Stop.OfStringArray = req.Stop
+	}
+	if req.ReasoningEffort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(req.ReasoningEffort)
+	}
+	if req.JSONSchema != nil {
+		params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+					Name:   req.JSONSchema.Name,
+					Schema: req.JSONSchema.Schema,
+					Strict: openai.Bool(req.JSONSchema.Strict),
+				},
+			},
+		}
+	} else if req.JSONMode {
 		params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
 			OfJSONObject: &shared.ResponseFormatJSONObjectParam{},
 		}
@@ -73,12 +138,35 @@ func (p *openaiProvider) buildParams(req *Request, stream bool) openai.ChatCompl
 			OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoRequired)),
 		}
 	}
+	if req.ParallelToolCalls != nil {
+		params.ParallelToolCalls = openai.Bool(*req.ParallelToolCalls)
+	}
 	if stream {
+		includeUsage := true
+		if req.StreamIncludeUsage != nil {
+			includeUsage = *req.StreamIncludeUsage
+		}
 		params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
-			IncludeUsage: openai.Bool(true),
+			IncludeUsage: openai.Bool(includeUsage),
 		}
 	}
+	if len(req.ExtraParams) > 0 {
+		params.SetExtraFields(req.ExtraParams)
+	}
 	return params
+}
+
+// extraString 从 SDK 响应的 ExtraFields 中取字符串字段（如方言的 reasoning_content）。
+func extraString(fields map[string]respjson.Field, key string) string {
+	f, ok := fields[key]
+	if !ok || !f.Valid() {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal([]byte(f.Raw()), &s); err != nil {
+		return ""
+	}
+	return s
 }
 
 // Chat 发起非流式调用。
@@ -92,9 +180,11 @@ func (p *openaiProvider) Chat(ctx context.Context, req *Request) (*Result, error
 	if len(resp.Choices) > 0 {
 		c := resp.Choices[0]
 		r.Content = c.Message.Content
+		r.ReasoningContent = extraString(c.Message.JSON.ExtraFields, "reasoning_content")
 		r.FinishReason = string(c.FinishReason)
 		for _, tc := range c.Message.ToolCalls {
 			r.ToolCalls = append(r.ToolCalls, ToolCall{
+				ID:        tc.ID,
 				Name:      tc.Function.Name,
 				Arguments: tc.Function.Arguments,
 			})
@@ -112,7 +202,7 @@ func (p *openaiProvider) Stream(ctx context.Context, req *Request) (*Result, err
 	defer stream.Close()
 
 	r := &Result{TTFTMS: -1}
-	var sb strings.Builder
+	var sb, rb strings.Builder
 	for stream.Next() {
 		chunk := stream.Current()
 		r.Chunks++
@@ -122,11 +212,13 @@ func (p *openaiProvider) Stream(ctx context.Context, req *Request) (*Result, err
 		if len(chunk.Choices) > 0 {
 			c := chunk.Choices[0]
 			sb.WriteString(c.Delta.Content)
+			rb.WriteString(extraString(c.Delta.JSON.ExtraFields, "reasoning_content"))
 			if c.FinishReason != "" {
 				r.FinishReason = string(c.FinishReason)
 			}
 			for _, tc := range c.Delta.ToolCalls {
 				r.ToolCalls = append(r.ToolCalls, ToolCall{
+					ID:        tc.ID,
 					Name:      tc.Function.Name,
 					Arguments: tc.Function.Arguments,
 				})
@@ -141,6 +233,7 @@ func (p *openaiProvider) Stream(ctx context.Context, req *Request) (*Result, err
 		return nil, err
 	}
 	r.Content = sb.String()
+	r.ReasoningContent = rb.String()
 	r.LatencyMS = msSince(start)
 	return r, nil
 }
@@ -157,6 +250,21 @@ func (p *openaiProvider) Models(ctx context.Context) ([]string, error) {
 	}
 	return ids, nil
 }
+
+// RawChat 直接 POST /chat/completions，绕过 SDK 类型校验。
+func (p *openaiProvider) RawChat(ctx context.Context, req *RawRequest) (*RawResult, error) {
+	headers := map[string]string{}
+	switch {
+	case req.OmitAuth:
+	case req.OverrideAuth != "":
+		headers["Authorization"] = "Bearer " + req.OverrideAuth
+	default:
+		headers["Authorization"] = "Bearer " + p.apiKey
+	}
+	return rawPost(ctx, p.hc, p.baseURL+"/chat/completions", headers, req.Payload)
+}
+
+var _ RawCaller = (*openaiProvider)(nil)
 
 func msSince(t time.Time) float64 {
 	return float64(time.Since(t).Microseconds()) / 1000.0
