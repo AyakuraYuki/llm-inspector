@@ -102,6 +102,7 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 	if benchmarkCfg.ReasoningEffort != "" {
 		req.ReasoningEffort = strings.ToLower(benchmarkCfg.ReasoningEffort)
 	}
+	result.RawRequest = &req
 
 	// 发送流式请求
 	stream, err := client.CreateChatCompletionStream(ctx, req)
@@ -114,6 +115,7 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 	var firstTokenTime time.Time
 	var totalTokens int
 	var fullResponse strings.Builder
+	var rawResponses []openai.ChatCompletionStreamResponse
 	receivedFirstToken := false
 	var finishReason string
 
@@ -127,6 +129,7 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 			result.Error = fmt.Sprintf("Stream error: %v", err)
 			return result
 		}
+		rawResponses = append(rawResponses, response)
 
 		// 记录首个 token 时间
 		if !receivedFirstToken && len(response.Choices) > 0 && response.Choices[0].Delta.Content != "" {
@@ -160,6 +163,8 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 	result.TotalTime = endTime.Sub(startTime)
 	result.TokensUsed = totalTokens
 	result.ModelAnswer = fullResponse.String()
+	result.RawResponse = rawResponses
+	result.RawResponseHeader = stream.Header()
 
 	// 计算 TPS 和 TPM
 	if result.TotalTime.Seconds() > 0 {

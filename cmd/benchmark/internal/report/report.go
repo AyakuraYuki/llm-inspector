@@ -13,27 +13,9 @@ import (
 
 // OutputResults 将结果输出到报告目录下的 JSON 文件
 func OutputResults(results []types.BenchmarkResult, reportDir string) {
-	// 转换为可序列化的格式
-	type SerializableResult struct {
-		Dataset         string  `json:"dataset"`
-		QuestionIndex   int     `json:"question_index"`
-		Question        string  `json:"question"`
-		ExpectedAnswer  *string `json:"expected_answer,omitempty"`
-		ModelAnswer     string  `json:"model_answer"`
-		ExtractedAnswer string  `json:"extracted_answer"`
-		IsCorrect       *bool   `json:"is_correct,omitempty"`
-		FinishReason    string  `json:"finish_reason,omitempty"`
-		TTFTMs          int64   `json:"ttft_ms"`
-		TotalTimeMs     int64   `json:"total_time_ms"`
-		TokensUsed      int     `json:"tokens_used"`
-		TPS             float64 `json:"tps"`
-		TPM             float64 `json:"tpm"`
-		Error           string  `json:"error,omitempty"`
-	}
-
-	serializableResults := make([]SerializableResult, len(results))
+	serializableResults := make([]types.SerializableResult, len(results))
 	for i, r := range results {
-		serializableResults[i] = SerializableResult{
+		serializableResults[i] = types.SerializableResult{
 			Dataset:         r.Dataset,
 			QuestionIndex:   r.QuestionIndex,
 			Question:        r.Question,
@@ -183,11 +165,41 @@ func SaveIndividualReports(results []types.BenchmarkResult, reportDir string) {
 			} else if r.FinishReason != "stop" {
 				report.WriteString(" ⚠ WARNING: Non-normal finish")
 			}
+			report.WriteString("\n\n")
+		}
+
+		// Raw Request
+		if r.RawRequest != nil {
+			report.WriteString("Raw Request:\n")
+			report.WriteString(strings.Repeat("-", 80) + "\n")
+			bs, _ := json.MarshalIndent(r.RawRequest, "", "    ")
+			report.WriteString(string(bs))
+			report.WriteString("\n\n")
+		}
+
+		// Raw Response Header
+		if len(r.RawResponseHeader) > 0 {
+			report.WriteString("Raw Response Header:\n")
+			report.WriteString(strings.Repeat("-", 80) + "\n")
+			for name, values := range r.RawResponseHeader {
+				report.WriteString(fmt.Sprintf("%s: %v\n", name, values))
+			}
+			report.WriteString("\n")
+		}
+
+		// Raw Response
+		if r.RawResponse != nil {
+			report.WriteString("Raw Response:\n")
+			report.WriteString(strings.Repeat("-", 80) + "\n")
+			for _, response := range r.RawResponse {
+				bs, _ := json.Marshal(response)
+				report.WriteString(string(bs) + "\n")
+			}
 			report.WriteString("\n")
 		}
 
 		report.WriteString("\n")
-		report.WriteString("=" + strings.Repeat("=", 79) + "\n")
+		report.WriteString(strings.Repeat("=", 80) + "\n")
 
 		// 写入文件
 		if err := os.WriteFile(filename, []byte(report.String()), 0644); err != nil {
