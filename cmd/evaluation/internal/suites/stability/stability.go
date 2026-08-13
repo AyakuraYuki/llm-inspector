@@ -13,6 +13,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/stats"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
 // contentBudget 是需要验证输出内容的检查项的 max_tokens 预算。
@@ -96,7 +97,7 @@ func checkSelfConsistency(ctx context.Context, p provider.Provider, cfg config.S
 			agreement := float64(best) / float64(total)
 			agreements = append(agreements, agreement)
 			if len(answers) > 1 {
-				details = append(details, fmt.Sprintf("%q 出现 %d 种答案", truncate(probe, 20), len(answers)))
+				details = append(details, fmt.Sprintf("%q 出现 %d 种答案", util.TruncateString(probe, 20), len(answers)))
 			}
 		}
 
@@ -159,9 +160,9 @@ func checkPromptPerturbation(ctx context.Context, p provider.Provider) core.Chec
 				correct++
 			case strings.TrimSpace(resp.Content) == "":
 				empty++
-				details = append(details, fmt.Sprintf("%q → 输出为空（finish_reason=%q）", truncate(q, 24), resp.FinishReason))
+				details = append(details, fmt.Sprintf("%q → 输出为空（finish_reason=%q）", util.TruncateString(q, 24), resp.FinishReason))
 			default:
-				details = append(details, fmt.Sprintf("%q → %q", truncate(q, 24), truncate(resp.Content, 24)))
+				details = append(details, fmt.Sprintf("%q → %q", util.TruncateString(q, 24), util.TruncateString(resp.Content, 24)))
 			}
 		}
 		score := float64(correct) / float64(len(perturbationPrompts))
@@ -287,12 +288,4 @@ func normalize(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.TrimRight(s, "。．.!！?？;；,，")
 	return strings.ToLower(strings.TrimSpace(s))
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
 }

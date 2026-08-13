@@ -18,6 +18,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/scorer"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
 // Case 是数据集中的一道题。
@@ -125,7 +126,7 @@ func runCase(ctx context.Context, p provider.Provider, judge *scorer.Judge, c *C
 		result.Metrics = metrics
 		return result
 	}
-	metrics["output"] = truncate(resp.Content, 200)
+	metrics["output"] = util.TruncateString(resp.Content, 200)
 	metrics["completion_tokens"] = resp.CompletionTokens
 
 	var verdict scorer.Verdict
@@ -165,12 +166,4 @@ func lastUserMessage(turns []provider.Message) string {
 		}
 	}
 	return ""
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
 }

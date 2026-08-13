@@ -10,6 +10,7 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
 // checkStopSequence 验证 stop 停止词生效：输出应在停止词处截断且不含停止词本身。
@@ -49,7 +50,7 @@ func checkStopSequence(ctx context.Context, p provider.Provider) core.CheckResul
 					leaked = append(leaked, s)
 				}
 			}
-			metrics[tc.name+"_output"] = truncate(resp.Content, 40)
+			metrics[tc.name+"_output"] = util.TruncateString(resp.Content, 40)
 			if len(leaked) == 0 {
 				points++
 			} else {
@@ -247,7 +248,7 @@ func checkEncodingUnicode(ctx context.Context, p provider.Provider) core.CheckRe
 			details = append(details, "control_chars: 输出不是合法 UTF-8")
 		} else {
 			points++
-			metrics["control_chars_output"] = truncate(resp.Content, 20)
+			metrics["control_chars_output"] = util.TruncateString(resp.Content, 20)
 		}
 
 		score := points / total

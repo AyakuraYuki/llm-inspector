@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
 // Judge 使用一个更强的模型对开放式回答打分（LLM-as-a-Judge）。
@@ -72,7 +73,7 @@ func (j *Judge) Score(ctx context.Context, question, answer, rubric string) (Ver
 	}
 	var jr judgeResponse
 	if err := json.Unmarshal([]byte(stripCodeFence(strings.TrimSpace(resp.Content))), &jr); err != nil {
-		return Verdict{}, fmt.Errorf("裁判输出解析失败: %q", truncate(resp.Content, 120))
+		return Verdict{}, fmt.Errorf("裁判输出解析失败: %q", util.TruncateString(resp.Content, 120))
 	}
 	score := jr.Score / 10
 	if score < 0 {

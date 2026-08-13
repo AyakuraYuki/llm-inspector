@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
 // Spec 描述一个打分器的配置（数据集 YAML 中的 scorer 字段）。
@@ -86,7 +88,7 @@ func scoreExactMatch(spec *Spec, out string) Verdict {
 	if got == want {
 		return Verdict{Score: 1, Reason: "完全匹配"}
 	}
-	return Verdict{Score: 0, Reason: fmt.Sprintf("期望 %q，实际 %q", fmt.Sprint(spec.Expected), truncate(out, 80))}
+	return Verdict{Score: 0, Reason: fmt.Sprintf("期望 %q，实际 %q", fmt.Sprint(spec.Expected), util.TruncateString(out, 80))}
 }
 
 func scoreContains(spec *Spec, out string) Verdict {
@@ -239,12 +241,4 @@ func stripCodeFence(s string) string {
 		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
 	}
 	return strings.TrimSpace(s)
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
 }

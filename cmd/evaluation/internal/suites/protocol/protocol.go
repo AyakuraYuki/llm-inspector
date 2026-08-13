@@ -12,6 +12,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
 // contentBudget 是内容型检查项的 max_tokens 预算。
@@ -367,7 +368,7 @@ func checkMultiTurn(ctx context.Context, p provider.Provider) core.CheckResult {
 				"输出为空，无法验证多轮记忆（finish_reason=%q，completion_tokens=%d；若为思考型模型，预算可能被思考过程耗尽）",
 				resp.FinishReason, resp.CompletionTokens))
 		}
-		return failScore("模型未回忆起上一轮内容: " + truncate(resp.Content, 60))
+		return failScore("模型未回忆起上一轮内容: " + util.TruncateString(resp.Content, 60))
 	})
 }
 
@@ -404,7 +405,7 @@ func checkJSONMode(ctx context.Context, p provider.Provider) core.CheckResult {
 			}
 			return core.CheckResult{Status: core.StatusPass, Score: 1, Detail: detail}
 		}
-		return failScore("JSON 要求下输出不是合法 JSON: " + truncate(resp.Content, 80))
+		return failScore("JSON 要求下输出不是合法 JSON: " + util.TruncateString(resp.Content, 80))
 	})
 }
 
@@ -444,7 +445,7 @@ func checkToolCalling(ctx context.Context, p provider.Provider) core.CheckResult
 		}
 		tc := resp.ToolCalls[0]
 		if tc.Name == "" || !json.Valid([]byte(tc.Arguments)) {
-			return failScore(fmt.Sprintf("工具调用结构非法: name=%q arguments=%q", tc.Name, truncate(tc.Arguments, 60)))
+			return failScore(fmt.Sprintf("工具调用结构非法: name=%q arguments=%q", tc.Name, util.TruncateString(tc.Arguments, 60)))
 		}
 		return core.CheckResult{Status: core.StatusPass, Score: 1,
 			Metrics: map[string]any{"tool": tc.Name, "arguments": tc.Arguments}}
@@ -481,12 +482,4 @@ func stripFence(s string) string {
 		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
 	}
 	return strings.TrimSpace(s)
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
 }

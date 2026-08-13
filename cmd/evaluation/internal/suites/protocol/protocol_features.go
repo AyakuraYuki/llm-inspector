@@ -12,6 +12,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
 // checkJSONSchema 验证 response_format json_schema 模式：输出须为符合 Schema 的 JSON。
@@ -57,7 +58,7 @@ func checkJSONSchema(ctx context.Context, p provider.Provider) core.CheckResult 
 
 		var obj map[string]any
 		if err := json.Unmarshal([]byte(stripFence(resp.Content)), &obj); err != nil {
-			return failScore("输出不是合法 JSON: " + truncate(resp.Content, 80))
+			return failScore("输出不是合法 JSON: " + util.TruncateString(resp.Content, 80))
 		}
 		var problems []string
 		for _, k := range []string{"city", "country", "tags"} {
@@ -89,7 +90,7 @@ func checkJSONSchema(ctx context.Context, p provider.Provider) core.CheckResult 
 			detail = "通过 prompt 诱导实现（Anthropic 无原生 json_schema 参数）"
 		}
 		return core.CheckResult{Status: status, Score: score, Detail: detail,
-			Metrics: map[string]any{"output": truncate(resp.Content, 120)}}
+			Metrics: map[string]any{"output": util.TruncateString(resp.Content, 120)}}
 	})
 }
 
@@ -200,14 +201,14 @@ func checkToolResultRoundTrip(ctx context.Context, p provider.Provider) core.Che
 		if strings.Contains(second.Content, sentinel) {
 			return core.CheckResult{Status: core.StatusPass, Score: 1,
 				Detail:  "工具结果回传后二次推理正确引用了结果",
-				Metrics: map[string]any{"answer": truncate(second.Content, 60)}}
+				Metrics: map[string]any{"answer": util.TruncateString(second.Content, 60)}}
 		}
 		if strings.TrimSpace(second.Content) == "" {
 			return failScore(fmt.Sprintf("回传后输出为空（finish_reason=%q）", second.FinishReason))
 		}
 		return core.CheckResult{Status: core.StatusPass, Score: 0.5,
 			Detail:  "回传被协议接受，但回答未引用工具结果（可能是能力问题）",
-			Metrics: map[string]any{"answer": truncate(second.Content, 60)}}
+			Metrics: map[string]any{"answer": util.TruncateString(second.Content, 60)}}
 	})
 }
 
@@ -393,7 +394,7 @@ func checkNoDefaultSystemPrompt(ctx context.Context, p provider.Provider) core.C
 			return failScore("请求失败: " + err.Error())
 		}
 		out := strings.TrimSpace(resp.Content)
-		metrics := map[string]any{"output": truncate(out, 120)}
+		metrics := map[string]any{"output": util.TruncateString(out, 120)}
 		if out == "" {
 			return core.CheckResult{
 				Status:  core.StatusPass,
