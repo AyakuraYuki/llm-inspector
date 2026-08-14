@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/stats"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
@@ -22,9 +22,9 @@ import (
 const contentBudget = 1024
 
 // Run 执行 L4 全部检查。
-func Run(ctx context.Context, p provider.Provider, cfg config.StabilityConfig) core.LayerResult {
+func Run(ctx context.Context, p provider.Provider, cfg config.StabilityConfig) types.LayerResult {
 	start := time.Now()
-	layer := core.LayerResult{ID: "L4", Name: "稳定性", Enabled: true}
+	layer := types.LayerResult{ID: "L4", Name: "稳定性", Enabled: true}
 
 	layer.Checks = append(layer.Checks,
 		checkSelfConsistency(ctx, p, cfg),
@@ -36,7 +36,7 @@ func Run(ctx context.Context, p provider.Provider, cfg config.StabilityConfig) c
 	return layer
 }
 
-func timed(name string, weight float64, fn func() core.CheckResult) core.CheckResult {
+func timed(name string, weight float64, fn func() types.CheckResult) types.CheckResult {
 	start := time.Now()
 	r := fn()
 	r.Name = name
@@ -55,8 +55,8 @@ var consistencyProbes = []string{
 // checkSelfConsistency 同一问题采样 N 次，统计最频答案占比（答案一致率）。
 // 答案经宽松归一化（去空白/大小写/收尾标点/代码围栏），"巴黎"与"巴黎。"视为同一答案；
 // 空输出计为异常而非一种答案，避免稀释或抬高一致率。
-func checkSelfConsistency(ctx context.Context, p provider.Provider, cfg config.StabilityConfig) core.CheckResult {
-	return timed("self_consistency", 2, func() core.CheckResult {
+func checkSelfConsistency(ctx context.Context, p provider.Provider, cfg config.StabilityConfig) types.CheckResult {
+	return timed("self_consistency", 2, func() types.CheckResult {
 		agreements := make([]float64, 0, len(consistencyProbes))
 		var details []string
 		errorsCount := 0
@@ -102,7 +102,7 @@ func checkSelfConsistency(ctx context.Context, p provider.Provider, cfg config.S
 		}
 
 		if len(agreements) == 0 {
-			return core.CheckResult{Status: core.StatusFail, Score: 0,
+			return types.CheckResult{Status: types.StatusFail, Score: 0,
 				Detail: fmt.Sprintf("无有效采样（%d 次请求失败，%d 次输出为空）", errorsCount, emptyCount),
 				Metrics: map[string]any{
 					"samples":        cfg.Samples,
@@ -112,9 +112,9 @@ func checkSelfConsistency(ctx context.Context, p provider.Provider, cfg config.S
 				}}
 		}
 		score := stats.Mean(agreements)
-		status := core.StatusPass
+		status := types.StatusPass
 		if score < 0.8 {
-			status = core.StatusFail
+			status = types.StatusFail
 		}
 		if emptyCount > 0 {
 			details = append(details, fmt.Sprintf("%d 次输出为空（未计入一致率）", emptyCount))
@@ -122,7 +122,7 @@ func checkSelfConsistency(ctx context.Context, p provider.Provider, cfg config.S
 		if errorsCount > 0 {
 			details = append(details, fmt.Sprintf("%d 次请求失败", errorsCount))
 		}
-		return core.CheckResult{Status: status, Score: score, Detail: strings.Join(details, "; "),
+		return types.CheckResult{Status: status, Score: score, Detail: strings.Join(details, "; "),
 			Metrics: map[string]any{
 				"samples":        cfg.Samples,
 				"agreement_mean": score,
@@ -141,8 +141,8 @@ var perturbationPrompts = []string{
 
 // checkPromptPerturbation 同义改写下答案应保持正确。
 // 空输出单独记录（思考型模型预算被耗尽时正文为空，与"回答错误"是不同问题）。
-func checkPromptPerturbation(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("prompt_perturbation", 1, func() core.CheckResult {
+func checkPromptPerturbation(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("prompt_perturbation", 1, func() types.CheckResult {
 		correct := 0
 		empty := 0
 		var details []string
@@ -166,21 +166,21 @@ func checkPromptPerturbation(ctx context.Context, p provider.Provider) core.Chec
 			}
 		}
 		score := float64(correct) / float64(len(perturbationPrompts))
-		status := core.StatusPass
+		status := types.StatusPass
 		if score < 1 {
-			status = core.StatusFail
+			status = types.StatusFail
 		}
 		if empty == len(perturbationPrompts) {
 			details = append(details, "全部输出为空：更可能是服务/预算问题而非扰动敏感，建议人工复核")
 		}
-		return core.CheckResult{Status: status, Score: score, Detail: strings.Join(details, "; "),
+		return types.CheckResult{Status: status, Score: score, Detail: strings.Join(details, "; "),
 			Metrics: map[string]any{"correct": correct, "empty": empty, "total": len(perturbationPrompts)}}
 	})
 }
 
 // checkSoak 连续 M 次请求，统计错误率与首尾延迟漂移。
-func checkSoak(ctx context.Context, p provider.Provider, cfg config.StabilityConfig) core.CheckResult {
-	return timed("soak_test", 2, func() core.CheckResult {
+func checkSoak(ctx context.Context, p provider.Provider, cfg config.StabilityConfig) types.CheckResult {
+	return timed("soak_test", 2, func() types.CheckResult {
 		latencies := make([]float64, 0, cfg.SoakRequests)
 		errorsCount := 0
 		for i := 0; i < cfg.SoakRequests; i++ {
@@ -215,11 +215,11 @@ func checkSoak(ctx context.Context, p provider.Provider, cfg config.StabilityCon
 				score = 0
 			}
 		}
-		status := core.StatusPass
+		status := types.StatusPass
 		if errRate > 0.01 || drift > 0.5 {
-			status = core.StatusFail
+			status = types.StatusFail
 		}
-		return core.CheckResult{Status: status, Score: score,
+		return types.CheckResult{Status: status, Score: score,
 			Detail: fmt.Sprintf("错误率 %.1f%%，延迟漂移 %+.1f%%", errRate*100, drift*100),
 			Metrics: map[string]any{
 				"requests":    cfg.SoakRequests,
@@ -232,8 +232,8 @@ func checkSoak(ctx context.Context, p provider.Provider, cfg config.StabilityCon
 }
 
 // checkAdversarial 空输入/超长输入/乱码输入应被优雅处理（正常应答或干净的 4xx）。
-func checkAdversarial(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("adversarial_inputs", 1, func() core.CheckResult {
+func checkAdversarial(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("adversarial_inputs", 1, func() types.CheckResult {
 		inputs := []struct {
 			name    string
 			content string
@@ -261,11 +261,11 @@ func checkAdversarial(ctx context.Context, p provider.Provider) core.CheckResult
 			details = append(details, fmt.Sprintf("%s 未优雅处理: %v", in.name, err))
 		}
 		score := float64(handled) / float64(len(inputs))
-		status := core.StatusPass
+		status := types.StatusPass
 		if score < 1 {
-			status = core.StatusFail
+			status = types.StatusFail
 		}
-		return core.CheckResult{Status: status, Score: score, Detail: strings.Join(details, "; "),
+		return types.CheckResult{Status: status, Score: score, Detail: strings.Join(details, "; "),
 			Metrics: map[string]any{"handled": handled, "total": len(inputs)}}
 	})
 }

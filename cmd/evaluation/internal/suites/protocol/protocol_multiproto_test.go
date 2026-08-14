@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 // --- Anthropic L2 mock：支持 prompt 诱导 JSON 与 tool_use ---
@@ -62,7 +62,7 @@ func TestAnthropicJSONModePromptInduced(t *testing.T) {
 	p := provider.NewAnthropic(srv.URL, "k", "claude-test-1", 5*time.Second)
 
 	r := checkJSONMode(t.Context(), p)
-	if r.Status != core.StatusPass || r.Score != 1 {
+	if r.Status != types.StatusPass || r.Score != 1 {
 		t.Fatalf("Anthropic prompt 诱导 JSON 应通过: status=%s score=%v detail=%s",
 			r.Status, r.Score, r.Detail)
 	}
@@ -77,7 +77,7 @@ func TestAnthropicToolCallingForced(t *testing.T) {
 	p := provider.NewAnthropic(srv.URL, "k", "claude-test-1", 5*time.Second)
 
 	r := checkToolCalling(t.Context(), p)
-	if r.Status != core.StatusPass || r.Score != 1 {
+	if r.Status != types.StatusPass || r.Score != 1 {
 		t.Fatalf("Anthropic tool_calling 应通过: status=%s score=%v detail=%s",
 			r.Status, r.Score, r.Detail)
 	}
@@ -126,7 +126,7 @@ func TestGeminiJSONModeNative(t *testing.T) {
 	p := provider.NewGemini(srv.URL, "k", "gemini-test-1", 5*time.Second)
 
 	r := checkJSONMode(t.Context(), p)
-	if r.Status != core.StatusPass || r.Score != 1 {
+	if r.Status != types.StatusPass || r.Score != 1 {
 		t.Fatalf("Gemini 原生 JSON mode 应通过: status=%s score=%v detail=%s",
 			r.Status, r.Score, r.Detail)
 	}
@@ -138,7 +138,7 @@ func TestGeminiToolCallingForced(t *testing.T) {
 	p := provider.NewGemini(srv.URL, "k", "gemini-test-1", 5*time.Second)
 
 	r := checkToolCalling(t.Context(), p)
-	if r.Status != core.StatusPass || r.Score != 1 {
+	if r.Status != types.StatusPass || r.Score != 1 {
 		t.Fatalf("Gemini tool_calling 应通过: status=%s score=%v detail=%s",
 			r.Status, r.Score, r.Detail)
 	}

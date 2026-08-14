@@ -93,7 +93,7 @@ func scoreExactMatch(spec *Spec, out string) Verdict {
 
 func scoreContains(spec *Spec, out string) Verdict {
 	lower := fold(out)
-	missing := []string{}
+	var missing []string
 	for _, kw := range spec.Keywords {
 		if !strings.Contains(lower, fold(kw)) {
 			missing = append(missing, kw)
@@ -174,7 +174,7 @@ func scoreJSONSchema(spec *Spec, out string) Verdict {
 	if !ok {
 		return Verdict{Score: 0, Reason: "JSON 顶层不是对象"}
 	}
-	missing := []string{}
+	var missing []string
 	for _, f := range spec.Fields {
 		if _, exists := m[f]; !exists {
 			missing = append(missing, f)
@@ -207,7 +207,7 @@ func scoreKeyword(spec *Spec, out string) Verdict {
 	if total == 0 {
 		return Verdict{Score: 0, Reason: "keyword 打分器需要 keywords 或 forbidden"}
 	}
-	bad := []string{}
+	var bad []string
 	for _, kw := range spec.Keywords {
 		if !strings.Contains(lower, fold(kw)) {
 			bad = append(bad, "缺少:"+kw)

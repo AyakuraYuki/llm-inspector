@@ -11,19 +11,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 // Run 执行 L6 全部检查。目标 provider 未实现 RawCaller 时整层跳过。
-func Run(ctx context.Context, p provider.Provider) core.LayerResult {
+func Run(ctx context.Context, p provider.Provider) types.LayerResult {
 	start := time.Now()
-	layer := core.LayerResult{ID: "L6", Name: "参数边界与健壮性", Enabled: true}
+	layer := types.LayerResult{ID: "L6", Name: "参数边界与健壮性", Enabled: true}
 
 	raw, ok := p.(provider.RawCaller)
 	if !ok {
-		layer.Checks = append(layer.Checks, core.CheckResult{
-			Name: "raw_capability", Status: core.StatusSkip,
+		layer.Checks = append(layer.Checks, types.CheckResult{
+			Name: "raw_capability", Status: types.StatusSkip,
 			Detail: "provider 未实现 RawCaller，无法发送裸请求",
 		})
 		layer.DurationMS = float64(time.Since(start).Microseconds()) / 1000
@@ -44,7 +44,7 @@ func Run(ctx context.Context, p provider.Provider) core.LayerResult {
 	return layer
 }
 
-func timed(name string, weight float64, fn func() core.CheckResult) core.CheckResult {
+func timed(name string, weight float64, fn func() types.CheckResult) types.CheckResult {
 	start := time.Now()
 	r := fn()
 	r.Name = name
@@ -102,7 +102,7 @@ type probe struct {
 // 应拒绝的探针：4xx 满分；5xx 半分；2xx 得 0 且整项 fail。
 // 应接受的探针（合法值 sanity）：2xx 满分；否则得 0 且整项 fail——
 // 服务连合法值都拒绝时，"拒绝了非法值"不构成任何证据。
-func runProbes(ctx context.Context, raw provider.RawCaller, probes []probe) core.CheckResult {
+func runProbes(ctx context.Context, raw provider.RawCaller, probes []probe) types.CheckResult {
 	var points, total float64
 	var details []string
 	metrics := map[string]any{}
@@ -143,12 +143,12 @@ func runProbes(ctx context.Context, raw provider.RawCaller, probes []probe) core
 	if total > 0 {
 		score = points / total
 	}
-	status := core.StatusPass
+	status := types.StatusPass
 	if failed {
-		status = core.StatusFail
+		status = types.StatusFail
 	}
 	metrics["score_detail"] = fmt.Sprintf("%.1f/%.0f", points, total)
-	return core.CheckResult{Status: status, Score: score,
+	return types.CheckResult{Status: status, Score: score,
 		Detail: strings.Join(details, "; "), Metrics: metrics}
 }
 
@@ -161,8 +161,8 @@ func withParam(p provider.Provider, key, geminiKey string, v any) map[string]any
 
 // checkMessagesBoundary 验证 messages 数组的元素与空值边界：
 // 空数组、非法 role、null content 均应被拒绝。
-func checkMessagesBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) core.CheckResult {
-	return timed("messages_boundary", 2, func() core.CheckResult {
+func checkMessagesBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) types.CheckResult {
+	return timed("messages_boundary", 2, func() types.CheckResult {
 		probes := []probe{
 			{name: "valid_minimal", payload: basePayload(p), expectReject: false},
 		}
@@ -200,8 +200,8 @@ func checkMessagesBoundary(ctx context.Context, p provider.Provider, raw provide
 }
 
 // checkTopPBoundary 验证 top_p 的范围与类型边界：[0,1] 内合法，越界与类型错误应被拒绝。
-func checkTopPBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) core.CheckResult {
-	return timed("top_p_boundary", 1, func() core.CheckResult {
+func checkTopPBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) types.CheckResult {
+	return timed("top_p_boundary", 1, func() types.CheckResult {
 		return runProbes(ctx, raw, []probe{
 			{name: "valid_0.5", payload: withParam(p, "top_p", "topP", 0.5), expectReject: false},
 			{name: "over_range_1.5", payload: withParam(p, "top_p", "topP", 1.5), expectReject: true},
@@ -212,10 +212,10 @@ func checkTopPBoundary(ctx context.Context, p provider.Provider, raw provider.Ra
 }
 
 // checkFrequencyPenaltyBoundary 验证 frequency_penalty 的 [-2,2] 边界（openai 专属参数）。
-func checkFrequencyPenaltyBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) core.CheckResult {
-	return timed("frequency_penalty_boundary", 1, func() core.CheckResult {
+func checkFrequencyPenaltyBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) types.CheckResult {
+	return timed("frequency_penalty_boundary", 1, func() types.CheckResult {
 		if p.Protocol() != "openai" {
-			return core.CheckResult{Status: core.StatusSkip, Detail: "协议无 frequency_penalty 参数"}
+			return types.CheckResult{Status: types.StatusSkip, Detail: "协议无 frequency_penalty 参数"}
 		}
 		return runProbes(ctx, raw, []probe{
 			{name: "valid_2", payload: withParam(p, "frequency_penalty", "", 2), expectReject: false},
@@ -229,10 +229,10 @@ func checkFrequencyPenaltyBoundary(ctx context.Context, p provider.Provider, raw
 
 // checkPresencePenaltyBoundary 验证 presence_penalty 的 [-2,2] 边界，
 // 并覆盖与 frequency_penalty 的叠加场景（openai 专属参数）。
-func checkPresencePenaltyBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) core.CheckResult {
-	return timed("presence_penalty_boundary", 1, func() core.CheckResult {
+func checkPresencePenaltyBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) types.CheckResult {
+	return timed("presence_penalty_boundary", 1, func() types.CheckResult {
 		if p.Protocol() != "openai" {
-			return core.CheckResult{Status: core.StatusSkip, Detail: "协议无 presence_penalty 参数"}
+			return types.CheckResult{Status: types.StatusSkip, Detail: "协议无 presence_penalty 参数"}
 		}
 		combined := withParam(p, "presence_penalty", "", 1.5)
 		combined["frequency_penalty"] = 1.5
@@ -247,8 +247,8 @@ func checkPresencePenaltyBoundary(ctx context.Context, p provider.Provider, raw 
 
 // checkTemperatureBoundary 验证 temperature 的范围与类型边界。
 // openai/gemini 合法上限 2，anthropic 为 1；越界值与类型错误应被拒绝。
-func checkTemperatureBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) core.CheckResult {
-	return timed("temperature_boundary", 1, func() core.CheckResult {
+func checkTemperatureBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) types.CheckResult {
+	return timed("temperature_boundary", 1, func() types.CheckResult {
 		over := 3.0 // openai/gemini 的越界探针
 		if p.Protocol() == "anthropic" {
 			over = 1.5
@@ -265,8 +265,8 @@ func checkTemperatureBoundary(ctx context.Context, p provider.Provider, raw prov
 // checkMaxTokensBoundary 验证 max_tokens 的边界值：0、负数、极大值、类型错误。
 // 0 与极大值的处理各实现差异较大：显式拒绝（4xx）满分；
 // 静默容忍（200）对极大值记半分并注明（属容错而非缺陷），对 0 判非标准。
-func checkMaxTokensBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) core.CheckResult {
-	return timed("max_tokens_boundary", 1, func() core.CheckResult {
+func checkMaxTokensBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) types.CheckResult {
+	return timed("max_tokens_boundary", 1, func() types.CheckResult {
 		key, gkey := "max_tokens", "maxOutputTokens"
 		var points, total float64
 		var details []string
@@ -340,22 +340,22 @@ func checkMaxTokensBoundary(ctx context.Context, p provider.Provider, raw provid
 		}
 
 		score := points / total
-		status := core.StatusPass
+		status := types.StatusPass
 		if failed {
-			status = core.StatusFail
+			status = types.StatusFail
 		}
 		metrics["score_detail"] = fmt.Sprintf("%.1f/%.0f", points, total)
-		return core.CheckResult{Status: status, Score: score,
+		return types.CheckResult{Status: status, Score: score,
 			Detail: strings.Join(details, "; "), Metrics: metrics}
 	})
 }
 
 // checkMaxCompletionTokensCompat 验证 openai 的 max_completion_tokens 兼容字段
 // 被接受且与 max_tokens 同语义（限制生效）。服务返回 400 记 unsupported。
-func checkMaxCompletionTokensCompat(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("max_completion_tokens_compat", 1, func() core.CheckResult {
+func checkMaxCompletionTokensCompat(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("max_completion_tokens_compat", 1, func() types.CheckResult {
 		if p.Protocol() != "openai" {
-			return core.CheckResult{Status: core.StatusSkip, Detail: "openai 专属兼容字段"}
+			return types.CheckResult{Status: types.StatusSkip, Detail: "openai 专属兼容字段"}
 		}
 		const limit = 16
 		resp, err := p.Chat(ctx, &provider.Request{
@@ -364,13 +364,13 @@ func checkMaxCompletionTokensCompat(ctx context.Context, p provider.Provider) co
 		})
 		if err != nil {
 			if provider.StatusCode(err) == 400 {
-				return core.CheckResult{Status: core.StatusUnsupported,
+				return types.CheckResult{Status: types.StatusUnsupported,
 					Detail: "服务不支持 max_completion_tokens"}
 			}
-			return core.CheckResult{Status: core.StatusFail, Detail: "请求失败: " + err.Error()}
+			return types.CheckResult{Status: types.StatusFail, Detail: "请求失败: " + err.Error()}
 		}
 		if resp.FinishReason == "length" {
-			return core.CheckResult{Status: core.StatusPass, Score: 1,
+			return types.CheckResult{Status: types.StatusPass, Score: 1,
 				Detail: "finish_reason=length，max_completion_tokens 生效"}
 		}
 		used := resp.CompletionTokens
@@ -378,10 +378,10 @@ func checkMaxCompletionTokensCompat(ctx context.Context, p provider.Provider) co
 			used = int64(float64(len([]rune(resp.Content))) / 1.5)
 		}
 		if used <= int64(limit) {
-			return core.CheckResult{Status: core.StatusPass, Score: 1,
+			return types.CheckResult{Status: types.StatusPass, Score: 1,
 				Detail: fmt.Sprintf("输出约 %d tokens，未超限", used)}
 		}
-		return core.CheckResult{Status: core.StatusFail,
+		return types.CheckResult{Status: types.StatusFail,
 			Detail: fmt.Sprintf("max_completion_tokens=%d 未生效：输出 %d tokens", limit, used)}
 	})
 }
@@ -389,8 +389,8 @@ func checkMaxCompletionTokensCompat(ctx context.Context, p provider.Provider) co
 // checkAuthBoundary 验证鉴权边界：未携带凭据与畸形凭据都应被拒绝。
 // 标准码：openai/anthropic 401（403 也接受）；gemini 缺 key 常见 401/403，
 // 畸形 key 为 400（API_KEY_INVALID），均视为标准。
-func checkAuthBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) core.CheckResult {
-	return timed("auth_boundary", 2, func() core.CheckResult {
+func checkAuthBoundary(ctx context.Context, p provider.Provider, raw provider.RawCaller) types.CheckResult {
+	return timed("auth_boundary", 2, func() types.CheckResult {
 		fullCodes := map[int]bool{401: true, 403: true}
 		expect := "401/403"
 		if p.Protocol() == "gemini" {
@@ -430,12 +430,12 @@ func checkAuthBoundary(ctx context.Context, p provider.Provider, raw provider.Ra
 		}
 
 		score := points / total
-		status := core.StatusPass
+		status := types.StatusPass
 		if failed {
-			status = core.StatusFail
+			status = types.StatusFail
 		}
 		metrics["score_detail"] = fmt.Sprintf("%.1f/%.0f", points, total)
-		return core.CheckResult{Status: status, Score: score,
+		return types.CheckResult{Status: status, Score: score,
 			Detail: strings.Join(details, "; "), Metrics: metrics}
 	})
 }

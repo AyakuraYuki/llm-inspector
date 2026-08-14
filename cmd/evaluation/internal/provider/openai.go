@@ -15,6 +15,11 @@ import (
 	"github.com/openai/openai-go/shared"
 )
 
+var (
+	_ Provider  = (*openaiProvider)(nil)
+	_ RawCaller = (*openaiProvider)(nil)
+)
+
 type openaiProvider struct {
 	client  openai.Client
 	baseURL string
@@ -269,8 +274,6 @@ func (p *openaiProvider) RawChat(ctx context.Context, req *RawRequest) (*RawResu
 	}
 	return rawPost(ctx, p.hc, p.baseURL+"/chat/completions", headers, req.Payload)
 }
-
-var _ RawCaller = (*openaiProvider)(nil)
 
 func msSince(t time.Time) float64 {
 	return float64(time.Since(t).Microseconds()) / 1000.0

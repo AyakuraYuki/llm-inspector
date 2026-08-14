@@ -10,34 +10,34 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 // Console 向 w 打印终端汇总。
-func Console(w io.Writer, r *core.Report) {
-	fmt.Fprintf(w, "\n评测目标: %s  模型: %s\n", r.Target.BaseURL, r.Target.Model)
-	fmt.Fprintf(w, "开始时间: %s\n\n", r.StartedAt)
+func Console(w io.Writer, r *types.Report) {
+	_, _ = fmt.Fprintf(w, "\n评测目标: %s  模型: %s\n", r.Target.BaseURL, r.Target.Model)
+	_, _ = fmt.Fprintf(w, "开始时间: %s\n\n", r.StartedAt)
 	for _, l := range r.Layers {
 		switch {
 		case !l.Enabled:
-			fmt.Fprintf(w, "  %s %-12s  [未启用]\n", l.ID, l.Name)
+			_, _ = fmt.Fprintf(w, "  %s %-12s  [未启用]\n", l.ID, l.Name)
 		case l.Skipped:
-			fmt.Fprintf(w, "  %s %-12s  [跳过] %s\n", l.ID, l.Name, l.Reason)
+			_, _ = fmt.Fprintf(w, "  %s %-12s  [跳过] %s\n", l.ID, l.Name, l.Reason)
 		default:
 			status := "PASS"
 			if !l.Passed {
 				status = "FAIL"
 			}
-			fmt.Fprintf(w, "  %s %-12s  得分 %5.1f%%  [%s]  (%d 项检查, %.1fs)\n",
+			_, _ = fmt.Fprintf(w, "  %s %-12s  得分 %5.1f%%  [%s]  (%d 项检查, %.1fs)\n",
 				l.ID, l.Name, l.Score*100, status, len(l.Checks), l.DurationMS/1000)
 			for _, c := range l.Checks {
-				if c.Status == core.StatusFail {
-					fmt.Fprintf(w, "      ✗ %s: %s\n", c.Name, oneLine(c.Detail, 100))
+				if c.Status == types.StatusFail {
+					_, _ = fmt.Fprintf(w, "      ✗ %s: %s\n", c.Name, oneLine(c.Detail, 100))
 				}
 			}
 		}
 	}
-	fmt.Fprintf(w, "\n总评: %.1f%%  结论: %s\n", r.TotalScore*100, VerdictLabel(r.Verdict))
+	_, _ = fmt.Fprintf(w, "\n总评: %.1f%%  结论: %s\n", r.TotalScore*100, VerdictLabel(r.Verdict))
 }
 
 // VerdictLabel 返回结论的可读标注。
@@ -57,7 +57,7 @@ func VerdictLabel(v string) string {
 }
 
 // Save 按 formats 将报告写入 dir/<timestamp>/ 下，返回输出目录。
-func Save(dir string, formats []string, r *core.Report) (string, error) {
+func Save(dir string, formats []string, r *types.Report) (string, error) {
 	outDir := filepath.Join(dir, time.Now().Format("20060102-150405"))
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", fmt.Errorf("创建报告目录失败: %w", err)
@@ -79,7 +79,7 @@ func Save(dir string, formats []string, r *core.Report) (string, error) {
 	return outDir, nil
 }
 
-func writeJSON(path string, r *core.Report) error {
+func writeJSON(path string, r *types.Report) error {
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return err
@@ -87,32 +87,29 @@ func writeJSON(path string, r *core.Report) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func writeMarkdown(path string, r *core.Report) error {
+func writeMarkdown(path string, r *types.Report) error {
 	var sb strings.Builder
 	sb.WriteString("# LLM 可用性评测报告\n\n")
-	fmt.Fprintf(&sb, "- 评测目标: `%s`\n- 模型: `%s`\n- 开始时间: %s\n- 结束时间: %s\n",
-		r.Target.BaseURL, r.Target.Model, r.StartedAt, r.FinishedAt)
-	fmt.Fprintf(&sb, "- **总评: %.1f%%  结论: %s**\n\n", r.TotalScore*100, VerdictLabel(r.Verdict))
+	_, _ = fmt.Fprintf(&sb, "- 评测目标: `%s`\n- 模型: `%s`\n- 开始时间: %s\n- 结束时间: %s\n", r.Target.BaseURL, r.Target.Model, r.StartedAt, r.FinishedAt)
+	_, _ = fmt.Fprintf(&sb, "- **总评: %.1f%%  结论: %s**\n\n", r.TotalScore*100, VerdictLabel(r.Verdict))
 
 	sb.WriteString("## 分层汇总\n\n")
 	sb.WriteString("| 层 | 名称 | 得分 | 状态 | 检查项数 | 耗时 |\n")
 	sb.WriteString("|---|---|---|---|---|---|\n")
 	for _, l := range r.Layers {
 		status := layerStatus(&l)
-		fmt.Fprintf(&sb, "| %s | %s | %.1f%% | %s | %d | %.1fs |\n",
-			l.ID, l.Name, l.Score*100, status, len(l.Checks), l.DurationMS/1000)
+		_, _ = fmt.Fprintf(&sb, "| %s | %s | %.1f%% | %s | %d | %.1fs |\n", l.ID, l.Name, l.Score*100, status, len(l.Checks), l.DurationMS/1000)
 	}
 
 	for _, l := range r.Layers {
 		if !l.Enabled || l.Skipped || len(l.Checks) == 0 {
 			continue
 		}
-		fmt.Fprintf(&sb, "\n## %s %s\n\n", l.ID, l.Name)
+		_, _ = fmt.Fprintf(&sb, "\n## %s %s\n\n", l.ID, l.Name)
 		sb.WriteString("| 检查项 | 状态 | 得分 | 说明 |\n")
 		sb.WriteString("|---|---|---|---|\n")
 		for _, c := range l.Checks {
-			fmt.Fprintf(&sb, "| %s | %s | %.2f | %s |\n",
-				c.Name, checkStatus(c.Status), c.Score, escapeMD(oneLine(c.Detail, 200)))
+			_, _ = fmt.Fprintf(&sb, "| %s | %s | %.2f | %s |\n", c.Name, checkStatus(c.Status), c.Score, escapeMD(oneLine(c.Detail, 200)))
 		}
 		if hasMetrics(&l) {
 			sb.WriteString("\n<details><summary>原始指标</summary>\n\n```json\n")
@@ -123,7 +120,7 @@ func writeMarkdown(path string, r *core.Report) error {
 	return os.WriteFile(path, []byte(sb.String()), 0o644)
 }
 
-func layerStatus(l *core.LayerResult) string {
+func layerStatus(l *types.LayerResult) string {
 	switch {
 	case !l.Enabled:
 		return "未启用"
@@ -136,20 +133,20 @@ func layerStatus(l *core.LayerResult) string {
 	}
 }
 
-func checkStatus(s core.Status) string {
+func checkStatus(s types.Status) string {
 	switch s {
-	case core.StatusPass:
+	case types.StatusPass:
 		return "✅"
-	case core.StatusFail:
+	case types.StatusFail:
 		return "❌"
-	case core.StatusUnsupported:
+	case types.StatusUnsupported:
 		return "➖ 不支持"
 	default:
 		return "⏭️ 跳过"
 	}
 }
 
-func hasMetrics(l *core.LayerResult) bool {
+func hasMetrics(l *types.LayerResult) bool {
 	for _, c := range l.Checks {
 		if len(c.Metrics) > 0 {
 			return true
@@ -158,7 +155,7 @@ func hasMetrics(l *core.LayerResult) bool {
 	return false
 }
 
-func metricsJSON(l *core.LayerResult) string {
+func metricsJSON(l *types.LayerResult) string {
 	m := map[string]any{}
 	for _, c := range l.Checks {
 		if len(c.Metrics) > 0 {

@@ -13,6 +13,11 @@ import (
 
 const anthropicVersion = "2023-06-01"
 
+var (
+	_ Provider  = (*anthropicClient)(nil)
+	_ RawCaller = (*anthropicClient)(nil)
+)
+
 type anthropicClient struct {
 	baseURL string
 	apiKey  string
@@ -190,7 +195,7 @@ func (c *anthropicClient) Chat(ctx context.Context, req *Request) (*Result, erro
 		return nil, err
 	}
 	var resp anthropicResponse
-	if err := doJSON(ctx, c.hc, http.MethodPost, c.baseURL+"/messages", c.headers(), body, &resp); err != nil {
+	if err = doJSON(ctx, c.hc, http.MethodPost, c.baseURL+"/messages", c.headers(), body, &resp); err != nil {
 		return nil, err
 	}
 	r := &Result{LatencyMS: msSince(start)}
@@ -322,8 +327,3 @@ func (c *anthropicClient) RawChat(ctx context.Context, req *RawRequest) (*RawRes
 	}
 	return rawPost(ctx, c.hc, c.baseURL+"/messages", headers, req.Payload)
 }
-
-var (
-	_ Provider  = (*anthropicClient)(nil)
-	_ RawCaller = (*anthropicClient)(nil)
-)

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 // --- Anthropic mock（L1 最小集） ---
@@ -144,12 +144,12 @@ func TestRunGeminiL1BadModel503(t *testing.T) {
 		t.Fatal("缺少 error_semantics")
 	}
 	// 坏 key 400（满分）+ 坏模型 503（半分）= 0.75，pass
-	if sem.Status != core.StatusPass || sem.Score != 0.75 {
+	if sem.Status != types.StatusPass || sem.Score != 0.75 {
 		t.Fatalf("503 应半分通过, status=%s score=%v", sem.Status, sem.Score)
 	}
 }
 
-func findCheck(l *core.LayerResult, name string) *core.CheckResult {
+func findCheck(l *types.LayerResult, name string) *types.CheckResult {
 	for i := range l.Checks {
 		if l.Checks[i].Name == name {
 			return &l.Checks[i]

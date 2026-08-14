@@ -14,7 +14,49 @@ import (
 	"strings"
 
 	"github.com/openai/openai-go"
+
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 )
+
+// Provider 是模型服务客户端的统一接口。
+type Provider interface {
+	// Chat 发起非流式调用。
+	Chat(ctx context.Context, req *Request) (*Result, error)
+	// Stream 发起流式调用，记录 TTFT 并聚合全部增量内容。
+	Stream(ctx context.Context, req *Request) (*Result, error)
+	// Models 返回模型 id 列表。
+	Models(ctx context.Context) ([]string, error)
+	// Model 返回默认模型名。
+	Model() string
+	// Protocol 返回协议标识：openai / anthropic / gemini。
+	Protocol() string
+}
+
+// New 按 target.protocol 构造对应协议的客户端（缺省 openai）。
+func New(t config.TargetConfig) (Provider, error) {
+	timeout, err := t.TimeoutDuration()
+	if err != nil {
+		return nil, err
+	}
+	switch t.ProtocolNormalized() {
+	case "openai":
+		return NewOpenAI(t.BaseURL, t.APIKey, t.Model, timeout), nil
+	case "anthropic":
+		return NewAnthropic(t.BaseURL, t.APIKey, t.Model, timeout), nil
+	case "gemini":
+		return NewGemini(t.BaseURL, t.APIKey, t.Model, timeout), nil
+	default:
+		return nil, fmt.Errorf("未知协议 %q", t.Protocol)
+	}
+}
+
+// RawCaller 支持向 chat 端点发送裸请求的可选能力。
+// 三个内建 provider 均实现；边界测试（L6）通过类型断言获取。
+type RawCaller interface {
+	// RawChat 向本协议的 chat 端点 POST payload，返回原始状态码与响应体。
+	// 网络层错误返回 error；HTTP 层任何状态码（含 4xx/5xx）都不算 error。
+	RawChat(ctx context.Context, req *RawRequest) (*RawResult, error)
+}
 
 // Message 是一条对话消息。
 // role=assistant 时可携带 ToolCalls（工具调用回传场景）；
@@ -55,37 +97,24 @@ type JSONSchemaSpec struct {
 // Request 是一次聊天补全请求（协议无关）。
 // 指针类型的字段为 nil 时表示"不传该参数"，由服务端使用默认值。
 type Request struct {
-	Model       string // 为空则用 Provider 默认模型
-	Messages    []Message
-	MaxTokens   int // <=0 时省略（Anthropic 协议要求必填，缺省补 1024）
-	Temperature *float64
-	TopP        *float64
-	// FrequencyPenalty / PresencePenalty 仅 openai 有对应参数，其他协议忽略。
-	FrequencyPenalty *float64
-	PresencePenalty  *float64
-	// Stop 停止词。openai=stop / anthropic=stop_sequences / gemini=stopSequences。
-	Stop []string
-	// Seed 采样种子。openai/gemini 支持，anthropic 忽略。
-	Seed *int64
-	// MaxCompletionTokens 是 openai 的 max_completion_tokens 兼容字段（仅 openai）。
-	MaxCompletionTokens int
-	JSONMode            bool
-	// JSONSchema 非 nil 时优先于 JSONMode。
-	JSONSchema *JSONSchemaSpec
-	Tools      []Tool
-	// ToolsChoice 工具调用策略：""/"auto" 由模型决定；"any"/"required" 强制调用一次。
-	ToolsChoice string
-	// ParallelToolCalls 是 openai 的并行工具调用开关（仅 openai 显式传参，
-	// anthropic/gemini 原生支持多工具调用块，无需参数）。
-	ParallelToolCalls *bool
-	// ReasoningEffort 思考力度（openai 的 reasoning_effort，仅 openai）。
-	ReasoningEffort string
-	// StreamIncludeUsage 控制 openai 的 stream_options.include_usage；
-	// nil 时默认 true（保持既有行为）。anthropic/gemini 的流式恒携带 usage。
-	StreamIncludeUsage *bool
-	// ExtraParams 厂商特有参数（如 thinking、do_sample、clear_thinking）。
-	// openai/anthropic 合并到请求体顶层；gemini 合并到 generationConfig。
-	ExtraParams map[string]any
+	Model               string          // 为空则用 Provider 默认模型
+	Messages            []Message       // 消息
+	MaxTokens           int             // <=0 时省略（Anthropic 协议要求必填，缺省补 1024）
+	Temperature         *float64        // 温度
+	TopP                *float64        // top_p 核采样，[0.0, 1.0] 之间
+	FrequencyPenalty    *float64        // FrequencyPenalty 频率惩罚，仅 openai 支持
+	PresencePenalty     *float64        // PresencePenalty 存在惩罚，仅 openai 支持
+	Stop                []string        // Stop 停止词。openai=stop / anthropic=stop_sequences / gemini=stopSequences。
+	Seed                *int64          // Seed 采样种子。openai/gemini 支持，anthropic 忽略。
+	MaxCompletionTokens int             // MaxCompletionTokens 是 openai 的 max_completion_tokens 兼容字段（仅 openai）。
+	JSONMode            bool            // 开启 JSON 输出
+	JSONSchema          *JSONSchemaSpec // JSONSchema 非 nil 时优先于 JSONMode。
+	Tools               []Tool          // 工具调用
+	ToolsChoice         string          // ToolsChoice 工具调用策略：""/"auto" 由模型决定；"any"/"required" 强制调用一次。
+	ParallelToolCalls   *bool           // ParallelToolCalls 是 openai 的并行工具调用开关（仅 openai 显式传参，anthropic/gemini 原生支持多工具调用块，无需参数）。
+	ReasoningEffort     string          // ReasoningEffort 思考力度（openai 的 reasoning_effort，仅 openai）。
+	StreamIncludeUsage  *bool           // StreamIncludeUsage 控制 openai 的 stream_options.include_usage；nil 时默认 true（保持既有行为）。anthropic/gemini 的流式恒携带 usage。
+	ExtraParams         map[string]any  // ExtraParams 厂商特有参数（如 thinking、do_sample、clear_thinking）。openai/anthropic 合并到请求体顶层；gemini 合并到 generationConfig。
 }
 
 // Result 是一次调用的统一结果，流式与非流式共用。
@@ -104,20 +133,6 @@ type Result struct {
 	LatencyMS        float64
 }
 
-// Provider 是模型服务客户端的统一接口。
-type Provider interface {
-	// Chat 发起非流式调用。
-	Chat(ctx context.Context, req *Request) (*Result, error)
-	// Stream 发起流式调用，记录 TTFT 并聚合全部增量内容。
-	Stream(ctx context.Context, req *Request) (*Result, error)
-	// Models 返回模型 id 列表。
-	Models(ctx context.Context) ([]string, error)
-	// Model 返回默认模型名。
-	Model() string
-	// Protocol 返回协议标识：openai / anthropic / gemini。
-	Protocol() string
-}
-
 // RawRequest 是一次"裸请求"：payload 原样序列化为请求体，
 // 绕过 SDK 的强类型校验，用于发送非法/畸形负载做边界测试。
 type RawRequest struct {
@@ -133,14 +148,6 @@ type RawRequest struct {
 type RawResult struct {
 	StatusCode int
 	Body       string // 截断至 maxErrorBody
-}
-
-// RawCaller 支持向 chat 端点发送裸请求的可选能力。
-// 三个内建 provider 均实现；边界测试（L6）通过类型断言获取。
-type RawCaller interface {
-	// RawChat 向本协议的 chat 端点 POST payload，返回原始状态码与响应体。
-	// 网络层错误返回 error；HTTP 层任何状态码（含 4xx/5xx）都不算 error。
-	RawChat(ctx context.Context, req *RawRequest) (*RawResult, error)
 }
 
 // HTTPError 是手写客户端的 HTTP 层错误。
@@ -198,7 +205,7 @@ func doJSON(ctx context.Context, hc *http.Client, method, url string, headers ma
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 		return &HTTPError{StatusCode: resp.StatusCode, Body: string(b)}
@@ -228,7 +235,7 @@ func rawPost(ctx context.Context, hc *http.Client, url string, headers map[strin
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	return &RawResult{StatusCode: resp.StatusCode, Body: string(b)}, nil
 }
@@ -252,7 +259,7 @@ func ssePost(ctx context.Context, hc *http.Client, url string, headers map[strin
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 		return &HTTPError{StatusCode: resp.StatusCode, Body: string(b)}

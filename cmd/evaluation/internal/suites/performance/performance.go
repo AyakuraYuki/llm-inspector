@@ -11,17 +11,17 @@ import (
 	"unicode/utf8"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/stats"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 const benchPrompt = "请用三句话介绍机器学习的基本概念。"
 
 // Run 执行 L5 全部检查。
-func Run(ctx context.Context, p provider.Provider, cfg config.PerformanceConfig) core.LayerResult {
+func Run(ctx context.Context, p provider.Provider, cfg config.PerformanceConfig) types.LayerResult {
 	start := time.Now()
-	layer := core.LayerResult{ID: "L5", Name: "模型性能", Enabled: true}
+	layer := types.LayerResult{ID: "L5", Name: "模型性能", Enabled: true}
 
 	latency, throughput := measureLatencyThroughput(ctx, p, cfg)
 	layer.Checks = append(layer.Checks,
@@ -35,7 +35,7 @@ func Run(ctx context.Context, p provider.Provider, cfg config.PerformanceConfig)
 }
 
 // measureLatencyThroughput 用同一批流式请求产出延迟与吞吐两个检查项。
-func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg config.PerformanceConfig) (core.CheckResult, core.CheckResult) {
+func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg config.PerformanceConfig) (types.CheckResult, types.CheckResult) {
 	start := time.Now()
 	ttfts := make([]float64, 0, cfg.Runs)
 	totals := make([]float64, 0, cfg.Runs)
@@ -67,7 +67,7 @@ func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg conf
 	}
 	durationMS := float64(time.Since(start).Microseconds()) / 1000
 
-	latency := core.CheckResult{
+	latency := types.CheckResult{
 		Name: "latency_ttft", Weight: 2, DurationMS: durationMS,
 		Metrics: map[string]any{
 			"runs":            cfg.Runs,
@@ -81,7 +81,7 @@ func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg conf
 		},
 	}
 	if len(ttfts) == 0 {
-		latency.Status = core.StatusFail
+		latency.Status = types.StatusFail
 		latency.Score = 0
 		latency.Detail = "全部流式请求失败"
 	} else {
@@ -94,7 +94,7 @@ func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg conf
 		}
 	}
 
-	throughput := core.CheckResult{
+	throughput := types.CheckResult{
 		Name: "throughput", Weight: 2,
 		Metrics: map[string]any{
 			"tps_mean":    stats.Mean(tpsList),
@@ -103,7 +103,7 @@ func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg conf
 		},
 	}
 	if len(tpsList) == 0 {
-		throughput.Status = core.StatusFail
+		throughput.Status = types.StatusFail
 		throughput.Score = 0
 		throughput.Detail = "无有效吞吐样本"
 	} else {
@@ -116,7 +116,7 @@ func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg conf
 }
 
 // checkConcurrency 在不同并发度下测量聚合吞吐、错误率与 P99 延迟。
-func checkConcurrency(ctx context.Context, p provider.Provider, cfg config.PerformanceConfig) core.CheckResult {
+func checkConcurrency(ctx context.Context, p provider.Provider, cfg config.PerformanceConfig) types.CheckResult {
 	start := time.Now()
 	type level struct {
 		concurrency int
@@ -198,7 +198,7 @@ func checkConcurrency(ctx context.Context, p provider.Provider, cfg config.Perfo
 	score := scoreSum / float64(len(levels))
 
 	metrics := map[string]any{"levels": details}
-	return core.CheckResult{
+	return types.CheckResult{
 		Name: "concurrency_scaling", Weight: 2, Status: statusOfThreshold(score, 0.7), Score: score,
 		Detail:     strings.Join(details, "; "),
 		Metrics:    metrics,
@@ -207,7 +207,7 @@ func checkConcurrency(ctx context.Context, p provider.Provider, cfg config.Perfo
 }
 
 // checkContextProbe 以指数梯度探测实际可用上下文长度，并记录各档延迟。
-func checkContextProbe(ctx context.Context, p provider.Provider, cfg config.PerformanceConfig) core.CheckResult {
+func checkContextProbe(ctx context.Context, p provider.Provider, cfg config.PerformanceConfig) types.CheckResult {
 	var (
 		start         = time.Now()
 		sizes         []int
@@ -252,7 +252,7 @@ func checkContextProbe(ctx context.Context, p provider.Provider, cfg config.Perf
 		summary = fmt.Sprintf("探测通过 %d/%d 档，实测上限约 %d tokens。%s",
 			passed, len(sizes), maxOK, stopReason)
 	}
-	return core.CheckResult{
+	return types.CheckResult{
 		Name: "context_probe", Weight: 1, Status: statusOfThreshold(score, 0.5), Score: score,
 		Detail: summary,
 		Metrics: map[string]any{
@@ -283,18 +283,18 @@ func estimateTokens(resp *provider.Result) int64 {
 	return n
 }
 
-func statusOf(score float64) core.Status {
+func statusOf(score float64) types.Status {
 	if score >= 0.99 {
-		return core.StatusPass
+		return types.StatusPass
 	}
-	return core.StatusFail
+	return types.StatusFail
 }
 
-func statusOfThreshold(score, threshold float64) core.Status {
+func statusOfThreshold(score, threshold float64) types.Status {
 	if score >= threshold {
-		return core.StatusPass
+		return types.StatusPass
 	}
-	return core.StatusFail
+	return types.StatusFail
 }
 
 func minSlice(s []float64) float64 {

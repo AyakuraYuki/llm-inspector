@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+var (
+	_ Provider  = (*geminiClient)(nil)
+	_ RawCaller = (*geminiClient)(nil)
+)
+
 type geminiClient struct {
 	baseURL string
 	apiKey  string
@@ -325,8 +330,3 @@ func (c *geminiClient) RawChat(ctx context.Context, req *RawRequest) (*RawResult
 	}
 	return rawPost(ctx, c.hc, c.baseURL+"/models/"+c.model+":generateContent", headers, req.Payload)
 }
-
-var (
-	_ Provider  = (*geminiClient)(nil)
-	_ RawCaller = (*geminiClient)(nil)
-)

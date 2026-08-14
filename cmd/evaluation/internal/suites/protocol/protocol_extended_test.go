@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 func TestCheckStopSequence(t *testing.T) {
@@ -21,7 +21,7 @@ func TestCheckStopSequence(t *testing.T) {
 			return &provider.Result{Content: out, FinishReason: "stop"}, nil
 		}}
 		r := checkStopSequence(t.Context(), p)
-		if r.Status != core.StatusPass || r.Score != 1 {
+		if r.Status != types.StatusPass || r.Score != 1 {
 			t.Errorf("status=%s score=%v detail=%s, want pass/1", r.Status, r.Score, r.Detail)
 		}
 	})
@@ -31,7 +31,7 @@ func TestCheckStopSequence(t *testing.T) {
 			return &provider.Result{Content: "苹果 香蕉 樱桃 西瓜", FinishReason: "stop"}, nil
 		}}
 		r := checkStopSequence(t.Context(), p)
-		if r.Status != core.StatusFail {
+		if r.Status != types.StatusFail {
 			t.Errorf("stop 未生效应判 fail, status=%s score=%v", r.Status, r.Score)
 		}
 	})
@@ -47,7 +47,7 @@ func TestCheckStreamUsageOptions(t *testing.T) {
 			return r, nil
 		}}
 		r := checkStreamUsageOptions(t.Context(), p)
-		if r.Status != core.StatusPass || r.Score != 1 {
+		if r.Status != types.StatusPass || r.Score != 1 {
 			t.Errorf("status=%s score=%v detail=%s, want pass/1", r.Status, r.Score, r.Detail)
 		}
 	})
@@ -57,7 +57,7 @@ func TestCheckStreamUsageOptions(t *testing.T) {
 			return &provider.Result{Content: "你好", FinishReason: "stop", PromptTokens: 10, CompletionTokens: 5}, nil
 		}}
 		r := checkStreamUsageOptions(t.Context(), p)
-		if r.Status != core.StatusFail {
+		if r.Status != types.StatusFail {
 			t.Errorf("false 态仍带 usage 应判 fail, status=%s detail=%s", r.Status, r.Detail)
 		}
 	})
@@ -79,7 +79,7 @@ func TestCheckThinkingControl(t *testing.T) {
 			return r, nil
 		}}
 		r := checkThinkingControl(t.Context(), p, constraints)
-		if r.Status != core.StatusPass || r.Score != 1 {
+		if r.Status != types.StatusPass || r.Score != 1 {
 			t.Errorf("status=%s score=%v detail=%s, want pass/1", r.Status, r.Score, r.Detail)
 		}
 	})
@@ -103,7 +103,7 @@ func TestCheckThinkingControl(t *testing.T) {
 			return &provider.Result{Content: "ok"}, nil
 		}}
 		r := checkThinkingControl(t.Context(), p, &ModelConstraints{})
-		if r.Status != core.StatusSkip {
+		if r.Status != types.StatusSkip {
 			t.Errorf("未配置应 skip, status=%s", r.Status)
 		}
 	})
@@ -121,7 +121,7 @@ func TestCheckToolResultRoundTrip(t *testing.T) {
 				ToolCalls: []provider.ToolCall{{ID: "call_1", Name: "get_weather", Arguments: `{"city":"Paris"}`}}}, nil
 		}}
 		r := checkToolResultRoundTrip(t.Context(), p)
-		if r.Status != core.StatusPass || r.Score != 1 {
+		if r.Status != types.StatusPass || r.Score != 1 {
 			t.Errorf("status=%s score=%v detail=%s, want pass/1", r.Status, r.Score, r.Detail)
 		}
 	})
@@ -131,7 +131,7 @@ func TestCheckToolResultRoundTrip(t *testing.T) {
 			return &provider.Result{Content: "我不知道", FinishReason: "stop"}, nil
 		}}
 		r := checkToolResultRoundTrip(t.Context(), p)
-		if r.Status != core.StatusFail {
+		if r.Status != types.StatusFail {
 			t.Errorf("无工具调用应判 fail, status=%s", r.Status)
 		}
 	})
@@ -145,7 +145,7 @@ func TestCheckDefaultMaxTokens(t *testing.T) {
 			return &provider.Result{Content: "很长的小说…", FinishReason: "length", CompletionTokens: 32768}, nil
 		}}
 		r := checkDefaultMaxTokens(t.Context(), p, constraints)
-		if r.Status != core.StatusPass || r.Score != 1 {
+		if r.Status != types.StatusPass || r.Score != 1 {
 			t.Errorf("status=%s score=%v detail=%s, want pass/1", r.Status, r.Score, r.Detail)
 		}
 	})
@@ -155,7 +155,7 @@ func TestCheckDefaultMaxTokens(t *testing.T) {
 			return &provider.Result{Content: "更长的小说…", FinishReason: "stop", CompletionTokens: 50000}, nil
 		}}
 		r := checkDefaultMaxTokens(t.Context(), p, constraints)
-		if r.Status != core.StatusFail {
+		if r.Status != types.StatusFail {
 			t.Errorf("默认值未生效应判 fail, status=%s detail=%s", r.Status, r.Detail)
 		}
 	})
@@ -165,7 +165,7 @@ func TestCheckDefaultMaxTokens(t *testing.T) {
 			return &provider.Result{Content: "短篇。", FinishReason: "stop", CompletionTokens: 800}, nil
 		}}
 		r := checkDefaultMaxTokens(t.Context(), p, constraints)
-		if r.Status != core.StatusPass {
+		if r.Status != types.StatusPass {
 			t.Errorf("自然结束不应判 fail, status=%s detail=%s", r.Status, r.Detail)
 		}
 	})

@@ -8,14 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 // Run 执行 L1 全部检查。badKeyClient 使用错误 API key 构造，用于验证鉴权错误语义。
-func Run(ctx context.Context, p provider.Provider, badKeyClient provider.Provider) core.LayerResult {
+func Run(ctx context.Context, p provider.Provider, badKeyClient provider.Provider) types.LayerResult {
 	start := time.Now()
-	layer := core.LayerResult{ID: "L1", Name: "API 可用性", Enabled: true}
+	layer := types.LayerResult{ID: "L1", Name: "API 可用性", Enabled: true}
 
 	layer.Checks = append(layer.Checks,
 		checkModelsEndpoint(ctx, p),
@@ -27,7 +27,7 @@ func Run(ctx context.Context, p provider.Provider, badKeyClient provider.Provide
 	return layer
 }
 
-func timed(name string, weight float64, fn func() core.CheckResult) core.CheckResult {
+func timed(name string, weight float64, fn func() types.CheckResult) types.CheckResult {
 	start := time.Now()
 	r := fn()
 	r.Name = name
@@ -37,34 +37,34 @@ func timed(name string, weight float64, fn func() core.CheckResult) core.CheckRe
 }
 
 // checkModelsEndpoint 验证 GET /models 可达且鉴权通过。
-func checkModelsEndpoint(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("models_endpoint", 2, func() core.CheckResult {
+func checkModelsEndpoint(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("models_endpoint", 2, func() types.CheckResult {
 		models, err := p.Models(ctx)
 		if err != nil {
-			return core.CheckResult{Status: core.StatusFail, Score: 0,
+			return types.CheckResult{Status: types.StatusFail, Score: 0,
 				Detail: "GET /models 失败: " + err.Error()}
 		}
-		return core.CheckResult{Status: core.StatusPass, Score: 1,
+		return types.CheckResult{Status: types.StatusPass, Score: 1,
 			Metrics: map[string]any{"model_count": len(models)}}
 	})
 }
 
 // checkMinimalChat 验证最小 chat completion 往返。
-func checkMinimalChat(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("minimal_chat", 2, func() core.CheckResult {
+func checkMinimalChat(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("minimal_chat", 2, func() types.CheckResult {
 		resp, err := p.Chat(ctx, &provider.Request{
 			Messages:  []provider.Message{{Role: "user", Content: "ping"}},
 			MaxTokens: 1,
 		})
 		if err != nil {
-			return core.CheckResult{Status: core.StatusFail, Score: 0,
+			return types.CheckResult{Status: types.StatusFail, Score: 0,
 				Detail: "chat completion 失败: " + err.Error()}
 		}
 		if resp.FinishReason == "" {
-			return core.CheckResult{Status: core.StatusFail, Score: 0,
+			return types.CheckResult{Status: types.StatusFail, Score: 0,
 				Detail: "响应缺少 finish_reason"}
 		}
-		return core.CheckResult{Status: core.StatusPass, Score: 1,
+		return types.CheckResult{Status: types.StatusPass, Score: 1,
 			Metrics: map[string]any{"finish_reason": resp.FinishReason}}
 	})
 }
@@ -74,8 +74,8 @@ func checkMinimalChat(ctx context.Context, p provider.Provider) core.CheckResult
 // detail 中记录偏差；未拒绝（2xx 等）得 0 分且判 fail。
 // 坏 key 的满分码按协议区分：openai/anthropic 为 401/403；
 // gemini 对无效 API key 返回 400（API_KEY_INVALID），同样视为标准拒绝。
-func checkErrorSemantics(ctx context.Context, badKey, p provider.Provider) core.CheckResult {
-	return timed("error_semantics", 1, func() core.CheckResult {
+func checkErrorSemantics(ctx context.Context, badKey, p provider.Provider) types.CheckResult {
+	return timed("error_semantics", 1, func() types.CheckResult {
 		var points, total float64
 		var details []string
 		metrics := map[string]any{}
@@ -134,32 +134,32 @@ func checkErrorSemantics(ctx context.Context, badKey, p provider.Provider) core.
 		}
 
 		score := points / total
-		status := core.StatusPass
+		status := types.StatusPass
 		if !rejectedAll {
-			status = core.StatusFail
+			status = types.StatusFail
 		}
 		metrics["score_detail"] = fmt.Sprintf("%.1f/%.0f", points, total)
-		return core.CheckResult{Status: status, Score: score,
+		return types.CheckResult{Status: status, Score: score,
 			Detail:  strings.Join(details, "; "),
 			Metrics: metrics}
 	})
 }
 
 // checkModelListed 验证目标模型出现在 /models 列表中（若端点可用且非空）。
-func checkModelListed(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("model_listed", 1, func() core.CheckResult {
+func checkModelListed(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("model_listed", 1, func() types.CheckResult {
 		models, err := p.Models(ctx)
 		if err != nil || len(models) == 0 {
-			return core.CheckResult{Status: core.StatusSkip, Score: 0,
+			return types.CheckResult{Status: types.StatusSkip, Score: 0,
 				Detail: "/models 不可用或返回空列表"}
 		}
 		for _, m := range models {
 			if m == p.Model() {
-				return core.CheckResult{Status: core.StatusPass, Score: 1,
+				return types.CheckResult{Status: types.StatusPass, Score: 1,
 					Detail: "模型在 /models 列表中"}
 			}
 		}
-		return core.CheckResult{Status: core.StatusFail, Score: 0,
+		return types.CheckResult{Status: types.StatusFail, Score: 0,
 			Detail:  "目标模型不在 /models 列表中",
 			Metrics: map[string]any{"available": models}}
 	})

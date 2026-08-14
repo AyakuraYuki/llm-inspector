@@ -15,9 +15,9 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/datasets"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/scorer"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
@@ -58,21 +58,21 @@ func LoadCases(path string) ([]Case, error) {
 }
 
 // Run 执行 L3。judge 为 nil 时 judge 类型题记 skip。
-func Run(ctx context.Context, p provider.Provider, cfg config.CapabilityConfig, judge *scorer.Judge) core.LayerResult {
+func Run(ctx context.Context, p provider.Provider, cfg config.CapabilityConfig, judge *scorer.Judge) types.LayerResult {
 	start := time.Now()
-	layer := core.LayerResult{ID: "L3", Name: "模型能力", Enabled: true}
+	layer := types.LayerResult{ID: "L3", Name: "模型能力", Enabled: true}
 
 	cases, err := LoadCases(cfg.Dataset)
 	if err != nil {
-		layer.Checks = append(layer.Checks, core.CheckResult{
-			Name: "dataset_load", Status: core.StatusFail, Score: 0, Weight: 1, Detail: err.Error(),
+		layer.Checks = append(layer.Checks, types.CheckResult{
+			Name: "dataset_load", Status: types.StatusFail, Score: 0, Weight: 1, Detail: err.Error(),
 		})
 		return layer
 	}
 
 	fmt.Printf("  加载 %d 道题目，并发度 %d\n", len(cases), cfg.Concurrency)
 
-	checks := make([]core.CheckResult, len(cases))
+	checks := make([]types.CheckResult, len(cases))
 	var completed int32 // 原子计数器
 	var wg sync.WaitGroup
 	jobs := make(chan int)
@@ -99,9 +99,9 @@ func Run(ctx context.Context, p provider.Provider, cfg config.CapabilityConfig, 
 }
 
 // runCase 执行单题并打分。使用命名返回值，defer 才能在 return 之后写入耗时。
-func runCase(ctx context.Context, p provider.Provider, judge *scorer.Judge, c *Case) (result core.CheckResult) {
+func runCase(ctx context.Context, p provider.Provider, judge *scorer.Judge, c *Case) (result types.CheckResult) {
 	start := time.Now()
-	result = core.CheckResult{Name: c.ID, Weight: 1}
+	result = types.CheckResult{Name: c.ID, Weight: 1}
 	defer func() {
 		result.DurationMS = float64(time.Since(start).Microseconds()) / 1000
 	}()
@@ -109,7 +109,7 @@ func runCase(ctx context.Context, p provider.Provider, judge *scorer.Judge, c *C
 	metrics := map[string]any{"category": c.Category, "scorer": c.Scorer.Type}
 
 	if c.Scorer.Type == "judge" && judge == nil {
-		result.Status = core.StatusSkip
+		result.Status = types.StatusSkip
 		result.Detail = "未配置裁判模型，跳过 judge 打分题"
 		result.Metrics = metrics
 		return result
@@ -120,7 +120,7 @@ func runCase(ctx context.Context, p provider.Provider, judge *scorer.Judge, c *C
 		MaxTokens: 1024,
 	})
 	if err != nil {
-		result.Status = core.StatusFail
+		result.Status = types.StatusFail
 		result.Score = 0
 		result.Detail = "调用失败: " + err.Error()
 		result.Metrics = metrics
@@ -137,7 +137,7 @@ func runCase(ctx context.Context, p provider.Provider, judge *scorer.Judge, c *C
 		verdict, err = scorer.Score(&c.Scorer, resp.Content)
 	}
 	if err != nil {
-		result.Status = core.StatusFail
+		result.Status = types.StatusFail
 		result.Score = 0
 		result.Detail = "打分失败: " + err.Error()
 		result.Metrics = metrics
@@ -149,12 +149,12 @@ func runCase(ctx context.Context, p provider.Provider, judge *scorer.Judge, c *C
 	result.Score = verdict.Score
 	result.Detail = verdict.Reason
 	if verdict.Score >= 0.99 {
-		result.Status = core.StatusPass
+		result.Status = types.StatusPass
 	} else if verdict.Score > 0 {
 		// 部分得分仍记 fail，但保留分值计入层均分
-		result.Status = core.StatusFail
+		result.Status = types.StatusFail
 	} else {
-		result.Status = core.StatusFail
+		result.Status = types.StatusFail
 	}
 	return result
 }

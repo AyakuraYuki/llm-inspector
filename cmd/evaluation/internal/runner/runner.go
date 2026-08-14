@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/scorer"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/availability"
@@ -16,11 +15,12 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/performance"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/protocol"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/stability"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
 // Version 工具版本号。
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 // LayerInfo 描述一层及其检查项，供 list 命令展示。
 type LayerInfo struct {
@@ -49,7 +49,7 @@ func Catalog() []LayerInfo {
 }
 
 // Run 执行完整评测流水线。
-func Run(ctx context.Context, cfg *config.Config) (*core.Report, error) {
+func Run(ctx context.Context, cfg *config.Config) (*types.Report, error) {
 	p, err := provider.New(cfg.Target)
 	if err != nil {
 		return nil, err
@@ -69,18 +69,18 @@ func Run(ctx context.Context, cfg *config.Config) (*core.Report, error) {
 	}
 
 	startedAt := time.Now()
-	r := &core.Report{
+	r := &types.Report{
 		Tool:      cfg.Tool,
 		Version:   Version,
-		Target:    core.TargetInfo{BaseURL: cfg.Target.BaseURL, Model: cfg.Target.Model, Protocol: p.Protocol()},
+		Target:    types.TargetInfo{BaseURL: cfg.Target.BaseURL, Model: cfg.Target.Model, Protocol: p.Protocol()},
 		StartedAt: startedAt.Format(time.RFC3339),
 	}
 
 	skipRest := false
 	skipReason := ""
 
-	runLayer := func(id string, enabled *bool, fn func() core.LayerResult) {
-		lr := core.LayerResult{ID: id}
+	runLayer := func(id string, enabled *bool, fn func() types.LayerResult) {
+		lr := types.LayerResult{ID: id}
 		if !util.Enabled(enabled) {
 			if info, ok := catalogInfo(id); ok {
 				lr.Name = info.Name
@@ -121,10 +121,10 @@ func Run(ctx context.Context, cfg *config.Config) (*core.Report, error) {
 		}
 	}
 
-	runLayer("L1", cfg.Layers.Availability.Enabled, func() core.LayerResult {
+	runLayer("L1", cfg.Layers.Availability.Enabled, func() types.LayerResult {
 		return availability.Run(ctx, p, badKey)
 	})
-	runLayer("L2", cfg.Layers.Protocol.Enabled, func() core.LayerResult {
+	runLayer("L2", cfg.Layers.Protocol.Enabled, func() types.LayerResult {
 		constraints := &protocol.ModelConstraints{
 			DisableTemperatureZeroCheck: cfg.Target.Constraints.DisableTemperatureZeroCheck,
 			SpecifiedTemperature:        cfg.Target.Constraints.SpecifiedTemperature,
@@ -135,16 +135,16 @@ func Run(ctx context.Context, cfg *config.Config) (*core.Report, error) {
 		}
 		return protocol.Run(ctx, p, constraints)
 	})
-	runLayer("L3", cfg.Layers.Capability.Enabled, func() core.LayerResult {
+	runLayer("L3", cfg.Layers.Capability.Enabled, func() types.LayerResult {
 		return capability.Run(ctx, p, cfg.Layers.Capability, judge)
 	})
-	runLayer("L4", cfg.Layers.Stability.Enabled, func() core.LayerResult {
+	runLayer("L4", cfg.Layers.Stability.Enabled, func() types.LayerResult {
 		return stability.Run(ctx, p, cfg.Layers.Stability)
 	})
-	runLayer("L5", cfg.Layers.Performance.Enabled, func() core.LayerResult {
+	runLayer("L5", cfg.Layers.Performance.Enabled, func() types.LayerResult {
 		return performance.Run(ctx, p, cfg.Layers.Performance)
 	})
-	runLayer("L6", cfg.Layers.Boundary.Enabled, func() core.LayerResult {
+	runLayer("L6", cfg.Layers.Boundary.Enabled, func() types.LayerResult {
 		return boundary.Run(ctx, p)
 	})
 
@@ -157,7 +157,7 @@ func Run(ctx context.Context, cfg *config.Config) (*core.Report, error) {
 			continue
 		}
 		executed++
-		w := core.LayerWeight[l.ID]
+		w := types.LayerWeight[l.ID]
 		if w <= 0 {
 			w = 1
 		}

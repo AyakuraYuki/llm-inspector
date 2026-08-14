@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 // newSemanticsServer 构造一个用于错误语义测试的服务：
@@ -46,11 +46,11 @@ func TestCheckErrorSemantics(t *testing.T) {
 		name           string
 		badModelStatus int
 		wantScore      float64
-		wantStatus     core.Status
+		wantStatus     types.Status
 	}{
-		{"标准 404 满分", 404, 1, core.StatusPass},
-		{"网关 503 半分但通过", 503, 0.75, core.StatusPass},
-		{"2xx 未拒绝判 fail", 200, 0.5, core.StatusFail},
+		{"标准 404 满分", 404, 1, types.StatusPass},
+		{"网关 503 半分但通过", 503, 0.75, types.StatusPass},
+		{"2xx 未拒绝判 fail", 200, 0.5, types.StatusFail},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

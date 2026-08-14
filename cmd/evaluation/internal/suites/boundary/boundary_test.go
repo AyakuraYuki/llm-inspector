@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 // fakeRawProvider 用可编程的规则模拟服务端对裸请求的判定。
@@ -102,10 +102,10 @@ func TestRunStrictService(t *testing.T) {
 		t.Fatal("应产出检查项")
 	}
 	for _, c := range layer.Checks {
-		if c.Status == core.StatusSkip || c.Status == core.StatusUnsupported {
+		if c.Status == types.StatusSkip || c.Status == types.StatusUnsupported {
 			continue
 		}
-		if c.Status != core.StatusPass || c.Score < 1 {
+		if c.Status != types.StatusPass || c.Score < 1 {
 			t.Errorf("%s: status=%s score=%v detail=%s", c.Name, c.Status, c.Score, c.Detail)
 		}
 	}
@@ -122,7 +122,7 @@ func TestRunLenientServiceFails(t *testing.T) {
 	layer := Run(t.Context(), p)
 	var failed int
 	for _, c := range layer.Checks {
-		if c.Status == core.StatusFail {
+		if c.Status == types.StatusFail {
 			failed++
 		}
 	}
@@ -130,7 +130,7 @@ func TestRunLenientServiceFails(t *testing.T) {
 		t.Errorf("全盘接受的服务应有多项 fail, 实际 %d 项", failed)
 	}
 	auth := findCheck(&layer, "auth_boundary")
-	if auth == nil || auth.Status != core.StatusFail {
+	if auth == nil || auth.Status != types.StatusFail {
 		t.Errorf("鉴权不校验应判 fail, got %+v", auth)
 	}
 }
@@ -148,7 +148,7 @@ func TestRun5xxHalfScore(t *testing.T) {
 	}}
 	layer := Run(t.Context(), p)
 	c := findCheck(&layer, "top_p_boundary")
-	if c == nil || c.Status != core.StatusPass {
+	if c == nil || c.Status != types.StatusPass {
 		t.Fatalf("5xx 拒绝不应判 fail, got %+v", c)
 	}
 	if c.Score >= 1 || c.Score <= 0 {
@@ -161,7 +161,7 @@ func TestRun5xxHalfScore(t *testing.T) {
 
 func TestRunSkipsWithoutRawCaller(t *testing.T) {
 	layer := Run(t.Context(), &plainProvider{})
-	if len(layer.Checks) != 1 || layer.Checks[0].Status != core.StatusSkip {
+	if len(layer.Checks) != 1 || layer.Checks[0].Status != types.StatusSkip {
 		t.Fatalf("无 RawCaller 时应整层 skip, got %+v", layer.Checks)
 	}
 }
@@ -172,7 +172,7 @@ func TestProtocolSkips(t *testing.T) {
 	layer := Run(t.Context(), p)
 	for _, name := range []string{"frequency_penalty_boundary", "presence_penalty_boundary", "max_completion_tokens_compat"} {
 		c := findCheck(&layer, name)
-		if c == nil || c.Status != core.StatusSkip {
+		if c == nil || c.Status != types.StatusSkip {
 			t.Errorf("anthropic 的 %s 应 skip, got %+v", name, c)
 		}
 	}
@@ -191,7 +191,7 @@ func (p *plainProvider) Models(context.Context) ([]string, error) { return nil, 
 func (p *plainProvider) Model() string                            { return "m" }
 func (p *plainProvider) Protocol() string                         { return "openai" }
 
-func findCheck(l *core.LayerResult, name string) *core.CheckResult {
+func findCheck(l *types.LayerResult, name string) *types.CheckResult {
 	for i := range l.Checks {
 		if l.Checks[i].Name == name {
 			return &l.Checks[i]

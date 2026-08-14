@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 type fakeProvider struct {
@@ -31,7 +31,7 @@ func TestContextProbeAllPassedWording(t *testing.T) {
 		return &provider.Result{Content: "OK", FinishReason: "stop"}, nil
 	}}
 	r := checkContextProbe(t.Context(), p, config.PerformanceConfig{MaxProbeTokens: 4096})
-	if r.Status != core.StatusPass || r.Score != 1 {
+	if r.Status != types.StatusPass || r.Score != 1 {
 		t.Fatalf("全档通过应满分, status=%s score=%v", r.Status, r.Score)
 	}
 	if !strings.Contains(r.Detail, "至少") || !strings.Contains(r.Detail, "真实上限可能更高") {

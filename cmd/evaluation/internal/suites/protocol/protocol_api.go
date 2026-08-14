@@ -8,15 +8,15 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
 // checkStopSequence 验证 stop 停止词生效：输出应在停止词处截断且不含停止词本身。
 // 覆盖单个停止词与多个停止词两种场景。服务返回 400 记 unsupported。
-func checkStopSequence(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("stop_sequence", 1, func() core.CheckResult {
+func checkStopSequence(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("stop_sequence", 1, func() types.CheckResult {
 		const prompt = "一字不差地复述这句话：苹果 香蕉 樱桃 西瓜"
 		var points, total float64
 		var details []string
@@ -38,7 +38,7 @@ func checkStopSequence(ctx context.Context, p provider.Provider) core.CheckResul
 			})
 			if err != nil {
 				if provider.StatusCode(err) == 400 {
-					return core.CheckResult{Status: core.StatusUnsupported,
+					return types.CheckResult{Status: types.StatusUnsupported,
 						Detail: "服务不支持 stop 参数"}
 				}
 				details = append(details, fmt.Sprintf("%s: 请求失败 %v", tc.name, err))
@@ -59,11 +59,11 @@ func checkStopSequence(ctx context.Context, p provider.Provider) core.CheckResul
 		}
 
 		score := points / total
-		status := core.StatusPass
+		status := types.StatusPass
 		if score == 0 {
-			status = core.StatusFail
+			status = types.StatusFail
 		}
-		return core.CheckResult{Status: status, Score: score,
+		return types.CheckResult{Status: status, Score: score,
 			Detail: strings.Join(details, "; "), Metrics: metrics}
 	})
 }
@@ -72,10 +72,10 @@ func checkStopSequence(ctx context.Context, p provider.Provider) core.CheckResul
 // 相同 seed + temperature 下多次采样，一致率作为得分；
 // 与 temperature=0 检查同理，服务侧数值抖动不判 fail，参数被接受即通过。
 // seed 为 openai/gemini 参数，anthropic 记 skip。
-func checkSeedConsistency(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("seed_consistency", 1, func() core.CheckResult {
+func checkSeedConsistency(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("seed_consistency", 1, func() types.CheckResult {
 		if p.Protocol() == "anthropic" {
-			return core.CheckResult{Status: core.StatusSkip, Detail: "协议无 seed 参数"}
+			return types.CheckResult{Status: types.StatusSkip, Detail: "协议无 seed 参数"}
 		}
 		const samples = 3
 		seed := int64(42)
@@ -93,7 +93,7 @@ func checkSeedConsistency(ctx context.Context, p provider.Provider) core.CheckRe
 			resp, err := p.Chat(ctx, req)
 			if err != nil {
 				if provider.StatusCode(err) == 400 {
-					return core.CheckResult{Status: core.StatusUnsupported,
+					return types.CheckResult{Status: types.StatusUnsupported,
 						Detail: "服务不支持 seed 参数"}
 				}
 				errs = append(errs, err.Error())
@@ -125,7 +125,7 @@ func checkSeedConsistency(ctx context.Context, p provider.Provider) core.CheckRe
 			detail = fmt.Sprintf("相同 seed=%d 下 %d 次采样出现 %d 种输出（seed 复现性为尽力而为语义，不判 fail）",
 				seed, total, len(answers))
 		}
-		return core.CheckResult{Status: core.StatusPass, Score: agreement, Detail: detail,
+		return types.CheckResult{Status: types.StatusPass, Score: agreement, Detail: detail,
 			Metrics: map[string]any{"samples": total, "distinct": len(answers), "agreement": agreement}}
 	})
 }
@@ -133,8 +133,8 @@ func checkSeedConsistency(ctx context.Context, p provider.Provider) core.CheckRe
 // checkStreamUsageOptions 验证 stream_options.include_usage 的两态行为：
 // true 时流末尾返回 usage；false 时流中不返回 usage。
 // anthropic/gemini 的流式协议恒携带 usage，仅验证 usage 确实存在。
-func checkStreamUsageOptions(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("stream_usage_options", 1, func() core.CheckResult {
+func checkStreamUsageOptions(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("stream_usage_options", 1, func() types.CheckResult {
 		req := func(include bool) *provider.Request {
 			v := include
 			return &provider.Request{
@@ -150,7 +150,7 @@ func checkStreamUsageOptions(ctx context.Context, p provider.Provider) core.Chec
 				return failScore("流式请求失败: " + err.Error())
 			}
 			if resp.PromptTokens > 0 || resp.CompletionTokens > 0 {
-				return core.CheckResult{Status: core.StatusPass, Score: 1,
+				return types.CheckResult{Status: types.StatusPass, Score: 1,
 					Detail: "协议流式恒携带 usage（无 include_usage 开关）"}
 			}
 			return failScore("流式响应未携带 usage")
@@ -189,19 +189,19 @@ func checkStreamUsageOptions(ctx context.Context, p provider.Provider) core.Chec
 		}
 
 		score := points / total
-		status := core.StatusPass
+		status := types.StatusPass
 		if score < 1 {
-			status = core.StatusFail
+			status = types.StatusFail
 		}
-		return core.CheckResult{Status: status, Score: score,
+		return types.CheckResult{Status: status, Score: score,
 			Detail: strings.Join(details, "; "), Metrics: metrics}
 	})
 }
 
 // checkEncodingUnicode 验证编码与特殊字符处理：
 // 中/日文与 emoji 正确往返、含控制字符（\n \t）与 BOM 的输入不报错、输出为合法 UTF-8。
-func checkEncodingUnicode(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("encoding_unicode", 1, func() core.CheckResult {
+func checkEncodingUnicode(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("encoding_unicode", 1, func() types.CheckResult {
 		var points, total float64
 		var details []string
 		metrics := map[string]any{}
@@ -252,11 +252,11 @@ func checkEncodingUnicode(ctx context.Context, p provider.Provider) core.CheckRe
 		}
 
 		score := points / total
-		status := core.StatusPass
+		status := types.StatusPass
 		if score < 0.5 {
-			status = core.StatusFail
+			status = types.StatusFail
 		}
-		return core.CheckResult{Status: status, Score: score,
+		return types.CheckResult{Status: status, Score: score,
 			Detail: strings.Join(details, "; "), Metrics: metrics}
 	})
 }

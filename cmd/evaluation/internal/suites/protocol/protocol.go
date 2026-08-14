@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
 )
 
@@ -23,9 +23,9 @@ import (
 const contentBudget = 1024
 
 // Run 执行 L2 全部检查。
-func Run(ctx context.Context, p provider.Provider, constraints *ModelConstraints) core.LayerResult {
+func Run(ctx context.Context, p provider.Provider, constraints *ModelConstraints) types.LayerResult {
 	start := time.Now()
-	layer := core.LayerResult{ID: "L2", Name: "协议兼容性", Enabled: true}
+	layer := types.LayerResult{ID: "L2", Name: "协议兼容性", Enabled: true}
 
 	layer.Checks = append(layer.Checks,
 		checkStreaming(ctx, p),
@@ -69,7 +69,7 @@ type ModelConstraints struct {
 	DefaultMaxTokens int
 }
 
-func timed(name string, weight float64, fn func() core.CheckResult) core.CheckResult {
+func timed(name string, weight float64, fn func() types.CheckResult) types.CheckResult {
 	start := time.Now()
 	r := fn()
 	r.Name = name
@@ -78,14 +78,14 @@ func timed(name string, weight float64, fn func() core.CheckResult) core.CheckRe
 	return r
 }
 
-func failScore(detail string) core.CheckResult {
-	return core.CheckResult{Status: core.StatusFail, Score: 0, Detail: detail}
+func failScore(detail string) types.CheckResult {
+	return types.CheckResult{Status: types.StatusFail, Score: 0, Detail: detail}
 }
 
 // checkStreaming 验证 SSE 流式：能收到增量 chunk、有 finish_reason、记录了 TTFT。
 // 首 token 延迟占总耗时比例过高时在 detail/metrics 中提示（疑似伪流式或思考延迟），不影响得分。
-func checkStreaming(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("streaming_sse", 2, func() core.CheckResult {
+func checkStreaming(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("streaming_sse", 2, func() types.CheckResult {
 		resp, err := p.Stream(ctx, &provider.Request{
 			Messages:  []provider.Message{{Role: "user", Content: "从 1 数到 10，用空格分隔"}},
 			MaxTokens: contentBudget,
@@ -103,10 +103,10 @@ func checkStreaming(ctx context.Context, p provider.Provider) core.CheckResult {
 		if resp.TTFTMS < 0 {
 			problems = append(problems, "未捕获到首 token")
 		}
-		status := core.StatusPass
+		status := types.StatusPass
 		score := 1.0
 		if len(problems) > 0 {
-			status = core.StatusFail
+			status = types.StatusFail
 			score = float64(3-len(problems)) / 3
 		}
 		metrics := map[string]any{
@@ -128,13 +128,13 @@ func checkStreaming(ctx context.Context, p provider.Provider) core.CheckResult {
 				}
 			}
 		}
-		return core.CheckResult{Status: status, Score: score, Detail: detail, Metrics: metrics}
+		return types.CheckResult{Status: status, Score: score, Detail: detail, Metrics: metrics}
 	})
 }
 
 // checkSystemPrompt 验证 system 角色被接受并生效。
-func checkSystemPrompt(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("system_prompt", 1, func() core.CheckResult {
+func checkSystemPrompt(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("system_prompt", 1, func() types.CheckResult {
 		const prefix = "评测前缀"
 		resp, err := p.Chat(ctx, &provider.Request{
 			Messages: []provider.Message{
@@ -147,12 +147,12 @@ func checkSystemPrompt(ctx context.Context, p provider.Provider) core.CheckResul
 			return failScore("带 system 角色的请求失败: " + err.Error())
 		}
 		if strings.Contains(resp.Content, prefix) {
-			return core.CheckResult{Status: core.StatusPass, Score: 1, Detail: "system prompt 生效"}
+			return types.CheckResult{Status: types.StatusPass, Score: 1, Detail: "system prompt 生效"}
 		}
 		if strings.TrimSpace(resp.Content) == "" {
-			return core.CheckResult{Status: core.StatusPass, Score: 0.5, Detail: "system 角色被接受，但输出为空，无法验证前缀是否生效"}
+			return types.CheckResult{Status: types.StatusPass, Score: 0.5, Detail: "system 角色被接受，但输出为空，无法验证前缀是否生效"}
 		}
-		return core.CheckResult{Status: core.StatusPass, Score: 0.5, Detail: "system 角色被接受，但模型未遵循前缀要求（可能是能力问题）"}
+		return types.CheckResult{Status: types.StatusPass, Score: 0.5, Detail: "system 角色被接受，但模型未遵循前缀要求（可能是能力问题）"}
 	})
 }
 
@@ -162,8 +162,8 @@ func checkSystemPrompt(ctx context.Context, p provider.Provider) core.CheckResul
 // usage 缺失时按字符数粗估未超限。
 // 输出明显超限（如限 16 实际产出上千 tokens）说明参数被丢弃，判 fail——
 // 这通常是网关未透传参数的真实缺陷。
-func checkMaxTokens(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("max_tokens", 1, func() core.CheckResult {
+func checkMaxTokens(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("max_tokens", 1, func() types.CheckResult {
 		const limit = 16
 		resp, err := p.Chat(ctx, &provider.Request{
 			Messages:  []provider.Message{{Role: "user", Content: "写一首关于秋天的长诗，越长越好"}},
@@ -173,7 +173,7 @@ func checkMaxTokens(ctx context.Context, p provider.Provider) core.CheckResult {
 			return failScore("请求失败: " + err.Error())
 		}
 		if resp.FinishReason == "length" {
-			return core.CheckResult{Status: core.StatusPass, Score: 1,
+			return types.CheckResult{Status: types.StatusPass, Score: 1,
 				Detail: "finish_reason=length，截断生效"}
 		}
 		// 用 usage 判定；usage 缺失时按 1.5 字符/token 粗估
@@ -188,7 +188,7 @@ func checkMaxTokens(ctx context.Context, p provider.Provider) core.CheckResult {
 			if estimated {
 				detail += "（按字符数估算，usage 缺失）"
 			}
-			return core.CheckResult{Status: core.StatusPass, Score: 1, Detail: detail}
+			return types.CheckResult{Status: types.StatusPass, Score: 1, Detail: detail}
 		}
 		return failScore(fmt.Sprintf("max_tokens=%d 未生效：输出 %d tokens（finish_reason=%q），参数疑似被平台丢弃",
 			limit, used, resp.FinishReason))
@@ -200,12 +200,12 @@ func checkMaxTokens(ctx context.Context, p provider.Provider) core.CheckResult {
 // 注意：GPU 推理在 temp=0 下不保证逐位确定（批处理数值抖动是普遍现实），
 // 因此本检查以"请求成功即参数被接受"为通过标准，一致率仅作为得分与指标呈现。
 // 当模型不支持 temperature=0 时，可通过 constraints.DisableTemperatureZeroCheck 跳过（不计入层均分）。
-func checkTemperatureZero(ctx context.Context, p provider.Provider, constraints *ModelConstraints) core.CheckResult {
-	return timed("temperature_zero", 1, func() core.CheckResult {
+func checkTemperatureZero(ctx context.Context, p provider.Provider, constraints *ModelConstraints) types.CheckResult {
+	return timed("temperature_zero", 1, func() types.CheckResult {
 		// 检查是否禁用此检查
 		if constraints != nil && constraints.DisableTemperatureZeroCheck {
-			return core.CheckResult{
-				Status: core.StatusSkip,
+			return types.CheckResult{
+				Status: types.StatusSkip,
 				Score:  0,
 				Detail: "模型约束已禁用 temperature=0 检查",
 			}
@@ -259,7 +259,7 @@ func checkTemperatureZero(ctx context.Context, p provider.Provider, constraints 
 		if len(errs) > 0 {
 			detail += fmt.Sprintf("；%d 次请求失败", len(errs))
 		}
-		return core.CheckResult{Status: core.StatusPass, Score: agreement, Detail: detail,
+		return types.CheckResult{Status: types.StatusPass, Score: agreement, Detail: detail,
 			Metrics: map[string]any{
 				"samples":     total,
 				"distinct":    len(answers),
@@ -274,11 +274,11 @@ func checkTemperatureZero(ctx context.Context, p provider.Provider, constraints 
 // checkSpecifiedTemperature 验证模型要求的 temperature 值是否被接受并生效（可选检查）。
 // 未配置 SpecifiedTemperature 时跳过（不计入层均分）；配置后采样请求验证
 // 模型在指定温度下的输出行为，得分仅反映一致性，不作为协议缺陷判据。
-func checkSpecifiedTemperature(ctx context.Context, p provider.Provider, constraints *ModelConstraints) core.CheckResult {
-	return timed("temperature_specified", 1, func() core.CheckResult {
+func checkSpecifiedTemperature(ctx context.Context, p provider.Provider, constraints *ModelConstraints) types.CheckResult {
+	return timed("temperature_specified", 1, func() types.CheckResult {
 		if constraints == nil || constraints.SpecifiedTemperature == nil {
-			return core.CheckResult{
-				Status: core.StatusSkip,
+			return types.CheckResult{
+				Status: types.StatusSkip,
 				Score:  0,
 				Detail: "未配置指定 temperature，跳过",
 			}
@@ -332,7 +332,7 @@ func checkSpecifiedTemperature(ctx context.Context, p provider.Provider, constra
 		if len(errs) > 0 {
 			detail += fmt.Sprintf("；%d 次请求失败", len(errs))
 		}
-		return core.CheckResult{Status: core.StatusPass, Score: agreement, Detail: detail,
+		return types.CheckResult{Status: types.StatusPass, Score: agreement, Detail: detail,
 			Metrics: map[string]any{
 				"samples":     total,
 				"distinct":    len(answers),
@@ -347,8 +347,8 @@ func checkSpecifiedTemperature(ctx context.Context, p provider.Provider, constra
 // checkMultiTurn 验证多轮 messages 数组被正确理解。
 // 预算给到 contentBudget：思考型模型会先消耗 completion tokens 做思考，
 // 预算过小时正文为空，会被误判为"多轮能力缺失"。
-func checkMultiTurn(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("multi_turn", 1, func() core.CheckResult {
+func checkMultiTurn(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("multi_turn", 1, func() types.CheckResult {
 		resp, err := p.Chat(ctx, &provider.Request{
 			Messages: []provider.Message{
 				{Role: "user", Content: "记住暗号「蓝色狐狸」，只需回复「好的」。"},
@@ -361,7 +361,7 @@ func checkMultiTurn(ctx context.Context, p provider.Provider) core.CheckResult {
 			return failScore("多轮请求失败: " + err.Error())
 		}
 		if strings.Contains(resp.Content, "蓝色狐狸") {
-			return core.CheckResult{Status: core.StatusPass, Score: 1}
+			return types.CheckResult{Status: types.StatusPass, Score: 1}
 		}
 		if strings.TrimSpace(resp.Content) == "" {
 			return failScore(fmt.Sprintf(
@@ -375,8 +375,8 @@ func checkMultiTurn(ctx context.Context, p provider.Provider) core.CheckResult {
 // checkJSONMode 验证 JSON 输出能力。openai/gemini 用原生 response_format 参数；
 // anthropic 无原生 JSON mode，走 prompt 诱导并在 detail 中注明。
 // 服务返回 400 记 unsupported。
-func checkJSONMode(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("json_mode", 1, func() core.CheckResult {
+func checkJSONMode(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("json_mode", 1, func() types.CheckResult {
 		req := &provider.Request{
 			Messages: []provider.Message{
 				{Role: "user", Content: `输出一个 JSON 对象，包含字段 city（值为 "Paris"）。只输出 JSON，不要输出任何其他文字。`},
@@ -392,7 +392,7 @@ func checkJSONMode(ctx context.Context, p provider.Provider) core.CheckResult {
 		resp, err := p.Chat(ctx, req)
 		if err != nil {
 			if provider.StatusCode(err) == 400 {
-				return core.CheckResult{Status: core.StatusUnsupported, Score: 0,
+				return types.CheckResult{Status: types.StatusUnsupported, Score: 0,
 					Detail: "服务不支持 response_format json_object"}
 			}
 			return failScore("JSON mode 请求失败: " + err.Error())
@@ -403,7 +403,7 @@ func checkJSONMode(ctx context.Context, p provider.Provider) core.CheckResult {
 			if promptInduced {
 				detail = "通过 prompt 诱导实现（Anthropic 无原生 JSON mode 参数）"
 			}
-			return core.CheckResult{Status: core.StatusPass, Score: 1, Detail: detail}
+			return types.CheckResult{Status: types.StatusPass, Score: 1, Detail: detail}
 		}
 		return failScore("JSON 要求下输出不是合法 JSON: " + util.TruncateString(resp.Content, 80))
 	})
@@ -413,8 +413,8 @@ func checkJSONMode(ctx context.Context, p provider.Provider) core.CheckResult {
 // 三协议格式不同（openai tool_calls / anthropic tool_use / gemini functionCall），
 // 由 provider 统一映射为 Result.ToolCalls。请求时强制调用一次（tool_choice=any），
 // 避免"模型自主选择不调用"对协议兼容性判定的干扰。服务不支持记 unsupported。
-func checkToolCalling(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("tool_calling", 1, func() core.CheckResult {
+func checkToolCalling(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("tool_calling", 1, func() types.CheckResult {
 		resp, err := p.Chat(ctx, &provider.Request{
 			Messages: []provider.Message{
 				{Role: "user", Content: "巴黎现在天气怎么样？请使用提供的工具查询。"},
@@ -435,7 +435,7 @@ func checkToolCalling(ctx context.Context, p provider.Provider) core.CheckResult
 		})
 		if err != nil {
 			if provider.StatusCode(err) == 400 {
-				return core.CheckResult{Status: core.StatusUnsupported, Score: 0,
+				return types.CheckResult{Status: types.StatusUnsupported, Score: 0,
 					Detail: "服务不支持 tools 参数"}
 			}
 			return failScore("tool calling 请求失败: " + err.Error())
@@ -447,14 +447,14 @@ func checkToolCalling(ctx context.Context, p provider.Provider) core.CheckResult
 		if tc.Name == "" || !json.Valid([]byte(tc.Arguments)) {
 			return failScore(fmt.Sprintf("工具调用结构非法: name=%q arguments=%q", tc.Name, util.TruncateString(tc.Arguments, 60)))
 		}
-		return core.CheckResult{Status: core.StatusPass, Score: 1,
+		return types.CheckResult{Status: types.StatusPass, Score: 1,
 			Metrics: map[string]any{"tool": tc.Name, "arguments": tc.Arguments}}
 	})
 }
 
 // checkUsageField 验证响应携带 usage 统计。
-func checkUsageField(ctx context.Context, p provider.Provider) core.CheckResult {
-	return timed("usage_field", 1, func() core.CheckResult {
+func checkUsageField(ctx context.Context, p provider.Provider) types.CheckResult {
+	return timed("usage_field", 1, func() types.CheckResult {
 		resp, err := p.Chat(ctx, &provider.Request{
 			Messages:  []provider.Message{{Role: "user", Content: "说「你好」。"}},
 			MaxTokens: 8,
@@ -463,7 +463,7 @@ func checkUsageField(ctx context.Context, p provider.Provider) core.CheckResult 
 			return failScore("请求失败: " + err.Error())
 		}
 		if resp.PromptTokens > 0 && resp.CompletionTokens > 0 {
-			return core.CheckResult{Status: core.StatusPass, Score: 1,
+			return types.CheckResult{Status: types.StatusPass, Score: 1,
 				Metrics: map[string]any{
 					"prompt_tokens":     resp.PromptTokens,
 					"completion_tokens": resp.CompletionTokens,

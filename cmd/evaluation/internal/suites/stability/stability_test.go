@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 type fakeProvider struct {
@@ -51,7 +51,7 @@ func TestSelfConsistencyPunctuationVariants(t *testing.T) {
 		return &provider.Result{Content: ans, FinishReason: "stop"}, nil
 	}}
 	r := checkSelfConsistency(t.Context(), p, config.StabilityConfig{Samples: 5})
-	if r.Status != core.StatusPass || r.Score != 1 {
+	if r.Status != types.StatusPass || r.Score != 1 {
 		t.Errorf("标点差异应视为同一答案, status=%s score=%v detail=%s", r.Status, r.Score, r.Detail)
 	}
 }
@@ -62,7 +62,7 @@ func TestSelfConsistencyAllEmpty(t *testing.T) {
 		return &provider.Result{Content: "", FinishReason: "length"}, nil
 	}}
 	r := checkSelfConsistency(t.Context(), p, config.StabilityConfig{Samples: 3})
-	if r.Status != core.StatusFail {
+	if r.Status != types.StatusFail {
 		t.Errorf("全空输出应判 fail, status=%s", r.Status)
 	}
 	if r.Metrics["empty"].(int) == 0 {
@@ -76,7 +76,7 @@ func TestPromptPerturbationEmptyOutput(t *testing.T) {
 		return &provider.Result{Content: "", FinishReason: "length"}, nil
 	}}
 	r := checkPromptPerturbation(t.Context(), p)
-	if r.Status != core.StatusFail || r.Score != 0 {
+	if r.Status != types.StatusFail || r.Score != 0 {
 		t.Errorf("全空输出仍应判 fail, status=%s score=%v", r.Status, r.Score)
 	}
 	if r.Metrics["empty"].(int) != 3 {

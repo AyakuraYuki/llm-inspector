@@ -54,7 +54,7 @@ func (j *Judge) Score(ctx context.Context, question, answer, rubric string) (Ver
 	prompt := fmt.Sprintf(judgePrompt, rubric, question, answer)
 	resp, err := j.p.Chat(ctx, &provider.Request{
 		Messages:    []provider.Message{{Role: "user", Content: prompt}},
-		MaxTokens:   256,
+		MaxTokens:   1024,
 		Temperature: &zero,
 		JSONMode:    true,
 	})
@@ -63,7 +63,7 @@ func (j *Judge) Score(ctx context.Context, question, answer, rubric string) (Ver
 		if provider.StatusCode(err) == 400 {
 			resp, err = j.p.Chat(ctx, &provider.Request{
 				Messages:    []provider.Message{{Role: "user", Content: prompt}},
-				MaxTokens:   256,
+				MaxTokens:   1024,
 				Temperature: &zero,
 			})
 		}
@@ -72,7 +72,7 @@ func (j *Judge) Score(ctx context.Context, question, answer, rubric string) (Ver
 		}
 	}
 	var jr judgeResponse
-	if err := json.Unmarshal([]byte(stripCodeFence(strings.TrimSpace(resp.Content))), &jr); err != nil {
+	if err = json.Unmarshal([]byte(stripCodeFence(strings.TrimSpace(resp.Content))), &jr); err != nil {
 		return Verdict{}, fmt.Errorf("裁判输出解析失败: %q", util.TruncateString(resp.Content, 120))
 	}
 	score := jr.Score / 10

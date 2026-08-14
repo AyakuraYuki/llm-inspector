@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 // validateGeminiParams 模拟 Gemini 标准实现的参数校验：类型错误与越界返回错误消息。
@@ -315,10 +315,10 @@ thresholds: {min_layer_score: 0.6}
 	}
 	for _, c := range l2.Checks {
 		// 未配置约束的检查项（thinking/reasoning_effort/default_max_tokens 等）跳过不计
-		if c.Status == core.StatusSkip || c.Status == core.StatusUnsupported {
+		if c.Status == types.StatusSkip || c.Status == types.StatusUnsupported {
 			continue
 		}
-		if c.Status != core.StatusPass || c.Score < 1 {
+		if c.Status != types.StatusPass || c.Score < 1 {
 			t.Errorf("L2/%s 应满分通过: status=%s score=%v detail=%s",
 				c.Name, c.Status, c.Score, c.Detail)
 		}

@@ -1,5 +1,5 @@
-// Package core 定义评测框架的核心数据模型：检查项结果、层结果与总报告。
-package core
+// Package types 定义评测框架的核心数据模型：检查项结果、层结果与总报告。
+package types
 
 // Status 表示单个检查项的结论状态。
 type Status string

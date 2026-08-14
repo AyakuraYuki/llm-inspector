@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/core"
+	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 )
 
 // --- mock OpenAI 兼容服务 ---
@@ -376,7 +376,7 @@ thresholds: {min_layer_score: 0.6}
 	return cfgPath
 }
 
-func findLayer(r *core.Report, id string) *core.LayerResult {
+func findLayer(r *types.Report, id string) *types.LayerResult {
 	for i := range r.Layers {
 		if r.Layers[i].ID == id {
 			return &r.Layers[i]
@@ -385,7 +385,7 @@ func findLayer(r *core.Report, id string) *core.LayerResult {
 	return nil
 }
 
-func findCheck(l *core.LayerResult, name string) *core.CheckResult {
+func findCheck(l *types.LayerResult, name string) *types.CheckResult {
 	for i := range l.Checks {
 		if l.Checks[i].Name == name {
 			return &l.Checks[i]
@@ -431,7 +431,7 @@ func TestRunPipelineEndToEnd(t *testing.T) {
 		if c == nil {
 			t.Fatalf("L2 缺少检查项 %s", name)
 		}
-		if c.Status != core.StatusPass || c.Score < 1 {
+		if c.Status != types.StatusPass || c.Score < 1 {
 			t.Errorf("L2/%s 应满分通过, 实际 status=%s score=%v detail=%s", name, c.Status, c.Score, c.Detail)
 		}
 	}
