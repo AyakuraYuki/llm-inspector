@@ -2,7 +2,7 @@
 //
 // 用法:
 //
-//	go run ./main.go run --config eval.yaml [--layers L1,L3] [--output ./reports] [--dataset data.yaml]
+//	go run ./main.go run --config eval.yaml
 //	go run ./main.go list
 //	go run ./main.go version
 package main
@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -63,18 +62,12 @@ func usage(programName string) {
 
 run 选项:
   --config    评测配置 YAML（必填）
-  --layers    只执行指定层，逗号分隔，如 L1,L3（默认全部启用的层）
-  --dataset   覆盖 L3 数据集路径
-  --output    覆盖报告输出目录
 `, programName)
 }
 
 func runCmd(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	configPath := fs.String("config", "", "评测配置 YAML（必填）")
-	layersFlag := fs.String("layers", "", "只执行指定层，逗号分隔，如 L1,L3")
-	dataset := fs.String("dataset", "", "覆盖 L3 数据集路径")
-	output := fs.String("output", "", "覆盖报告输出目录")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -88,31 +81,13 @@ func runCmd(args []string) int {
 		_, _ = fmt.Fprintln(os.Stderr, "配置错误:", err)
 		return 2
 	}
-	if *dataset != "" {
-		cfg.Layers.Capability.Dataset = *dataset
-	}
-	if *output != "" {
-		cfg.Output.Dir = *output
-	}
-
-	var only map[string]bool
-	if *layersFlag != "" {
-		only = map[string]bool{}
-		for id := range strings.SplitSeq(*layersFlag, ",") {
-			id = strings.ToUpper(strings.TrimSpace(id))
-			if !strings.HasPrefix(id, "L") {
-				id = "L" + id
-			}
-			only[id] = true
-		}
-	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	fmt.Printf("开始评测 %s（模型 %s）...\n", cfg.Target.BaseURL, cfg.Target.Model)
 	start := time.Now()
-	r, err := runner.Run(ctx, cfg, only)
+	r, err := runner.Run(ctx, cfg)
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "评测失败:", err)
 		return 1

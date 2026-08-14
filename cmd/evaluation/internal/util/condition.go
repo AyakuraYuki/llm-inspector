@@ -17,10 +17,3 @@ func TernaryF[T any](condition bool, ifFunc func() T, elseFunc func() T) T {
 func Enabled(b *bool) bool {
 	return b == nil || *b
 }
-
-func Selected(m map[string]bool, key string, enabled *bool) bool {
-	if len(m) > 0 && !m[key] {
-		return false
-	}
-	return Enabled(enabled)
-}

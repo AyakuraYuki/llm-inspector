@@ -299,7 +299,7 @@ thresholds: {min_layer_score: 0.6}
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := Run(t.Context(), cfg, nil)
+	r, err := Run(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("Run 失败: %v", err)
 	}

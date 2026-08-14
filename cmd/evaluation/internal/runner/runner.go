@@ -38,7 +38,7 @@ func Catalog() []LayerInfo {
 			"stop_sequence", "seed_consistency", "stream_usage_options", "encoding_unicode",
 			"json_schema", "parallel_tool_calls", "tool_result_round_trip", "thinking_control", "reasoning_effort", "default_max_tokens", "no_default_system_prompt",
 		}},
-		{"L3", "模型能力", []string{"按数据集逐题执行（内建题库约 21 题，可用 --dataset 替换）"}},
+		{"L3", "模型能力", []string{"按数据集逐题执行（内建题库约 21 题，可通过配置文件设置特定数据集文件替换）"}},
 		{"L4", "稳定性", []string{"self_consistency", "prompt_perturbation", "soak_test", "adversarial_inputs"}},
 		{"L5", "模型性能", []string{"latency_ttft", "throughput", "concurrency_scaling", "context_probe"}},
 		{"L6", "参数边界与健壮性", []string{
@@ -48,8 +48,8 @@ func Catalog() []LayerInfo {
 	}
 }
 
-// Run 执行完整评测流水线。only 非空时只执行指定层（如 {"L1","L3"}）。
-func Run(ctx context.Context, cfg *config.Config, only map[string]bool) (*core.Report, error) {
+// Run 执行完整评测流水线。
+func Run(ctx context.Context, cfg *config.Config) (*core.Report, error) {
 	p, err := provider.New(cfg.Target)
 	if err != nil {
 		return nil, err
@@ -81,7 +81,7 @@ func Run(ctx context.Context, cfg *config.Config, only map[string]bool) (*core.R
 
 	runLayer := func(id string, enabled *bool, fn func() core.LayerResult) {
 		lr := core.LayerResult{ID: id}
-		if !util.Selected(only, id, enabled) {
+		if !util.Enabled(enabled) {
 			if info, ok := catalogInfo(id); ok {
 				lr.Name = info.Name
 			}

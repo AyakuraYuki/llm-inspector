@@ -402,7 +402,7 @@ func TestRunPipelineEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := Run(t.Context(), cfg, nil)
+	r, err := Run(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("Run 失败: %v", err)
 	}
@@ -468,7 +468,7 @@ func TestRunPipelineGateAbort(t *testing.T) {
 	}
 	srv.Close() // 服务不可达
 
-	r, err := Run(t.Context(), cfg, nil)
+	r, err := Run(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("Run 不应返回错误（应产出 abort 报告）: %v", err)
 	}
