@@ -2,6 +2,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -26,13 +27,31 @@ func Load(path string, programName string) (conf *Config, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("读取配置失败: %w", err)
 	}
+
+	// expand environment variables
+	var errUnset error
+	data = []byte(os.Expand(string(data), func(name string) string {
+		v, ok := os.LookupEnv(name)
+		if !ok {
+			errUnset = errors.Join(errUnset, fmt.Errorf("env %s unset", name))
+			return ""
+		}
+		return v
+	}))
+	if errUnset != nil {
+		return nil, fmt.Errorf("填充环境变量失败: %w", err)
+	}
+
 	if err = yaml.Unmarshal(data, &conf); err != nil {
 		return nil, fmt.Errorf("解析配置失败: %w", err)
 	}
+
 	conf.defaults()
+
 	if err = conf.validate(); err != nil {
 		return nil, err
 	}
+
 	conf.Tool = programName
 	return conf, nil
 }
