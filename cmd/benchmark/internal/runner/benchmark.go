@@ -102,6 +102,12 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 	if benchmarkCfg.ReasoningEffort != "" {
 		req.ReasoningEffort = strings.ToLower(benchmarkCfg.ReasoningEffort)
 	}
+	if benchmarkCfg.Temperature != nil {
+		req.Temperature = *benchmarkCfg.Temperature
+	}
+	if benchmarkCfg.TopP != nil {
+		req.Temperature = *benchmarkCfg.TopP
+	}
 	result.RawRequest = &req
 
 	// 发送流式请求

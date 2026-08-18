@@ -19,6 +19,8 @@ type Config struct {
 	Model           string           `yaml:"model"`
 	MaxTokens       int              `yaml:"max_tokens"`
 	MaxWorkers      int              `yaml:"max_workers"`
+	Temperature     *float32         `yaml:"temperature"`
+	TopP            *float32         `yaml:"top_p"`
 	ReasoningEffort string           `yaml:"reasoning_effort"`
 	Dataset         dataset.Config   `yaml:"dataset"`
 	CustomQuestions []types.Question `yaml:"custom_questions"`
@@ -80,15 +82,24 @@ func (cfg *Config) Questions() []types.Question {
 
 // BenchmarkConfig 包含 benchmark 运行配置
 type BenchmarkConfig struct {
-	MaxTokens       int    `json:"max_tokens"`
-	MaxWorkers      int    `json:"max_workers"`
-	ReasoningEffort string `json:"reasoning_effort"`
+	MaxTokens       int      `json:"max_tokens"`
+	MaxWorkers      int      `json:"max_workers"`
+	ReasoningEffort string   `json:"reasoning_effort"`
+	Temperature     *float32 `json:"temperature"`
+	TopP            *float32 `json:"top_p"`
 }
 
-func (cfg *Config) BenchmarkConfig() BenchmarkConfig {
-	return BenchmarkConfig{
+func (cfg *Config) BenchmarkConfig() (conf BenchmarkConfig) {
+	conf = BenchmarkConfig{
 		MaxTokens:       util.Ternary(cfg.MaxTokens > 0, cfg.MaxTokens, 65536),
 		MaxWorkers:      max(cfg.MaxWorkers, 1),
 		ReasoningEffort: cfg.ReasoningEffort,
 	}
+	if cfg.Temperature != nil && *cfg.Temperature >= 0.0 && *cfg.Temperature <= 2.0 {
+		conf.Temperature = cfg.Temperature
+	}
+	if cfg.TopP != nil && *cfg.TopP >= 0.0 && *cfg.TopP <= 1.0 {
+		conf.TopP = cfg.TopP
+	}
+	return
 }
