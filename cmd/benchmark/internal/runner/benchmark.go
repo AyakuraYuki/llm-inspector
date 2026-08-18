@@ -11,9 +11,9 @@ import (
 	"github.com/sashabaranov/go-openai"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/logger"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/reporter"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/logger"
 )
 
 const TimeoutPerRequest = 30 * time.Minute

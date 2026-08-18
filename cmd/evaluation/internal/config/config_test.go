@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 func TestLoadExampleConfig(t *testing.T) {

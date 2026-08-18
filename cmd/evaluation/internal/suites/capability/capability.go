@@ -18,7 +18,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/scorer"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // Case 是数据集中的一道题。

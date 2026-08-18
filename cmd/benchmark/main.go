@@ -2,18 +2,18 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/sashabaranov/go-openai"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/logger"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/report"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/reporter"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/runner"
+	"github.com/AyakuraYuki/llm-inspector/internal/logger"
 )
 
 var (
@@ -53,7 +53,7 @@ func main() {
 	logger.Printf("Benchmark finished")
 
 	// 创建统一的报告目录，本次运行的所有输出都存放在此
-	reportDir := fmt.Sprintf("reports_%s", time.Now().Format("20060102_150405"))
+	reportDir := filepath.Join(cfg.ReportDir, time.Now().Format("20060102_150405"))
 	if err = os.MkdirAll(reportDir, os.ModePerm); err != nil {
 		log.Fatalf("Failed to create report directory: %v\n", err)
 	}

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // Spec 描述一个打分器的配置（数据集 YAML 中的 scorer 字段）。

@@ -9,7 +9,7 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/dataset"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/types"
-	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/util"
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // Config 从 YAML 加载运行所需的配置
@@ -22,6 +22,7 @@ type Config struct {
 	ReasoningEffort string           `yaml:"reasoning_effort"`
 	Dataset         dataset.Config   `yaml:"dataset"`
 	CustomQuestions []types.Question `yaml:"custom_questions"`
+	ReportDir       string           `yaml:"report_dir"`
 
 	datasetQuestions []types.Question
 }
@@ -38,6 +39,9 @@ func Load(path string) (*Config, error) {
 	cfg.datasetQuestions, err = cfg.Dataset.LoadProblems()
 	if err != nil {
 		return nil, fmt.Errorf("无法加载数据集: %w", err)
+	}
+	if cfg.ReportDir == "" {
+		cfg.ReportDir = "./reports"
 	}
 	if err = cfg.validate(); err != nil {
 		return nil, err

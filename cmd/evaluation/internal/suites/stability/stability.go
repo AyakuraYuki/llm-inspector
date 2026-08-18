@@ -13,7 +13,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/stats"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // contentBudget 是需要验证输出内容的检查项的 max_tokens 预算。

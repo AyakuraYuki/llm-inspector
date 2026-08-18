@@ -16,7 +16,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/protocol"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/stability"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // Version 工具版本号。

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // Judge 使用一个更强的模型对开放式回答打分（LLM-as-a-Judge）。

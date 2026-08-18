@@ -58,7 +58,7 @@ func VerdictLabel(v string) string {
 
 // Save 按 formats 将报告写入 dir/<timestamp>/ 下，返回输出目录。
 func Save(dir string, formats []string, r *types.Report) (string, error) {
-	outDir := filepath.Join(dir, time.Now().Format("20060102-150405"))
+	outDir := filepath.Join(dir, time.Now().Format("20060102_150405"))
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", fmt.Errorf("创建报告目录失败: %w", err)
 	}

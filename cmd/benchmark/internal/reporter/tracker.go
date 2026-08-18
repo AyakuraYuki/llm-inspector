@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/logger"
+	"github.com/AyakuraYuki/llm-inspector/internal/logger"
 )
 
 // ProgressTracker 跟踪 benchmark 的执行进度，用于监控当前正在执行的测试项目

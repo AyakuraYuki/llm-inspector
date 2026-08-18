@@ -35,3 +35,6 @@ dataset:
 custom_questions:
   - { question: "Explain quantum entanglement in one paragraph." }
   - { question: "What is 2+3?\n\nPlease reason step by step, and put your final answer within \\boxed{}.", answer: "5" }
+
+# 报告导出目录
+report_dir: ./reports

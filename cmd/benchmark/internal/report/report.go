@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/logger"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/logger"
 )
 
 // OutputResults 将结果输出到报告目录下的 JSON 文件

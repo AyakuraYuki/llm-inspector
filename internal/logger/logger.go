@@ -1,3 +1,4 @@
+// Package logger 提供带时间戳的进度日志输出。
 package logger
 
 import (

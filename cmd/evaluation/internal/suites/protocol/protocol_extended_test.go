@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -134,68 +133,6 @@ func TestCheckToolResultRoundTrip(t *testing.T) {
 		r := checkToolResultRoundTrip(t.Context(), p)
 		if r.Status != types.StatusFail {
 			t.Errorf("无工具调用应判 fail, status=%s", r.Status)
-		}
-	})
-}
-
-func TestCheckDefaultMaxTokens(t *testing.T) {
-	constraints := &ModelConstraints{DefaultMaxTokens: 32768}
-
-	t.Run("截断点与标称一致", func(t *testing.T) {
-		p := &fakeProvider{chatFn: func(*provider.Request) (*provider.Result, error) {
-			return &provider.Result{Content: "很长的小说…", FinishReason: "length", CompletionTokens: 32768}, nil
-		}}
-		r := checkDefaultMaxTokens(t.Context(), p, constraints)
-		if r.Status != types.StatusPass || r.Score != 1 {
-			t.Errorf("status=%s score=%v detail=%s, want pass/1", r.Status, r.Score, r.Detail)
-		}
-	})
-
-	t.Run("超过标称未截断判 fail", func(t *testing.T) {
-		p := &fakeProvider{chatFn: func(*provider.Request) (*provider.Result, error) {
-			return &provider.Result{Content: "更长的小说…", FinishReason: "stop", CompletionTokens: 50000}, nil
-		}}
-		r := checkDefaultMaxTokens(t.Context(), p, constraints)
-		if r.Status != types.StatusFail {
-			t.Errorf("默认值未生效应判 fail, status=%s detail=%s", r.Status, r.Detail)
-		}
-	})
-
-	t.Run("自然结束不判 fail", func(t *testing.T) {
-		p := &fakeProvider{chatFn: func(*provider.Request) (*provider.Result, error) {
-			return &provider.Result{Content: "短篇。", FinishReason: "stop", CompletionTokens: 800}, nil
-		}}
-		r := checkDefaultMaxTokens(t.Context(), p, constraints)
-		if r.Status != types.StatusPass {
-			t.Errorf("自然结束不应判 fail, status=%s detail=%s", r.Status, r.Detail)
-		}
-	})
-
-	t.Run("超时未截断降级为 skip 并记录 partial tokens", func(t *testing.T) {
-		p := &fakeProvider{chatFn: func(*provider.Request) (*provider.Result, error) {
-			return &provider.Result{Content: strings.Repeat("星", 3000)}, context.DeadlineExceeded
-		}}
-		r := checkDefaultMaxTokens(t.Context(), p, constraints)
-		if r.Status != types.StatusSkip {
-			t.Errorf("观测窗口内未截断应判 skip, status=%s detail=%s", r.Status, r.Detail)
-		}
-		got, ok := r.Metrics["partial_tokens"].(int64)
-		if !ok || got <= 0 {
-			t.Errorf("应记录 partial_tokens 到 metrics, 实际 metrics=%v", r.Metrics)
-		}
-	})
-
-	t.Run("usage 缺失时超时降级按字符估算 partial tokens", func(t *testing.T) {
-		p := &fakeProvider{chatFn: func(*provider.Request) (*provider.Result, error) {
-			return &provider.Result{Content: strings.Repeat("星", 1500)}, context.DeadlineExceeded
-		}}
-		r := checkDefaultMaxTokens(t.Context(), p, constraints)
-		if r.Status != types.StatusSkip {
-			t.Errorf("应判 skip, status=%s", r.Status)
-		}
-		got, ok := r.Metrics["partial_tokens"].(int64)
-		if !ok || got != 1000 { // 1500 字符 / 1.5 = 1000
-			t.Errorf("估算值应为 1000, 实际 %v, metrics=%v", got, r.Metrics)
 		}
 	})
 }

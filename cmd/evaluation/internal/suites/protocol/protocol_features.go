@@ -11,10 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/util"
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // checkJSONSchema 验证 response_format json_schema 模式：输出须为符合 Schema 的 JSON。
@@ -355,10 +357,12 @@ func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, constraints
 			RequestTimeout: config.DefaultMaxTokensTimeout + 30*time.Second,
 		})
 		if errors.Is(err, context.DeadlineExceeded) {
-			// 在观测窗口内未能自然截断：默认值过大无法在合理时间内测出，降级为 skip。
+			// 在观测窗口内未能自然截断：默认值过大无法在合理时间内测出，按照实际输出在预期输出的占比计算最后分数。
 			got := partialTokens(resp)
+			score, _ := decimal.NewFromInt(got).Div(decimal.NewFromInt(want)).Round(2).Float64()
 			return types.CheckResult{
-				Status: types.StatusSkip,
+				Status: types.StatusPass,
+				Score:  min(score, 1.0), // 最大分不超过1
 				Detail: fmt.Sprintf("超过 %s 未触发默认值截断，无法在合理时间内验证标称 %d；截止观测已生成约 %d tokens",
 					config.DefaultMaxTokensTimeout, want, got),
 				Metrics: map[string]any{
