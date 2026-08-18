@@ -2,7 +2,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -22,27 +21,27 @@ type Config struct {
 }
 
 // Load 从文件加载配置并填充默认值。
-func Load(path string, programName string) (conf *Config, err error) {
+// 配置中的环境变量引用（见 envexpand.go）在解析为节点树后、解码为结构体前展开。
+func Load(path string, programName string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("读取配置失败: %w", err)
 	}
 
-	// expand environment variables
-	var errUnset error
-	data = []byte(os.Expand(string(data), func(name string) string {
-		v, ok := os.LookupEnv(name)
-		if !ok {
-			errUnset = errors.Join(errUnset, fmt.Errorf("env %s unset", name))
-			return ""
-		}
-		return v
-	}))
-	if errUnset != nil {
-		return nil, fmt.Errorf("填充环境变量失败: %w", err)
+	var root yaml.Node
+	if err = yaml.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("解析配置失败: %w", err)
+	}
+	if isEmptyDocument(&root) { // 空文档、纯注释或裸 null
+		return nil, fmt.Errorf("配置文件为空: %s", path)
 	}
 
-	if err = yaml.Unmarshal(data, &conf); err != nil {
+	if err = expandEnvInNode(&root, path); err != nil {
+		return nil, fmt.Errorf("填充环境变量失败:\n%w", err)
+	}
+
+	conf := new(Config)
+	if err = root.Decode(conf); err != nil {
 		return nil, fmt.Errorf("解析配置失败: %w", err)
 	}
 

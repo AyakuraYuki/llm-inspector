@@ -1,8 +1,17 @@
 # 配置示例
+#
+# 任意标量值都支持环境变量插值：
+#   ${VAR}          必需，未设置则报错（会一次列出全部缺失项，并带上行列位置）
+#   ${VAR:-def}     未设置或为空时取 def
+#   ${VAR-def}      仅未设置时取 def（空字符串保留）
+#   ${VAR:?msg}     必需，未设置或为空时以 msg 报错
+#   $$              字面量 $
+# 裸 $VAR 不展开。默认值可继续嵌套 ${...}。
+# 无引号的值展开后会重新推断类型（${RUNS:-20} 仍是整数），加引号则强制为字符串。
 target:
-  base_url: http://localhost:8000/v1   # 端点地址
-  api_key: sk-xxx
-  model: qwen2.5-72b-instruct
+  base_url: ${EVAL_BASE_URL:-http://localhost:8000/v1}   # 端点地址
+  api_key: ${EVAL_API_KEY:-sk-xxx}     # 若要强制从环境读取，改为 ${EVAL_API_KEY:?请设置 API key}
+  model: ${EVAL_MODEL:-qwen2.5-72b-instruct}
   # 模型特定约束配置
   constraints:
     disable_temperature_zero_check: false  # 禁用 temperature=0 一致性检查（当模型不支持 temperature=0 时）
