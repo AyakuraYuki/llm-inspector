@@ -167,6 +167,14 @@ func (p *openaiProvider) buildParams(req *Request, stream bool) openai.ChatCompl
 	return params
 }
 
+// requestOptions 返回本次请求的 SDK 选项；RequestTimeout>0 时覆盖客户端默认超时。
+func (p *openaiProvider) requestOptions(req *Request) []option.RequestOption {
+	if req.RequestTimeout <= 0 {
+		return nil
+	}
+	return []option.RequestOption{option.WithRequestTimeout(req.RequestTimeout)}
+}
+
 // extraString 从 SDK 响应的 ExtraFields 中取字符串字段（如方言的 reasoning_content）。
 func extraString(fields map[string]respjson.Field, key string) string {
 	f, ok := fields[key]
@@ -183,7 +191,7 @@ func extraString(fields map[string]respjson.Field, key string) string {
 // Chat 发起非流式调用。
 func (p *openaiProvider) Chat(ctx context.Context, req *Request) (*Result, error) {
 	start := time.Now()
-	resp, err := p.client.Chat.Completions.New(ctx, p.buildParams(req, false))
+	resp, err := p.client.Chat.Completions.New(ctx, p.buildParams(req, false), p.requestOptions(req)...)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +217,7 @@ func (p *openaiProvider) Chat(ctx context.Context, req *Request) (*Result, error
 // Stream 发起流式调用，记录 TTFT 并聚合全部增量内容。
 func (p *openaiProvider) Stream(ctx context.Context, req *Request) (*Result, error) {
 	start := time.Now()
-	stream := p.client.Chat.Completions.NewStreaming(ctx, p.buildParams(req, true))
+	stream := p.client.Chat.Completions.NewStreaming(ctx, p.buildParams(req, true), p.requestOptions(req)...)
 	defer stream.Close()
 
 	r := &Result{TTFTMS: -1}
@@ -240,12 +248,13 @@ func (p *openaiProvider) Stream(ctx context.Context, req *Request) (*Result, err
 			r.CompletionTokens = chunk.Usage.CompletionTokens
 		}
 	}
-	if err := stream.Err(); err != nil {
-		return nil, err
-	}
 	r.Content = sb.String()
 	r.ReasoningContent = rb.String()
 	r.LatencyMS = msSince(start)
+	if err := stream.Err(); err != nil {
+		// 超时/中断时也返回已累积的内容，便于上层统计"截止出错前的输出量"。
+		return r, err
+	}
 	return r, nil
 }
 

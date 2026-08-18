@@ -6,8 +6,10 @@ package protocol
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
@@ -329,9 +331,11 @@ func checkReasoningEffort(ctx context.Context, p provider.Provider, constraints 
 }
 
 // checkDefaultMaxTokens 探测不传 max_tokens 时的默认行为是否与官方标称一致：
-// 请求一段长输出，若输出因 length 截断，截断点应接近标称默认值；
+// 流式请求一段长输出，若输出因 length 截断，截断点应接近标称默认值；
 // 未触发截断只能确认默认值"不小于"实测输出，不判 fail。
-// anthropic 协议 max_tokens 必填，无默认值语义，记 skip。
+// 观测窗口为 config.DefaultMaxTokensTimeout：默认值较大（如 32768）的模型
+// 在窗口内通常生成不到自然截断点，此时标记 skip 并记录已生成 token 数，
+// 而非因客户端超时误判为 fail。anthropic 协议 max_tokens 必填，无默认值语义，记 skip。
 func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, constraints *ModelConstraints) types.CheckResult {
 	return timed("default_max_tokens", 1, func() types.CheckResult {
 		if constraints == nil || constraints.DefaultMaxTokens <= 0 {
@@ -340,15 +344,38 @@ func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, constraints
 		if p.Protocol() == "anthropic" {
 			return types.CheckResult{Status: types.StatusSkip, Detail: "anthropic 协议 max_tokens 必填，无默认值语义"}
 		}
-		resp, err := p.Chat(ctx, &provider.Request{
+		want := int64(constraints.DefaultMaxTokens)
+
+		obsCtx, cancel := context.WithTimeout(ctx, config.DefaultMaxTokensTimeout)
+		defer cancel()
+		resp, err := p.Stream(obsCtx, &provider.Request{
 			Messages: []provider.Message{{Role: "user", Content: "写一篇尽可能长的科幻小说，不要停，越长越好。"}},
-			// 不传 MaxTokens：观察服务端默认值
+			// 不传 MaxTokens：观察服务端默认值。
+			// 用稍长的请求级超时兜底，避免客户端默认超时早于观测窗口把流掐断。
+			RequestTimeout: config.DefaultMaxTokensTimeout + 30*time.Second,
 		})
+		if errors.Is(err, context.DeadlineExceeded) {
+			// 在观测窗口内未能自然截断：默认值过大无法在合理时间内测出，降级为 skip。
+			got := partialTokens(resp)
+			return types.CheckResult{
+				Status: types.StatusSkip,
+				Detail: fmt.Sprintf("超过 %s 未触发默认值截断，无法在合理时间内验证标称 %d；截止观测已生成约 %d tokens",
+					config.DefaultMaxTokensTimeout, want, got),
+				Metrics: map[string]any{
+					"expected_default":      want,
+					"partial_tokens":        got,
+					"observed_for":          config.DefaultMaxTokensTimeout.String(),
+					"partial_finish_reason": partialFinishReason(resp),
+				},
+			}
+		}
 		if err != nil {
 			return failScore("不传 max_tokens 的请求失败: " + err.Error())
 		}
-		want := int64(constraints.DefaultMaxTokens)
 		got := resp.CompletionTokens
+		if got <= 0 {
+			got = partialTokens(resp)
+		}
 		metrics := map[string]any{
 			"expected_default":  want,
 			"completion_tokens": got,
@@ -377,6 +404,27 @@ func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, constraints
 			Metrics: metrics,
 		}
 	})
+}
+
+// partialTokens 估算截止出错/超时前已生成的 token 数：
+// 优先取 usage；usage 缺失时按 1.5 字符/token 粗估（思考内容一并计入）。
+func partialTokens(resp *provider.Result) int64 {
+	if resp == nil {
+		return 0
+	}
+	if resp.CompletionTokens > 0 {
+		return resp.CompletionTokens
+	}
+	n := len([]rune(resp.Content)) + len([]rune(resp.ReasoningContent))
+	return int64(float64(n) / 1.5)
+}
+
+// partialFinishReason 返回 partial 结果的 finish_reason，resp 为 nil 时返回空串。
+func partialFinishReason(resp *provider.Result) string {
+	if resp == nil {
+		return ""
+	}
+	return resp.FinishReason
 }
 
 // checkNoDefaultSystemPrompt 探测供应商是否默认注入 system prompt：

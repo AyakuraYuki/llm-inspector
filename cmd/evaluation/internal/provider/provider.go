@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/openai/openai-go"
 
@@ -114,6 +115,7 @@ type Request struct {
 	Tools               []Tool          // 工具调用
 	MaxTokens           int             // <=0 时省略（Anthropic 协议要求必填，缺省补 1024）
 	MaxCompletionTokens int             // MaxCompletionTokens 是 openai 的 max_completion_tokens 兼容字段（仅 openai）。
+	RequestTimeout      time.Duration   // 本次请求的超时覆盖；>0 时覆盖客户端默认超时（如长输出探测需要更长的观测窗口）。
 	JSONMode            bool            // 开启 JSON 输出
 }
 

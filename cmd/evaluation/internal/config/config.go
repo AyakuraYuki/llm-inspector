@@ -10,6 +10,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultMaxTokensTimeout 是 default_max_tokens 探测的观测上限：
+// 超过此时长仍未自然截断，视为"默认值不可在合理时间内测出"，标记 skip。
+const DefaultMaxTokensTimeout = 2 * time.Minute
+
 // Config 是评测配置的根结构。
 type Config struct {
 	Layers     LayersConfig     `yaml:"layers"`

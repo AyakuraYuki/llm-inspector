@@ -277,6 +277,17 @@ func (c *geminiClient) modelPath(req *Request) string {
 	return c.baseURL + "/models/" + model
 }
 
+// chatHTTPClient 返回本次请求使用的 http.Client；RequestTimeout>0 时用副本覆盖默认超时。
+func (c *geminiClient) chatHTTPClient(req *Request) *http.Client {
+	hc := c.hc
+	if req.RequestTimeout > 0 {
+		clone := *c.hc
+		clone.Timeout = req.RequestTimeout
+		hc = &clone
+	}
+	return hc
+}
+
 func (c *geminiClient) Chat(ctx context.Context, req *Request) (*Result, error) {
 	start := time.Now()
 	body, err := c.buildRequest(req)
@@ -284,7 +295,7 @@ func (c *geminiClient) Chat(ctx context.Context, req *Request) (*Result, error) 
 		return nil, err
 	}
 	var resp geminiResponse
-	if err := doJSON(ctx, c.hc, http.MethodPost, c.modelPath(req)+":generateContent", c.headers(), body, &resp); err != nil {
+	if err := doJSON(ctx, c.chatHTTPClient(req), http.MethodPost, c.modelPath(req)+":generateContent", c.headers(), body, &resp); err != nil {
 		return nil, err
 	}
 	r := &Result{LatencyMS: msSince(start)}
@@ -300,7 +311,7 @@ func (c *geminiClient) Stream(ctx context.Context, req *Request) (*Result, error
 	}
 	r := &Result{TTFTMS: -1}
 	var sb strings.Builder
-	err = ssePost(ctx, c.hc, c.modelPath(req)+":streamGenerateContent?alt=sse", c.headers(), body,
+	err = ssePost(ctx, c.chatHTTPClient(req), c.modelPath(req)+":streamGenerateContent?alt=sse", c.headers(), body,
 		func(data []byte) error {
 			var chunk geminiResponse
 			if err := json.Unmarshal(data, &chunk); err != nil {
@@ -315,11 +326,12 @@ func (c *geminiClient) Stream(ctx context.Context, req *Request) (*Result, error
 			})
 			return nil
 		})
-	if err != nil {
-		return nil, err
-	}
 	r.Content = sb.String()
 	r.LatencyMS = msSince(start)
+	if err != nil {
+		// 超时/中断时也返回已累积的内容，便于上层统计"截止出错前的输出量"。
+		return r, err
+	}
 	return r, nil
 }
 

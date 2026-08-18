@@ -189,6 +189,17 @@ func anthropicStopReason(s string) string {
 	}
 }
 
+// chatHTTPClient 返回本次请求使用的 http.Client；RequestTimeout>0 时用副本覆盖默认超时。
+func (c *anthropicClient) chatHTTPClient(req *Request) *http.Client {
+	hc := c.hc
+	if req.RequestTimeout > 0 {
+		clone := *c.hc
+		clone.Timeout = req.RequestTimeout
+		hc = &clone
+	}
+	return hc
+}
+
 func (c *anthropicClient) Chat(ctx context.Context, req *Request) (*Result, error) {
 	start := time.Now()
 	body, err := c.buildRequest(req, false)
@@ -196,7 +207,7 @@ func (c *anthropicClient) Chat(ctx context.Context, req *Request) (*Result, erro
 		return nil, err
 	}
 	var resp anthropicResponse
-	if err = doJSON(ctx, c.hc, http.MethodPost, c.baseURL+"/messages", c.headers(), body, &resp); err != nil {
+	if err = doJSON(ctx, c.chatHTTPClient(req), http.MethodPost, c.baseURL+"/messages", c.headers(), body, &resp); err != nil {
 		return nil, err
 	}
 	r := &Result{LatencyMS: msSince(start)}
@@ -249,7 +260,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req *Request) (*Result, er
 	var toolID string
 	var toolName, toolArgs strings.Builder
 
-	err = ssePost(ctx, c.hc, c.baseURL+"/messages", c.headers(), body,
+	err = ssePost(ctx, c.chatHTTPClient(req), c.baseURL+"/messages", c.headers(), body,
 		func(data []byte) error {
 			var ev anthropicStreamEvent
 			if err := json.Unmarshal(data, &ev); err != nil {
@@ -288,15 +299,16 @@ func (c *anthropicClient) Stream(ctx context.Context, req *Request) (*Result, er
 			}
 			return nil
 		})
-	if err != nil {
-		return nil, err
-	}
 	if toolName.Len() > 0 {
 		r.ToolCalls = append(r.ToolCalls, ToolCall{ID: toolID, Name: toolName.String(), Arguments: toolArgs.String()})
 	}
 	r.Content = sb.String()
 	r.ReasoningContent = rb.String()
 	r.LatencyMS = msSince(start)
+	if err != nil {
+		// 超时/中断时也返回已累积的内容，便于上层统计"截止出错前的输出量"。
+		return r, err
+	}
 	return r, nil
 }
 
