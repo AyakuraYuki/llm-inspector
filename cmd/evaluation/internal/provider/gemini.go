@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	_ "google.golang.org/genai"
 )
 
 var (
@@ -17,10 +19,10 @@ var (
 )
 
 type geminiClient struct {
+	hc      *http.Client
 	baseURL string
 	apiKey  string
 	model   string
-	hc      *http.Client
 }
 
 // NewGemini 创建 Gemini 协议客户端。base_url 缺省补 /v1beta。
@@ -45,20 +47,20 @@ func (c *geminiClient) headers() map[string]string {
 }
 
 type geminiPart struct {
-	Text             string                  `json:"text,omitempty"`
-	Thought          bool                    `json:"thought,omitempty"`
 	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
+	Text             string                  `json:"text,omitempty"`
+	Thought          bool                    `json:"thought,omitempty"`
 }
 
 type geminiFunctionCall struct {
-	Name string         `json:"name"`
 	Args map[string]any `json:"args,omitempty"`
+	Name string         `json:"name"`
 }
 
 type geminiFunctionResponse struct {
-	Name     string         `json:"name"`
 	Response map[string]any `json:"response"`
+	Name     string         `json:"name"`
 }
 
 type geminiContent struct {
@@ -67,19 +69,19 @@ type geminiContent struct {
 }
 
 type geminiGenerationConfig struct {
-	MaxOutputTokens  int            `json:"maxOutputTokens,omitempty"`
 	Temperature      *float64       `json:"temperature,omitempty"`
 	TopP             *float64       `json:"topP,omitempty"`
-	StopSequences    []string       `json:"stopSequences,omitempty"`
 	Seed             *int64         `json:"seed,omitempty"`
-	ResponseMIMEType string         `json:"responseMimeType,omitempty"`
 	ResponseSchema   map[string]any `json:"responseSchema,omitempty"`
+	ResponseMIMEType string         `json:"responseMimeType,omitempty"`
+	StopSequences    []string       `json:"stopSequences,omitempty"`
+	MaxOutputTokens  int            `json:"maxOutputTokens,omitempty"`
 }
 
 type geminiFunctionDeclaration struct {
+	Parameters  map[string]any `json:"parameters,omitempty"`
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
-	Parameters  map[string]any `json:"parameters,omitempty"`
 }
 
 type geminiTool struct {
@@ -93,11 +95,11 @@ type geminiToolConfig struct {
 }
 
 type geminiRequest struct {
-	Contents          []geminiContent         `json:"contents"`
 	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
 	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
-	Tools             []geminiTool            `json:"tools,omitempty"`
 	ToolConfig        *geminiToolConfig       `json:"toolConfig,omitempty"`
+	Contents          []geminiContent         `json:"contents"`
+	Tools             []geminiTool            `json:"tools,omitempty"`
 }
 
 type geminiResponse struct {
@@ -113,6 +115,27 @@ type geminiResponse struct {
 	} `json:"usageMetadata"`
 }
 
+type geminiModel struct {
+	Name                       string   `json:"name"`
+	BaseModelId                string   `json:"baseModelId"`
+	Version                    string   `json:"version"`
+	DisplayName                string   `json:"displayName"`
+	Description                string   `json:"description"`
+	SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+	InputTokenLimit            int64    `json:"inputTokenLimit"`
+	OutputTokenLimit           int64    `json:"outputTokenLimit"`
+	Temperature                float64  `json:"temperature"`
+	MaxTemperature             float64  `json:"maxTemperature"`
+	TopP                       float64  `json:"topP"`
+	TopK                       int64    `json:"topK"`
+	Thinking                   bool     `json:"thinking"`
+}
+
+type geminiModelsResponse struct {
+	NextPageToken string        `json:"nextPageToken,omitempty"`
+	Models        []geminiModel `json:"models"`
+}
+
 func (c *geminiClient) buildRequest(req *Request) (map[string]any, error) {
 	gr := geminiRequest{}
 	var systemParts []string
@@ -121,7 +144,7 @@ func (c *geminiClient) buildRequest(req *Request) (map[string]any, error) {
 		case "system":
 			systemParts = append(systemParts, m.Content)
 		case "assistant":
-			parts := []geminiPart{}
+			var parts []geminiPart
 			if m.Content != "" {
 				parts = append(parts, geminiPart{Text: m.Content})
 			}
@@ -303,11 +326,7 @@ func (c *geminiClient) Stream(ctx context.Context, req *Request) (*Result, error
 }
 
 func (c *geminiClient) Models(ctx context.Context) ([]string, error) {
-	var resp struct {
-		Models []struct {
-			Name string `json:"name"` // 形如 "models/gemini-2.0-flash"
-		} `json:"models"`
-	}
+	var resp geminiModelsResponse
 	if err := doJSON(ctx, c.hc, http.MethodGet, c.baseURL+"/models", c.headers(), nil, &resp); err != nil {
 		return nil, err
 	}

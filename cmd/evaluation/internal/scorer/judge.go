@@ -37,8 +37,8 @@ const judgePrompt = `你是一个严格的评测裁判。请根据评分标准�
 请只输出 JSON，不要输出其他内容：{"score": <0-10 的整数>, "reason": "<不超过 50 字的理由>"}`
 
 type judgeResponse struct {
-	Score  float64 `json:"score"`
 	Reason string  `json:"reason"`
+	Score  float64 `json:"score"`
 }
 
 // Score 让裁判模型按 rubric 给 answer 打分，返回 0..1 的归一化分数。

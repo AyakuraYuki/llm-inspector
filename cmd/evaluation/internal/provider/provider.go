@@ -66,15 +66,15 @@ type Message struct {
 	Role       string     `json:"role" yaml:"role"`
 	Content    string     `json:"content" yaml:"content"`
 	Name       string     `json:"name,omitempty" yaml:"name,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty" yaml:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty" yaml:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty" yaml:"tool_calls,omitempty"`
 }
 
 // Tool 描述一个可供模型调用的函数。
 type Tool struct {
+	Parameters  map[string]any
 	Name        string
 	Description string
-	Parameters  map[string]any
 }
 
 // ToolCall 是模型返回的一次工具调用。
@@ -89,32 +89,32 @@ type ToolCall struct {
 // openai 走原生 response_format；gemini 走 generationConfig.responseSchema；
 // anthropic 无原生支持，由检查项走 prompt 诱导。
 type JSONSchemaSpec struct {
-	Name   string
 	Schema map[string]any
+	Name   string
 	Strict bool
 }
 
 // Request 是一次聊天补全请求（协议无关）。
 // 指针类型的字段为 nil 时表示"不传该参数"，由服务端使用默认值。
 type Request struct {
-	Model               string          // 为空则用 Provider 默认模型
-	Messages            []Message       // 消息
-	MaxTokens           int             // <=0 时省略（Anthropic 协议要求必填，缺省补 1024）
 	Temperature         *float64        // 温度
 	TopP                *float64        // top_p 核采样，[0.0, 1.0] 之间
 	FrequencyPenalty    *float64        // FrequencyPenalty 频率惩罚，仅 openai 支持
 	PresencePenalty     *float64        // PresencePenalty 存在惩罚，仅 openai 支持
-	Stop                []string        // Stop 停止词。openai=stop / anthropic=stop_sequences / gemini=stopSequences。
 	Seed                *int64          // Seed 采样种子。openai/gemini 支持，anthropic 忽略。
-	MaxCompletionTokens int             // MaxCompletionTokens 是 openai 的 max_completion_tokens 兼容字段（仅 openai）。
-	JSONMode            bool            // 开启 JSON 输出
 	JSONSchema          *JSONSchemaSpec // JSONSchema 非 nil 时优先于 JSONMode。
-	Tools               []Tool          // 工具调用
-	ToolsChoice         string          // ToolsChoice 工具调用策略：""/"auto" 由模型决定；"any"/"required" 强制调用一次。
 	ParallelToolCalls   *bool           // ParallelToolCalls 是 openai 的并行工具调用开关（仅 openai 显式传参，anthropic/gemini 原生支持多工具调用块，无需参数）。
-	ReasoningEffort     string          // ReasoningEffort 思考力度（openai 的 reasoning_effort，仅 openai）。
 	StreamIncludeUsage  *bool           // StreamIncludeUsage 控制 openai 的 stream_options.include_usage；nil 时默认 true（保持既有行为）。anthropic/gemini 的流式恒携带 usage。
 	ExtraParams         map[string]any  // ExtraParams 厂商特有参数（如 thinking、do_sample、clear_thinking）。openai/anthropic 合并到请求体顶层；gemini 合并到 generationConfig。
+	Model               string          // 为空则用 Provider 默认模型
+	ToolsChoice         string          // ToolsChoice 工具调用策略：""/"auto" 由模型决定；"any"/"required" 强制调用一次。
+	ReasoningEffort     string          // ReasoningEffort 思考力度（openai 的 reasoning_effort，仅 openai）。
+	Messages            []Message       // 消息
+	Stop                []string        // Stop 停止词。openai=stop / anthropic=stop_sequences / gemini=stopSequences。
+	Tools               []Tool          // 工具调用
+	MaxTokens           int             // <=0 时省略（Anthropic 协议要求必填，缺省补 1024）
+	MaxCompletionTokens int             // MaxCompletionTokens 是 openai 的 max_completion_tokens 兼容字段（仅 openai）。
+	JSONMode            bool            // 开启 JSON 输出
 }
 
 // Result 是一次调用的统一结果，流式与非流式共用。
@@ -138,22 +138,22 @@ type Result struct {
 type RawRequest struct {
 	// Payload 请求体，原样 JSON 序列化（可含任意非法字段/类型）。
 	Payload map[string]any
-	// OmitAuth 为 true 时不携带任何鉴权头。
-	OmitAuth bool
 	// OverrideAuth 非空时替换默认鉴权凭据（OmitAuth 优先）。
 	OverrideAuth string
+	// OmitAuth 为 true 时不携带任何鉴权头。
+	OmitAuth bool
 }
 
 // RawResult 是裸请求的原始响应。
 type RawResult struct {
-	StatusCode int
 	Body       string // 截断至 maxErrorBody
+	StatusCode int
 }
 
 // HTTPError 是手写客户端的 HTTP 层错误。
 type HTTPError struct {
-	StatusCode int
 	Body       string
+	StatusCode int
 }
 
 func (e *HTTPError) Error() string {

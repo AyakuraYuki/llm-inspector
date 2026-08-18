@@ -57,8 +57,7 @@ func Run(ctx context.Context, p provider.Provider, constraints *ModelConstraints
 
 // ModelConstraints 定义模型的参数约束，从 config 包传入。
 type ModelConstraints struct {
-	DisableTemperatureZeroCheck bool
-	SpecifiedTemperature        *float64
+	SpecifiedTemperature *float64
 	// ThinkingEnableParams / ThinkingDisableParams 开启/关闭思考的厂商参数，
 	// 原样透传（openai/anthropic 顶层，gemini generationConfig）。
 	ThinkingEnableParams  *config.ThinkingParams
@@ -66,7 +65,8 @@ type ModelConstraints struct {
 	// ReasoningEfforts 模型声称支持的 reasoning_effort 值（仅 openai 协议探测）。
 	ReasoningEfforts []string
 	// DefaultMaxTokens 官方标称的 max_tokens 默认值，用于默认值探测。
-	DefaultMaxTokens int
+	DefaultMaxTokens            int
+	DisableTemperatureZeroCheck bool
 }
 
 func timed(name string, weight float64, fn func() types.CheckResult) types.CheckResult {

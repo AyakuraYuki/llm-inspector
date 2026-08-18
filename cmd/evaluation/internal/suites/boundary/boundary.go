@@ -93,8 +93,8 @@ func setParam(payload map[string]any, protocol, key, geminiKey string, v any) {
 
 // probe 是一次裸请求探针：expectReject 表示该负载应被服务显式拒绝。
 type probe struct {
-	name         string
 	payload      map[string]any
+	name         string
 	expectReject bool
 }
 

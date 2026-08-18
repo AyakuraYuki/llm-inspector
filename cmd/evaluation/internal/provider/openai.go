@@ -21,11 +21,11 @@ var (
 )
 
 type openaiProvider struct {
-	client  openai.Client
+	hc      *http.Client
 	baseURL string
 	apiKey  string
 	model   string
-	hc      *http.Client
+	client  openai.Client
 }
 
 // NewOpenAI 创建 OpenAI 兼容端点客户端。

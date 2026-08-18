@@ -1,8 +1,8 @@
 package cli
 
 type ExitError struct {
-	Code int
 	Err  error
+	Code int
 }
 
 func (e *ExitError) Error() string { return e.Err.Error() }

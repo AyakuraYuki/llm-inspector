@@ -14,20 +14,20 @@ import (
 
 // Spec 描述一个打分器的配置（数据集 YAML 中的 scorer 字段）。
 type Spec struct {
-	Type      string   `yaml:"type" json:"type"`                     // exact_match/contains/regex/numeric/json_valid/json_schema/bullet_count/keyword/lowercase/judge
 	Expected  any      `yaml:"expected" json:"expected,omitempty"`   // exact_match/bullet_count/numeric 的期望值
+	Type      string   `yaml:"type" json:"type"`                     // exact_match/contains/regex/numeric/json_valid/json_schema/bullet_count/keyword/lowercase/judge
 	Pattern   string   `yaml:"pattern" json:"pattern,omitempty"`     // regex 模式
+	Rubric    string   `yaml:"rubric" json:"rubric,omitempty"`       // judge 评分标准
 	Keywords  []string `yaml:"keywords" json:"keywords,omitempty"`   // contains/keyword 必含词
 	Forbidden []string `yaml:"forbidden" json:"forbidden,omitempty"` // keyword 禁含词
-	Tolerance float64  `yaml:"tolerance" json:"tolerance,omitempty"` // numeric 容差（相对）
 	Fields    []string `yaml:"fields" json:"fields,omitempty"`       // json_schema 必需字段
-	Rubric    string   `yaml:"rubric" json:"rubric,omitempty"`       // judge 评分标准
+	Tolerance float64  `yaml:"tolerance" json:"tolerance,omitempty"` // numeric 容差（相对）
 }
 
 // Verdict 是一次打分的结果。
 type Verdict struct {
-	Score  float64 // 0..1
 	Reason string
+	Score  float64 // 0..1
 }
 
 // Score 使用确定性打分器评估模型输出。judge 类型由 Judge.Score 处理。

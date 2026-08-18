@@ -12,12 +12,12 @@ import (
 
 // Config 是评测配置的根结构。
 type Config struct {
-	Target     TargetConfig     `yaml:"target"`
-	Judge      *TargetConfig    `yaml:"judge"`
 	Layers     LayersConfig     `yaml:"layers"`
-	Thresholds ThresholdsConfig `yaml:"thresholds"`
-	Output     OutputConfig     `yaml:"output"`
+	Judge      *TargetConfig    `yaml:"judge"`
 	Tool       string           `yaml:"-"`
+	Output     OutputConfig     `yaml:"output"`
+	Target     TargetConfig     `yaml:"target"`
+	Thresholds ThresholdsConfig `yaml:"thresholds"`
 }
 
 // Load 从文件加载配置并填充默认值。
@@ -179,8 +179,7 @@ func (t *TargetConfig) TimeoutDuration() (time.Duration, error) {
 
 // ModelConstraints 定义模型的参数约束，用于覆盖默认测试行为。
 type ModelConstraints struct {
-	DisableTemperatureZeroCheck bool     `yaml:"disable_temperature_zero_check"` // 禁用 temperature=0 一致性检查
-	SpecifiedTemperature        *float64 `yaml:"specified_temperature"`          // 可选的指定 temperature 值（未配置则跳过指定温度检查）
+	SpecifiedTemperature *float64 `yaml:"specified_temperature"` // 可选的指定 temperature 值（未配置则跳过指定温度检查）
 
 	// ThinkingEnableParams / ThinkingDisableParams 是开启/关闭思考的厂商参数
 	// （如 GLM 的 {thinking: {type: enabled}}），原样合并进请求体
@@ -194,7 +193,8 @@ type ModelConstraints struct {
 
 	// DefaultMaxTokens 官方标称的 max_tokens 默认值（如 GLM-5.2 为 32768）。
 	// 配置后 L2 会做默认值探测：不传 max_tokens 观察输出是否受该默认值约束。
-	DefaultMaxTokens int `yaml:"default_max_tokens"`
+	DefaultMaxTokens            int  `yaml:"default_max_tokens"`
+	DisableTemperatureZeroCheck bool `yaml:"disable_temperature_zero_check"` // 禁用 temperature=0 一致性检查
 }
 
 func (c ModelConstraints) Clone() ModelConstraints {
@@ -250,12 +250,12 @@ func (p *ThinkingParams) ToMap() map[string]any {
 
 // LayersConfig 各层配置。Enabled 为 nil 时默认启用。
 type LayersConfig struct {
+	Stability    StabilityConfig    `yaml:"stability"`
 	Availability AvailabilityConfig `yaml:"availability"`
 	Protocol     ProtocolConfig     `yaml:"protocol"`
-	Capability   CapabilityConfig   `yaml:"capability"`
-	Stability    StabilityConfig    `yaml:"stability"`
-	Performance  PerformanceConfig  `yaml:"performance"`
 	Boundary     BoundaryConfig     `yaml:"boundary"`
+	Capability   CapabilityConfig   `yaml:"capability"`
+	Performance  PerformanceConfig  `yaml:"performance"`
 }
 
 type AvailabilityConfig struct {
@@ -279,17 +279,17 @@ type CapabilityConfig struct {
 
 type StabilityConfig struct {
 	Enabled      *bool    `yaml:"enabled"`
+	Temperature  *float64 `yaml:"temperature"`   // 采样温度，默认 1.0
 	Samples      int      `yaml:"samples"`       // 自一致性采样次数，默认 5
 	SoakRequests int      `yaml:"soak_requests"` // 浸测请求数，默认 50
-	Temperature  *float64 `yaml:"temperature"`   // 采样温度，默认 1.0
 }
 
 type PerformanceConfig struct {
 	Enabled        *bool     `yaml:"enabled"`
-	Runs           int       `yaml:"runs"`             // 延迟测量次数，默认 20
-	Concurrency    []int     `yaml:"concurrency"`      // 并发梯度，默认 [1,4,16]
-	MaxProbeTokens int       `yaml:"max_probe_tokens"` // 上下文探测上限，默认 32768
+	Concurrency    []int     `yaml:"concurrency"` // 并发梯度，默认 [1,4,16]
 	SLO            SLOConfig `yaml:"slo"`
+	Runs           int       `yaml:"runs"`             // 延迟测量次数，默认 20
+	MaxProbeTokens int       `yaml:"max_probe_tokens"` // 上下文探测上限，默认 32768
 }
 
 // SLOConfig 性能评分的服务水平目标。

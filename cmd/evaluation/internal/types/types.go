@@ -13,12 +13,12 @@ const (
 
 // CheckResult 是单个检查项的执行结果。
 type CheckResult struct {
+	Metrics    map[string]any `json:"metrics,omitempty"`
 	Name       string         `json:"name"`
 	Status     Status         `json:"status"`
+	Detail     string         `json:"detail,omitempty"`
 	Score      float64        `json:"score"` // 0..1
 	Weight     float64        `json:"weight"`
-	Detail     string         `json:"detail,omitempty"`
-	Metrics    map[string]any `json:"metrics,omitempty"`
 	DurationMS float64        `json:"duration_ms"`
 }
 
@@ -26,13 +26,13 @@ type CheckResult struct {
 type LayerResult struct {
 	ID         string        `json:"id"`   // 如 "L1"
 	Name       string        `json:"name"` // 如 "API 可用性"
+	Reason     string        `json:"reason,omitempty"`
+	Checks     []CheckResult `json:"checks"`
+	Score      float64       `json:"score"` // 加权平均，仅统计 pass/fail 项
+	DurationMS float64       `json:"duration_ms"`
 	Enabled    bool          `json:"enabled"`
 	Skipped    bool          `json:"skipped"`
-	Reason     string        `json:"reason,omitempty"`
-	Score      float64       `json:"score"` // 加权平均，仅统计 pass/fail 项
 	Passed     bool          `json:"passed"`
-	Checks     []CheckResult `json:"checks"`
-	DurationMS float64       `json:"duration_ms"`
 }
 
 // Compute 根据各检查项计算层得分；threshold 为通过线。
@@ -77,14 +77,14 @@ type TargetInfo struct {
 
 // Report 是一次评测运行的完整报告。
 type Report struct {
+	Target     TargetInfo    `json:"target"`
 	Tool       string        `json:"tool"`
 	Version    string        `json:"version"`
-	Target     TargetInfo    `json:"target"`
 	StartedAt  string        `json:"started_at"`
 	FinishedAt string        `json:"finished_at"`
+	Verdict    string        `json:"verdict"`
 	Layers     []LayerResult `json:"layers"`
 	TotalScore float64       `json:"total_score"`
-	Verdict    string        `json:"verdict"`
 }
 
 // LayerWeight 各层在总评中的权重。

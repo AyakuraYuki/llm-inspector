@@ -19,10 +19,10 @@ var (
 )
 
 type anthropicClient struct {
+	hc      *http.Client
 	baseURL string
 	apiKey  string
 	model   string
-	hc      *http.Client
 }
 
 // NewAnthropic 创建 Anthropic 协议客户端。base_url 缺省补 /v1。
@@ -52,14 +52,14 @@ func (c *anthropicClient) headers() map[string]string {
 // anthropicMessage 的 Content 为 string 或 []map[string]any（内容块数组，
 // 用于 tool_use / tool_result 回传场景）。
 type anthropicMessage struct {
-	Role    string `json:"role"`
 	Content any    `json:"content"`
+	Role    string `json:"role"`
 }
 
 type anthropicTool struct {
+	InputSchema map[string]any `json:"input_schema"`
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
-	InputSchema map[string]any `json:"input_schema"`
 }
 
 type anthropicToolChoice struct {
@@ -67,25 +67,25 @@ type anthropicToolChoice struct {
 }
 
 type anthropicRequest struct {
-	Model         string               `json:"model"`
-	MaxTokens     int                  `json:"max_tokens"`
-	System        string               `json:"system,omitempty"`
-	Messages      []anthropicMessage   `json:"messages"`
 	Temperature   *float64             `json:"temperature,omitempty"`
 	TopP          *float64             `json:"top_p,omitempty"`
-	StopSequences []string             `json:"stop_sequences,omitempty"`
-	Stream        bool                 `json:"stream"`
-	Tools         []anthropicTool      `json:"tools,omitempty"`
 	ToolChoice    *anthropicToolChoice `json:"tool_choice,omitempty"`
+	Model         string               `json:"model"`
+	System        string               `json:"system,omitempty"`
+	Messages      []anthropicMessage   `json:"messages"`
+	StopSequences []string             `json:"stop_sequences,omitempty"`
+	Tools         []anthropicTool      `json:"tools,omitempty"`
+	MaxTokens     int                  `json:"max_tokens"`
+	Stream        bool                 `json:"stream"`
 }
 
 type anthropicContentBlock struct {
+	Input    map[string]any `json:"input"`
 	Type     string         `json:"type"`
 	Text     string         `json:"text"`
 	Thinking string         `json:"thinking"`
 	ID       string         `json:"id"`
 	Name     string         `json:"name"`
-	Input    map[string]any `json:"input"`
 }
 
 type anthropicUsage struct {
@@ -94,8 +94,8 @@ type anthropicUsage struct {
 }
 
 type anthropicResponse struct {
-	Content    []anthropicContentBlock `json:"content"`
 	StopReason string                  `json:"stop_reason"`
+	Content    []anthropicContentBlock `json:"content"`
 	Usage      anthropicUsage          `json:"usage"`
 }
 
@@ -129,18 +129,19 @@ func (c *anthropicClient) buildRequest(req *Request, stream bool) (map[string]an
 				for _, tc := range m.ToolCalls {
 					input := map[string]any{}
 					_ = json.Unmarshal([]byte(tc.Arguments), &input)
-					blocks = append(blocks, map[string]any{
-						"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": input,
-					})
+					blocks = append(blocks, map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": input})
 				}
 				ar.Messages = append(ar.Messages, anthropicMessage{Role: "assistant", Content: blocks})
 			} else {
 				ar.Messages = append(ar.Messages, anthropicMessage{Role: "assistant", Content: m.Content})
 			}
 		case "tool":
-			ar.Messages = append(ar.Messages, anthropicMessage{Role: "user", Content: []map[string]any{{
-				"type": "tool_result", "tool_use_id": m.ToolCallID, "content": m.Content,
-			}}})
+			ar.Messages = append(ar.Messages, anthropicMessage{
+				Role: "user",
+				Content: []map[string]any{
+					{"type": "tool_result", "tool_use_id": m.ToolCallID, "content": m.Content},
+				},
+			})
 		default:
 			ar.Messages = append(ar.Messages, anthropicMessage{Role: "user", Content: m.Content})
 		}
@@ -167,7 +168,7 @@ func mergeExtraParams(v any, extras map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	body := map[string]any{}
-	if err := json.Unmarshal(data, &body); err != nil {
+	if err = json.Unmarshal(data, &body); err != nil {
 		return nil, err
 	}
 	maps.Copy(body, extras)
