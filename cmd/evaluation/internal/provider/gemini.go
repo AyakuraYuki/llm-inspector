@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	_ "google.golang.org/genai"
 )
 
 var (
