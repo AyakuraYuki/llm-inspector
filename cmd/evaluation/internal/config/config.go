@@ -141,12 +141,13 @@ func (conf *Config) validate() error {
 
 // TargetConfig 描述一个模型服务端点。
 type TargetConfig struct {
-	BaseURL     string           `yaml:"base_url"`
-	APIKey      string           `yaml:"api_key"`
-	Model       string           `yaml:"model"`
-	Protocol    string           `yaml:"protocol"`    // openai（默认）/ anthropic / gemini
-	Timeout     string           `yaml:"timeout"`     // 如 "60s"，默认 60s
-	Constraints ModelConstraints `yaml:"constraints"` // 模型特定的参数约束
+	BaseURL         string           `yaml:"base_url"`
+	APIKey          string           `yaml:"api_key"`
+	Model           string           `yaml:"model"`
+	Protocol        string           `yaml:"protocol"`         // openai（默认）/ anthropic / gemini
+	Timeout         string           `yaml:"timeout"`          // 如 "60s"，默认 60s
+	Constraints     ModelConstraints `yaml:"constraints"`      // 模型特定的参数约束
+	TokenizerConfig string           `yaml:"tokenizer_config"` // 分词器配置文件路径
 }
 
 // ProtocolNormalized 返回规范化后的协议名（缺省 openai）。

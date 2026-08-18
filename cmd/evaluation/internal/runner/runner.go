@@ -133,7 +133,7 @@ func Run(ctx context.Context, cfg *config.Config) (*types.Report, error) {
 			ReasoningEfforts:            cfg.Target.Constraints.ReasoningEfforts,
 			DefaultMaxTokens:            cfg.Target.Constraints.DefaultMaxTokens,
 		}
-		return protocol.Run(ctx, p, constraints)
+		return protocol.Run(ctx, p, cfg.Target.TokenizerConfig, constraints)
 	})
 	runLayer("L3", cfg.Layers.Capability.Enabled, func() types.LayerResult {
 		return capability.Run(ctx, p, cfg.Layers.Capability, judge)

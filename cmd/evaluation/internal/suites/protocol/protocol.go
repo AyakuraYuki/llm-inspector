@@ -23,7 +23,7 @@ import (
 const contentBudget = 1024
 
 // Run 执行 L2 全部检查。
-func Run(ctx context.Context, p provider.Provider, constraints *ModelConstraints) types.LayerResult {
+func Run(ctx context.Context, p provider.Provider, tokenizerConfig string, constraints *ModelConstraints) types.LayerResult {
 	start := time.Now()
 	layer := types.LayerResult{ID: "L2", Name: "协议兼容性", Enabled: true}
 
@@ -48,7 +48,7 @@ func Run(ctx context.Context, p provider.Provider, constraints *ModelConstraints
 		checkToolResultRoundTrip(ctx, p),
 		checkThinkingControl(ctx, p, constraints),
 		checkReasoningEffort(ctx, p, constraints),
-		checkDefaultMaxTokens(ctx, p, constraints),
+		checkDefaultMaxTokens(ctx, p, tokenizerConfig, constraints),
 		checkNoDefaultSystemPrompt(ctx, p),
 	)
 	layer.DurationMS = float64(time.Since(start).Microseconds()) / 1000

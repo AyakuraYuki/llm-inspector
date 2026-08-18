@@ -16,6 +16,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/tokenizers"
 	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
@@ -338,7 +339,7 @@ func checkReasoningEffort(ctx context.Context, p provider.Provider, constraints 
 // 观测窗口为 config.DefaultMaxTokensTimeout：默认值较大（如 32768）的模型
 // 在窗口内通常生成不到自然截断点，此时标记 skip 并记录已生成 token 数，
 // 而非因客户端超时误判为 fail。anthropic 协议 max_tokens 必填，无默认值语义，记 skip。
-func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, constraints *ModelConstraints) types.CheckResult {
+func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, tokenizerConfig string, constraints *ModelConstraints) types.CheckResult {
 	return timed("default_max_tokens", 1, func() types.CheckResult {
 		if constraints == nil || constraints.DefaultMaxTokens <= 0 {
 			return types.CheckResult{Status: types.StatusSkip, Detail: "未配置 default_max_tokens，跳过"}
@@ -358,7 +359,7 @@ func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, constraints
 		})
 		if errors.Is(err, context.DeadlineExceeded) {
 			// 在观测窗口内未能自然截断：默认值过大无法在合理时间内测出，按照实际输出在预期输出的占比计算最后分数。
-			got := partialTokens(resp)
+			got := partialTokens(resp, tokenizerConfig)
 			score, _ := decimal.NewFromInt(got).Div(decimal.NewFromInt(want)).Round(2).Float64()
 			return types.CheckResult{
 				Status: types.StatusPass,
@@ -378,7 +379,7 @@ func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, constraints
 		}
 		got := resp.CompletionTokens
 		if got <= 0 {
-			got = partialTokens(resp)
+			got = partialTokens(resp, tokenizerConfig)
 		}
 		metrics := map[string]any{
 			"expected_default":  want,
@@ -411,14 +412,32 @@ func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, constraints
 }
 
 // partialTokens 估算截止出错/超时前已生成的 token 数：
-// 优先取 usage；usage 缺失时按 1.5 字符/token 粗估（思考内容一并计入）。
-func partialTokens(resp *provider.Result) int64 {
+// 优先取返回的 completion_tokens；
+// 尝试从可配置的分词器分析已获取的内容预估的 token 数；
+// 最后按 1.5 字符/token 粗估（思考内容一并计入）。
+func partialTokens(resp *provider.Result, tokenizerConfig string) int64 {
 	if resp == nil {
 		return 0
 	}
+
 	if resp.CompletionTokens > 0 {
 		return resp.CompletionTokens
 	}
+
+	tk, err := tokenizers.New(tokenizerConfig)
+	if err == nil {
+		var tokens int
+		if c, err := tk.EncodeSingle(resp.Content); err == nil {
+			tokens += len(c.Tokens)
+		}
+		if rc, err := tk.EncodeSingle(resp.ReasoningContent); err == nil {
+			tokens += len(rc.Tokens)
+		}
+		if tokens > 0 {
+			return int64(tokens)
+		}
+	}
+
 	n := len([]rune(resp.Content)) + len([]rune(resp.ReasoningContent))
 	return int64(float64(n) / 1.5)
 }
