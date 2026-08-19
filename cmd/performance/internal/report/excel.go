@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/xuri/excelize/v2"
@@ -60,7 +61,37 @@ func ExportExcel(cfg types.BenchmarkConfig, results []types.AggregatedMetrics, r
 	_, _ = f.NewSheet("错误明细")
 	writeErrorDetailSheet(f, results, hdrStyle)
 
+	// 数据 sheet 统一冻结表头并开启自动筛选：模型数 × 分组 × 并发档位会让行数
+	// 迅速膨胀，没有这两项就只能在几百行里靠肉眼定位某个分组的结果。
+	for _, sh := range []string{
+		"TTFT延迟", "生成速度(TPS·token)", "QPS压测(TPS·req)",
+		"输入输出Token比", "错误分析", "错误明细",
+	} {
+		freezeHeaderWithFilter(f, sh)
+	}
+
 	return f.SaveAs(outPath)
+}
+
+// freezeHeaderWithFilter 冻结 sheet 的首行表头，并对表头范围开启自动筛选。
+func freezeHeaderWithFilter(f *excelize.File, sheet string) {
+	_ = f.SetPanes(sheet, &excelize.Panes{
+		Freeze:      true,
+		Split:       false,
+		YSplit:      1,
+		TopLeftCell: "A2",
+		ActivePane:  "bottomLeft",
+	})
+
+	cols, err := f.GetCols(sheet)
+	if err != nil || len(cols) == 0 {
+		return
+	}
+	lastCol, err := excelize.ColumnNumberToName(len(cols))
+	if err != nil {
+		return
+	}
+	_ = f.AutoFilter(sheet, fmt.Sprintf("A1:%s1", lastCol), nil)
 }
 
 // ── Sheet writers ─────────────────────────────────────────────────────────────
@@ -83,7 +114,18 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 	for _, m := range cfg.Models {
 		rows = append(rows, []any{
 			fmt.Sprintf("  模型 [%s]", m.Provider),
-			m.Name,
+			fmt.Sprintf("%s（Token Group: %s，%d 个 key）", m.Name, m.TokenGroup, len(m.Tokens)),
+		})
+	}
+
+	// Token 分组概览：每个分组的 key 数量和挂在它下面的模型，
+	// 用于核对「哪个模型走了哪条渠道」。只统计数量，不写出 key 本身。
+	groups := groupOrder(cfg)
+	rows = append(rows, []any{"Token 分组", fmt.Sprintf("%d 个分组", len(groups))})
+	for _, g := range groups {
+		rows = append(rows, []any{
+			fmt.Sprintf("  分组 %s", g.name),
+			fmt.Sprintf("%d 个 key，模型：%s", g.keys, strings.Join(g.models, "、")),
 		})
 	}
 	rows = append(rows, []any{"指标说明", "见下"})
@@ -104,18 +146,47 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 	}
 }
 
+// tokenGroupSummary 汇总一个 token 分组的 key 数量和使用它的模型。
+type tokenGroupSummary struct {
+	name   string
+	keys   int
+	models []string
+}
+
+// groupOrder 按分组在 models 中首次出现的顺序汇总各分组，保证报表顺序稳定。
+func groupOrder(cfg types.BenchmarkConfig) []tokenGroupSummary {
+	var order []string
+	byName := make(map[string]*tokenGroupSummary)
+	for _, m := range cfg.Models {
+		g, ok := byName[m.TokenGroup]
+		if !ok {
+			g = &tokenGroupSummary{name: m.TokenGroup, keys: len(m.Tokens)}
+			byName[m.TokenGroup] = g
+			order = append(order, m.TokenGroup)
+		}
+		g.models = append(g.models, m.Name)
+	}
+
+	summaries := make([]tokenGroupSummary, 0, len(order))
+	for _, name := range order {
+		summaries = append(summaries, *byName[name])
+	}
+	return summaries
+}
+
 func writeTTFTSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "TTFT延迟"
 	headers := []any{
-		"模型 ID", "Provider", "并发数", "样本数(N)",
+		"模型 ID", "Provider", "Token Group", "并发数", "样本数(N)",
 		"TTFT P50(ms)", "TTFT P95(ms)", "TTFT P99(ms)", "TTFT P99.5(ms)", "TTFT P99.9(ms)", "TTFT Avg(ms)",
 		"E2E P50(ms)", "E2E P95(ms)", "E2E P99(ms)", "E2E P99.5(ms)", "E2E P99.9(ms)", "E2E Avg(ms)",
 	}
 	xlSetRow(f, sh, 1, headers, hdrStyle)
 	_ = f.SetColWidth(sh, "A", "A", 30)
 	_ = f.SetColWidth(sh, "B", "B", 14)
-	_ = f.SetColWidth(sh, "C", "D", 10)
-	_ = f.SetColWidth(sh, "E", "L", 14)
+	_ = f.SetColWidth(sh, "C", "C", 18)
+	_ = f.SetColWidth(sh, "D", "E", 10)
+	_ = f.SetColWidth(sh, "F", "Q", 14)
 
 	row := 2
 	for _, agg := range results {
@@ -125,6 +196,7 @@ func writeTTFTSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyl
 		xlSetRow(f, sh, row, []any{
 			agg.Model,
 			string(agg.Provider),
+			agg.TokenGroup,
 			agg.Concurrency,
 			agg.TTFT.N,
 			durMs(agg.TTFT.P50), durMs(agg.TTFT.P95), durMs(agg.TTFT.P99), durMs(agg.TTFT.P995), durMs(agg.TTFT.P999), durMs(agg.TTFT.Avg),
@@ -139,6 +211,7 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 	headers := []any{
 		"模型 ID",
 		"Provider",
+		"Token Group",
 		"并发数",
 		"样本数(N)",
 		"tokens/s P50", "tokens/s P95", "tokens/s P99", "tokens/s P99.5", "tokens/s P99.9", "tokens/s Avg",
@@ -151,9 +224,10 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 	xlSetRow(f, sh, 1, headers, hdrStyle)
 	_ = f.SetColWidth(sh, "A", "A", 30)
 	_ = f.SetColWidth(sh, "B", "B", 14)
-	_ = f.SetColWidth(sh, "C", "D", 10)
-	_ = f.SetColWidth(sh, "E", "R", 14)
-	_ = f.SetColWidth(sh, "S", "S", 40)
+	_ = f.SetColWidth(sh, "C", "C", 18)
+	_ = f.SetColWidth(sh, "D", "E", 10)
+	_ = f.SetColWidth(sh, "F", "S", 14)
+	_ = f.SetColWidth(sh, "T", "T", 40)
 
 	row := 2
 	for _, agg := range results {
@@ -167,6 +241,7 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 		xlSetRow(f, sh, row, []any{
 			agg.Model,
 			string(agg.Provider),
+			agg.TokenGroup,
 			agg.Concurrency,
 			agg.TpsPr.N,
 			fVal(agg.TpsPr.P50), fVal(agg.TpsPr.P95), fVal(agg.TpsPr.P99), fVal(agg.TpsPr.P995), fVal(agg.TpsPr.P999), fVal(agg.TpsPr.Avg),
@@ -183,7 +258,7 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 func writeIORSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "输入输出Token比"
 	headers := []any{
-		"模型 ID", "Provider", "并发数", "样本数(N)",
+		"模型 ID", "Provider", "Token Group", "并发数", "样本数(N)",
 		"I/O Ratio P50", "I/O Ratio P95", "I/O Ratio P99", "I/O Ratio P99.5", "I/O Ratio P99.9", "I/O Ratio Avg",
 		"System I/O Ratio",
 		"Cache Hit Rate P50(%)", "Cache Hit Rate P95(%)", "Cache Hit Rate P99(%)", "Cache Hit Rate P99.5(%)", "Cache Hit Rate P99.9(%)", "Cache Hit Rate Avg(%)",
@@ -193,11 +268,12 @@ func writeIORSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 	xlSetRow(f, sh, 1, headers, hdrStyle)
 	_ = f.SetColWidth(sh, "A", "A", 30)
 	_ = f.SetColWidth(sh, "B", "B", 14)
-	_ = f.SetColWidth(sh, "C", "D", 10)
-	_ = f.SetColWidth(sh, "E", "K", 16)
-	_ = f.SetColWidth(sh, "L", "R", 18)
-	_ = f.SetColWidth(sh, "S", "T", 14)
-	_ = f.SetColWidth(sh, "U", "U", 40)
+	_ = f.SetColWidth(sh, "C", "C", 18)
+	_ = f.SetColWidth(sh, "D", "E", 10)
+	_ = f.SetColWidth(sh, "F", "L", 16)
+	_ = f.SetColWidth(sh, "M", "S", 18)
+	_ = f.SetColWidth(sh, "T", "U", 14)
+	_ = f.SetColWidth(sh, "V", "V", 40)
 
 	row := 2
 	for _, agg := range results {
@@ -211,6 +287,7 @@ func writeIORSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 		xlSetRow(f, sh, row, []any{
 			agg.Model,
 			string(agg.Provider),
+			agg.TokenGroup,
 			agg.Concurrency,
 			agg.IOR.N,
 			fVal(agg.IOR.P50), fVal(agg.IOR.P95), fVal(agg.IOR.P99), fVal(agg.IOR.P995), fVal(agg.IOR.P999), fVal(agg.IOR.Avg),
@@ -226,17 +303,19 @@ func writeIORSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "QPS压测(TPS·req)"
 	headers := []any{
-		"模型 ID", "Provider", "类型", "并发数", "开始时间",
+		"模型 ID", "Provider", "Token Group", "类型", "并发数", "开始时间",
 		"实际时长(s)", "吞吐窗口(s)", "QPS(req/s)", "QPM(req/min)", "成功率(%)",
 		"成功请求数", "失败请求数", "备注",
 	}
 	xlSetRow(f, sh, 1, headers, hdrStyle)
 	_ = f.SetColWidth(sh, "A", "A", 30)
-	_ = f.SetColWidth(sh, "B", "C", 14)
-	_ = f.SetColWidth(sh, "D", "D", 10)
-	_ = f.SetColWidth(sh, "E", "E", 22)
-	_ = f.SetColWidth(sh, "F", "L", 12)
-	_ = f.SetColWidth(sh, "M", "M", 55)
+	_ = f.SetColWidth(sh, "B", "B", 14)
+	_ = f.SetColWidth(sh, "C", "C", 18)
+	_ = f.SetColWidth(sh, "D", "D", 14)
+	_ = f.SetColWidth(sh, "E", "E", 10)
+	_ = f.SetColWidth(sh, "F", "F", 22)
+	_ = f.SetColWidth(sh, "G", "M", 12)
+	_ = f.SetColWidth(sh, "N", "N", 55)
 
 	row := 2
 	for _, agg := range results {
@@ -255,6 +334,7 @@ func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 		xlSetRow(f, sh, row, []any{
 			agg.Model,
 			string(agg.Provider),
+			agg.TokenGroup,
 			category,
 			agg.Concurrency,
 			startStr,
@@ -317,15 +397,16 @@ func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
 
 func writeErrorSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "错误分析"
-	headers := []any{"模型 ID", "Provider", "并发数", "总请求数", "失败总数", "成功率(%)"}
+	headers := []any{"模型 ID", "Provider", "Token Group", "并发数", "总请求数", "失败总数", "成功率(%)"}
 	for _, et := range types.ErrorTypeOrder {
 		headers = append(headers, string(et))
 	}
 	xlSetRow(f, sh, 1, headers, hdrStyle)
 	_ = f.SetColWidth(sh, "A", "A", 30)
 	_ = f.SetColWidth(sh, "B", "B", 14)
+	_ = f.SetColWidth(sh, "C", "C", 18)
 	lastCol := xlCell(len(headers), 1)
-	_ = f.SetColWidth(sh, "C", lastCol[:len(lastCol)-1], 14)
+	_ = f.SetColWidth(sh, "D", lastCol[:len(lastCol)-1], 14)
 
 	row := 2
 	for _, agg := range results {
@@ -336,6 +417,7 @@ func writeErrorSheet(f *excelize.File, results []types.AggregatedMetrics, hdrSty
 		values := []any{
 			agg.Model,
 			string(agg.Provider),
+			agg.TokenGroup,
 			agg.Concurrency,
 			agg.Total,
 			agg.Failed,
@@ -352,27 +434,29 @@ func writeErrorSheet(f *excelize.File, results []types.AggregatedMetrics, hdrSty
 // writeErrorDetailSheet 把每条失败请求的原始记录按发生时间排成一行一条的错误日志。
 func writeErrorDetailSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "错误明细"
-	headers := []any{"序号", "模型 ID", "Provider", "并发数", "发生时间", "错误类型", "总时延(ms)", "错误信息"}
+	headers := []any{"序号", "模型 ID", "Provider", "Token Group", "并发数", "发生时间", "错误类型", "总时延(ms)", "错误信息"}
 	xlSetRow(f, sh, 1, headers, hdrStyle)
 	_ = f.SetColWidth(sh, "A", "A", 8)
 	_ = f.SetColWidth(sh, "B", "B", 30)
 	_ = f.SetColWidth(sh, "C", "C", 16)
-	_ = f.SetColWidth(sh, "D", "D", 10)
-	_ = f.SetColWidth(sh, "E", "E", 22)
-	_ = f.SetColWidth(sh, "F", "F", 16)
-	_ = f.SetColWidth(sh, "G", "G", 12)
-	_ = f.SetColWidth(sh, "H", "H", 90)
+	_ = f.SetColWidth(sh, "D", "D", 18)
+	_ = f.SetColWidth(sh, "E", "E", 10)
+	_ = f.SetColWidth(sh, "F", "F", 22)
+	_ = f.SetColWidth(sh, "G", "G", 16)
+	_ = f.SetColWidth(sh, "H", "H", 12)
+	_ = f.SetColWidth(sh, "I", "I", 90)
 
 	type detailRow struct {
 		model       string
 		provider    types.Provider
+		tokenGroup  string
 		concurrency int
 		m           types.RequestMetrics
 	}
 	var rows []detailRow
 	for _, agg := range results {
 		for _, m := range agg.FailedDetails {
-			rows = append(rows, detailRow{agg.Model, agg.Provider, agg.Concurrency, m})
+			rows = append(rows, detailRow{agg.Model, agg.Provider, agg.TokenGroup, agg.Concurrency, m})
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].m.Timestamp.Before(rows[j].m.Timestamp) })
@@ -383,6 +467,7 @@ func writeErrorDetailSheet(f *excelize.File, results []types.AggregatedMetrics, 
 			i + 1,
 			r.model,
 			string(r.provider),
+			r.tokenGroup,
 			r.concurrency,
 			r.m.Timestamp.Format("2006-01-02 15:04:05.000"),
 			string(r.m.ErrorType),

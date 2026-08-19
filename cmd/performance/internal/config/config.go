@@ -42,19 +42,20 @@ var defaultConcurrency = []int{10, 20, 30, 40, 50, 75, 100, 120, 150}
 
 // Config 是 YAML 配置文件的完整结构。
 type Config struct {
-	BaseURL        string         `yaml:"base_url"`
-	Duration       time.Duration  `yaml:"duration"`
-	Concurrency    []int          `yaml:"concurrency"`
-	Prompt         PromptConfig   `yaml:"prompt"`
-	ImagePrompt    string         `yaml:"image_prompt"`
-	Warmup         *bool          `yaml:"warmup"` // 指针以区分「显式 false」与「未配置」
-	WarmupDuration time.Duration  `yaml:"warmup_duration"`
-	Cooldown       *time.Duration `yaml:"cooldown"` // 指针以区分「显式 0s（档位间不等待）」与「未配置」
-	Output         string         `yaml:"output"`
-	NoExcel        bool           `yaml:"no_excel"`
-	NoTUI          bool           `yaml:"no_tui"`
-	Models         []ModelConfig  `yaml:"models"`
-	Tokens         []string       `yaml:"tokens"`
+	BaseURL        string              `yaml:"base_url"`
+	Duration       time.Duration       `yaml:"duration"`
+	Concurrency    []int               `yaml:"concurrency"`
+	Prompt         PromptConfig        `yaml:"prompt"`
+	ImagePrompt    string              `yaml:"image_prompt"`
+	Warmup         *bool               `yaml:"warmup"` // 指针以区分「显式 false」与「未配置」
+	WarmupDuration time.Duration       `yaml:"warmup_duration"`
+	Cooldown       *time.Duration      `yaml:"cooldown"` // 指针以区分「显式 0s（档位间不等待）」与「未配置」
+	Output         string              `yaml:"output"`
+	NoExcel        bool                `yaml:"no_excel"`
+	NoTUI          bool                `yaml:"no_tui"`
+	Models         []ModelConfig       `yaml:"models"`
+	Tokens         []string            `yaml:"tokens"`
+	TokenGroups    map[string][]string `yaml:"token_groups"`
 }
 
 // PromptConfig 描述文本端点的 prompt 生成方式。
@@ -66,8 +67,9 @@ type PromptConfig struct {
 
 // ModelConfig 描述一个待测模型。
 type ModelConfig struct {
-	Name     string `yaml:"name"`
-	Provider string `yaml:"provider"`
+	Name       string `yaml:"name"`
+	Provider   string `yaml:"provider"`
+	TokenGroup string `yaml:"token_group"`
 }
 
 // Load 从 path 读取 YAML 配置，填充默认值并做完整校验。
@@ -158,14 +160,18 @@ func (c *Config) validate() error {
 		}
 	}
 
-	var validTokens int
-	for _, t := range c.Tokens {
-		if strings.TrimSpace(t) != "" {
-			validTokens++
+	groups := c.normalizedTokenGroups()
+	for i, m := range c.Models {
+		group := strings.TrimSpace(m.TokenGroup)
+		if group == "" {
+			group = defaultTokenGroup
 		}
-	}
-	if validTokens == 0 {
-		return fmt.Errorf("tokens 为必填项，至少配置一个有效 token")
+		if len(groups[group]) == 0 {
+			if group == defaultTokenGroup {
+				return fmt.Errorf("models[%d] 未指定 token_group，但 tokens 中没有有效 token", i)
+			}
+			return fmt.Errorf("models[%d].token_group %q 不存在或不含有效 token", i, group)
+		}
 	}
 
 	return nil
@@ -173,18 +179,18 @@ func (c *Config) validate() error {
 
 // ToBenchmark 把校验通过的配置转换为 types.BenchmarkConfig。
 func (c *Config) ToBenchmark() types.BenchmarkConfig {
-	tokens := make([]string, 0, len(c.Tokens))
-	for _, t := range c.Tokens {
-		if s := strings.TrimSpace(t); s != "" {
-			tokens = append(tokens, s)
-		}
-	}
-
+	groups := c.normalizedTokenGroups()
 	models := make([]types.ModelSpec, 0, len(c.Models))
 	for _, m := range c.Models {
+		group := strings.TrimSpace(m.TokenGroup)
+		if group == "" {
+			group = defaultTokenGroup
+		}
 		models = append(models, types.ModelSpec{
-			Name:     strings.TrimSpace(m.Name),
-			Provider: types.Provider(strings.ToLower(strings.TrimSpace(m.Provider))),
+			Name:       strings.TrimSpace(m.Name),
+			Provider:   types.Provider(strings.ToLower(strings.TrimSpace(m.Provider))),
+			TokenGroup: group,
+			Tokens:     append([]string(nil), groups[group]...),
 		})
 	}
 
@@ -192,7 +198,6 @@ func (c *Config) ToBenchmark() types.BenchmarkConfig {
 
 	return types.BenchmarkConfig{
 		BaseURL:          c.BaseURL,
-		Tokens:           tokens,
 		Models:           models,
 		Concurrency:      append([]int(nil), c.Concurrency...),
 		Duration:         c.Duration,
@@ -205,4 +210,30 @@ func (c *Config) ToBenchmark() types.BenchmarkConfig {
 		WarmupDuration:   c.WarmupDuration,
 		CooldownDuration: *c.Cooldown, // applyDefaults 保证非 nil
 	}
+}
+
+const defaultTokenGroup = "default"
+
+// normalizedTokenGroups 把旧版 tokens 映射为默认分组，并裁剪各组中的空 token。
+func (c *Config) normalizedTokenGroups() map[string][]string {
+	groups := make(map[string][]string, len(c.TokenGroups)+1)
+	for name, tokens := range c.TokenGroups {
+		group := strings.TrimSpace(name)
+		if group == "" {
+			continue
+		}
+		groups[group] = cleanTokens(tokens)
+	}
+	groups[defaultTokenGroup] = cleanTokens(c.Tokens)
+	return groups
+}
+
+func cleanTokens(tokens []string) []string {
+	cleaned := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if token = strings.TrimSpace(token); token != "" {
+			cleaned = append(cleaned, token)
+		}
+	}
+	return cleaned
 }

@@ -48,7 +48,7 @@ cp configs/eval.example.yml eval.yml   # 修改 target 的 base_url / api_key / 
 
 # performance：运行一次压测
 cd cmd/performance
-cp configs/config.example.yaml config.yaml   # 修改 models / tokens / base_url / concurrency
+cp configs/config.example.yaml config.yaml   # 修改 models / token_groups / base_url / concurrency
 go run . -config config.yaml
 ```
 

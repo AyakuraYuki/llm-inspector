@@ -101,11 +101,12 @@ func (r *TUIReporter) PreflightResult(model types.ModelSpec, m types.RequestMetr
 	defer s.mu.Unlock()
 	if m.Success {
 		s.preflightOK++
-		s.AppendLog(fmt.Sprintf("[预检 OK] %s (%s) %.0fms",
-			model.Name, model.Provider, float64(m.TotalLatency)/float64(time.Millisecond)))
+		s.AppendLog(fmt.Sprintf("[预检 OK] %s (%s, group=%s) %.0fms",
+			model.Name, model.Provider, model.TokenGroup, float64(m.TotalLatency)/float64(time.Millisecond)))
 	} else {
 		s.preflightFail++
-		s.AppendLog(fmt.Sprintf("[预检 FAIL] %s (%s) %s", model.Name, model.Provider, oneLine(m.Error, 120)))
+		s.AppendLog(fmt.Sprintf("[预检 FAIL] %s (%s, group=%s) %s",
+			model.Name, model.Provider, model.TokenGroup, oneLine(m.Error, 120)))
 	}
 }
 
@@ -186,8 +187,8 @@ func (r *TUIReporter) LevelEnd(agg types.AggregatedMetrics) {
 	if agg.Total > 0 {
 		errPct = float64(agg.Failed) / float64(agg.Total) * 100
 	}
-	s.AppendLog(fmt.Sprintf("[%d/%d] %s c=%d done: %d req, %d ok, %d failed (%.1f%%)",
-		s.seq, s.total, agg.Model, agg.Concurrency, agg.Total, agg.Success, agg.Failed, errPct))
+	s.AppendLog(fmt.Sprintf("[%d/%d] %s [%s] c=%d done: %d req, %d ok, %d failed (%.1f%%)",
+		s.seq, s.total, agg.Model, agg.TokenGroup, agg.Concurrency, agg.Total, agg.Success, agg.Failed, errPct))
 }
 
 func (r *TUIReporter) CooldownStart(d time.Duration) {
@@ -315,11 +316,11 @@ func (m tuiModel) View() string {
 		phaseLines = append(phaseLines, styleWarn.Render("● 预检")+"  逐个模型验证连通性...")
 	case phaseWarmup:
 		phaseLines = append(phaseLines,
-			styleWarn.Render("● 预热")+fmt.Sprintf("  [%d/%d] %s (%s)  并发=%d", seq, total, model.Name, model.Provider, conc),
+			styleWarn.Render("● 预热")+fmt.Sprintf("  [%d/%d] %s (%s)  group=%s  并发=%d", seq, total, model.Name, model.Provider, model.TokenGroup, conc),
 			progressLine(phaseStart, deadline, inner))
 	case phaseRunning:
 		phaseLines = append(phaseLines,
-			styleOK.Render("● 压测")+fmt.Sprintf("  [%d/%d] %s (%s)  并发=%d", seq, total, model.Name, model.Provider, conc),
+			styleOK.Render("● 压测")+fmt.Sprintf("  [%d/%d] %s (%s)  group=%s  并发=%d", seq, total, model.Name, model.Provider, model.TokenGroup, conc),
 			progressLine(phaseStart, deadline, inner))
 		if total > 0 {
 			levelFrac := clamp01(time.Since(phaseStart).Seconds() / max(deadline.Sub(phaseStart).Seconds(), 0.001))

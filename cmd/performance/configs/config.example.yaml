@@ -1,14 +1,9 @@
 # performance 压测工具配置文件
 # 用法：performance -config config.yaml
 
-# API 服务地址
-base_url: "https://api.openai.com"
-
-# 每个并发档位的测试持续时长（Go duration，如 60s、2m、1m30s）
-duration: 60s
-
-# 并发档位列表，逐档运行
-concurrency: [10, 20, 30, 40, 50, 75, 100, 120, 150]
+base_url: "https://api.openai.com"                    # API 服务地址
+duration: 60s                                         # 每个并发档位的测试时长（time.Duration，如 60s、2m、1m30s）
+concurrency: [10, 20, 30, 40, 50, 75, 100, 120, 150]  # 并发档位列表，逐档运行
 
 # 文本端点的 prompt 配置
 prompt:
@@ -25,28 +20,35 @@ prompt:
 # 图片生成端点的测试 prompt
 image_prompt: "A single red circle on white background, minimal flat design."
 
-# 正式测试前是否执行预热阶段（并发=10，时长由 warmup_duration 控制）
-warmup: true
-# 预热阶段持续时长
-warmup_duration: 10s
+warmup: true          # 正式测试前是否执行预热阶段（并发=10，时长由 warmup_duration 控制）
+warmup_duration: 10s  # 预热阶段持续时长
+cooldown: 5s          # 每个并发档位之间的冷却等待时间
 
-# 每个并发档位之间的冷却等待时间
-cooldown: 5s
-
-# Excel 输出路径（留空则自动生成时间戳文件名，如 bench-20260618T150405.xlsx）
-output: ""
-# 跳过 Excel 导出，仅打印终端报告
-no_excel: false
-# 禁用 TUI，使用纯文本控制台输出（stdout 非终端时自动禁用）
-no_tui: false
+output: ""       # Excel 输出路径（留空则自动生成时间戳文件名，如 bench-20260618T150405.xlsx）
+no_excel: false  # 跳过 Excel 导出，仅打印终端报告
+no_tui: false    # 禁用 TUI，使用纯文本控制台输出（stdout 非终端时自动禁用）
 
 # 待测模型列表（必填，至少一个）
+# token_group 决定该模型使用哪个 token 池；同一模型可以重复配置，分别测试不同渠道分组。
+# 警告：如果配置了 token_group，缺少相应组的 tokens 时不会使用兜底的 default 分组。
 models:
   - name: "gpt-5.6-sol"
     provider: "openai"
+    token_group: "openai-channel"
   - name: "claude-sonnet-5"
     provider: "anthropic"
+    token_group: "anthropic-channel"
 
-# Bearer token 列表（必填，至少一个；多个时每次请求随机选用）
-tokens:
-  - "sk-abcdef0123456789"
+# 命名 token 分组。每个分组对应 NewAPI 中一组渠道关联的 Bearer token。
+# 同一分组内的多个 token 仍会在每次请求时随机选取。
+token_groups:
+  openai-channel:
+    - "sk-openai-abcdef0123456789"
+  anthropic-channel:
+    - "sk-anthropic-abcdef0123456789"
+    - "sk-anthropic-fedcba9876543210"
+
+# 兼容旧配置：未填写 models[].token_group 的模型使用 default 分组。
+# 使用 token_groups 时可以不配置 tokens，或者配置以作为兜底。
+#tokens:
+#  - "sk-default-abcdef0123456789"

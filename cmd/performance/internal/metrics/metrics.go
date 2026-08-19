@@ -14,6 +14,7 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 	agg := types.AggregatedMetrics{
 		Model:       result.Model,
 		Provider:    result.Provider,
+		TokenGroup:  result.TokenGroup,
 		Concurrency: result.Concurrency,
 		Start:       result.Start,
 		Elapsed:     result.Elapsed,

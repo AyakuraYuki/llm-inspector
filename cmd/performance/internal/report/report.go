@@ -30,8 +30,8 @@ func printOne(agg types.AggregatedMetrics) {
 	}
 
 	fmt.Printf("\n%s\n", strings.Repeat("-", colWidth))
-	fmt.Printf("  Model: %s  |  Provider: %s  |  Concurrency: %d\n",
-		agg.Model, agg.Provider, agg.Concurrency)
+	fmt.Printf("  Model: %s  |  Provider: %s  |  Token Group: %s  |  Concurrency: %d\n",
+		agg.Model, agg.Provider, agg.TokenGroup, agg.Concurrency)
 	fmt.Printf("  Elapsed: %s  |  Window: %s  |  Requests: %d total, %d ok, %d failed (%.1f%% error)\n",
 		formatDuration(agg.Elapsed), formatDuration(agg.Window), agg.Total, agg.Success, agg.Failed, errPct)
 	fmt.Printf("%s\n", strings.Repeat("-", colWidth))
@@ -104,21 +104,26 @@ func printSummaryTable(results []types.AggregatedMetrics) {
 	fmt.Printf("\n%s\n", strings.Repeat("=", colWidth))
 	fmt.Println("  SUMMARY TABLE")
 	fmt.Printf("%s\n", strings.Repeat("-", colWidth))
-	fmt.Printf("  %-26s  %-5s  %-8s  %-8s  %-10s  %-10s  %-10s\n",
-		"Model (Provider)", "Conc", "QPS", "TPS", "TTFT P50", "TTFT P95", "I/O Ratio")
+	fmt.Printf("  %-22s  %-16s  %-5s  %-8s  %-8s  %-10s  %-10s  %-10s\n",
+		"Model (Provider)", "Token Group", "Conc", "QPS", "TPS", "TTFT P50", "TTFT P95", "I/O Ratio")
 	fmt.Printf("  %s\n", strings.Repeat("-", colWidth-2))
 
 	for _, agg := range results {
 		label := fmt.Sprintf("%s (%s)", agg.Model, agg.Provider)
-		if len(label) > 26 {
-			label = label[:23] + "..."
+		if len(label) > 22 {
+			label = label[:19] + "..."
+		}
+		group := agg.TokenGroup
+		if len(group) > 16 {
+			group = group[:13] + "..."
 		}
 		tpsStr := "N/A"
 		if agg.TPS > 0 {
 			tpsStr = fmt.Sprintf("%.1f", agg.TPS)
 		}
-		fmt.Printf("  %-26s  %-5d  %-8.3f  %-8s  %-10s  %-10s  %-10s\n",
+		fmt.Printf("  %-22s  %-16s  %-5d  %-8.3f  %-8s  %-10s  %-10s  %-10s\n",
 			label,
+			group,
 			agg.Concurrency,
 			agg.QPS,
 			tpsStr,

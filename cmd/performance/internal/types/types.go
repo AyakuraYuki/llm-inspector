@@ -51,8 +51,10 @@ const (
 
 // ModelSpec 保存模型名称和协议类型
 type ModelSpec struct {
-	Name     string
-	Provider Provider
+	Name       string
+	Provider   Provider
+	TokenGroup string
+	Tokens     []string
 }
 
 // RequestMetrics 记录单次请求的原始指标
@@ -71,7 +73,6 @@ type RequestMetrics struct {
 // BenchmarkConfig 保存测试参数
 type BenchmarkConfig struct {
 	BaseURL          string
-	Tokens           []string
 	Models           []ModelSpec
 	Concurrency      []int
 	Duration         time.Duration
@@ -85,9 +86,13 @@ type BenchmarkConfig struct {
 	CooldownDuration time.Duration
 }
 
-// PickToken 从 Tokens 列表中随机返回一个 token。
-func (c *BenchmarkConfig) PickToken() string {
-	return c.Tokens[rand.IntN(len(c.Tokens))]
+// PickToken 从该模型关联的 token 分组中随机返回一个 token。
+func (m ModelSpec) PickToken() string {
+	l := len(m.Tokens)
+	if l == 1 {
+		return m.Tokens[0] // 快速返回
+	}
+	return m.Tokens[rand.IntN(l)]
 }
 
 // BuildPrompt 返回本次文本请求使用的 prompt。DynamicPrompt、CodexPrompt、Prompt
@@ -109,6 +114,7 @@ func (c *BenchmarkConfig) BuildPrompt() string {
 type BenchmarkResult struct {
 	Model       string
 	Provider    Provider
+	TokenGroup  string
 	Concurrency int
 	Start       time.Time     // 档位开始时刻
 	Window      time.Duration // 名义压测时长（吞吐统计窗口的上限）
@@ -144,6 +150,7 @@ type FloatStats struct {
 type AggregatedMetrics struct {
 	Model         string
 	Provider      Provider
+	TokenGroup    string
 	Concurrency   int
 	Start         time.Time     // 档位开始时刻，用于报表排查时段性波动
 	Elapsed       time.Duration // 实际运行时长（含 deadline 后在途请求的排空期）

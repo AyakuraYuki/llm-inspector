@@ -21,11 +21,11 @@ func (r *ConsoleReporter) PreflightStart(int) {
 
 func (r *ConsoleReporter) PreflightResult(model types.ModelSpec, m types.RequestMetrics) {
 	if m.Success {
-		fmt.Printf("  [OK]   %-34s (%s) → %.0fms\n",
-			model.Name, string(model.Provider), float64(m.TotalLatency)/float64(time.Millisecond))
+		fmt.Printf("  [OK]   %-34s (%s, group=%s) → %.0fms\n",
+			model.Name, string(model.Provider), model.TokenGroup, float64(m.TotalLatency)/float64(time.Millisecond))
 	} else {
-		fmt.Printf("  [FAIL] %-34s (%s) → %s\n",
-			model.Name, string(model.Provider), m.Error)
+		fmt.Printf("  [FAIL] %-34s (%s, group=%s) → %s\n",
+			model.Name, string(model.Provider), model.TokenGroup, m.Error)
 	}
 }
 
@@ -40,7 +40,7 @@ func (r *ConsoleReporter) WarmupStart(concurrency int, duration time.Duration) {
 }
 
 func (r *ConsoleReporter) WarmupModel(_, _ int, model types.ModelSpec, _ time.Time) {
-	fmt.Printf("  预热: %s (%s)\n", model.Name, string(model.Provider))
+	fmt.Printf("  预热: %s (%s, group=%s)\n", model.Name, string(model.Provider), model.TokenGroup)
 }
 
 func (r *ConsoleReporter) WarmupEnd() {
@@ -48,8 +48,8 @@ func (r *ConsoleReporter) WarmupEnd() {
 }
 
 func (r *ConsoleReporter) LevelStart(seq, total int, model types.ModelSpec, concurrency int, deadline time.Time) {
-	fmt.Printf("\n[%d/%d] Model=%-28s Provider=%-12s Concurrency=%d\n",
-		seq, total, model.Name, string(model.Provider), concurrency)
+	fmt.Printf("\n[%d/%d] Model=%-28s Provider=%-12s Group=%-16s Concurrency=%d\n",
+		seq, total, model.Name, string(model.Provider), model.TokenGroup, concurrency)
 
 	r.counters.Reset()
 	r.deadline.Store(deadline.UnixNano())

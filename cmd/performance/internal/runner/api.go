@@ -185,7 +185,7 @@ func doAnthropicRequest(ctx context.Context, cfg types.BenchmarkConfig, model ty
 		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.PickToken())
+	req.Header.Set("Authorization", "Bearer "+model.PickToken())
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("Accept", "text/event-stream")
 
@@ -231,7 +231,7 @@ func doOpenAIRequest(ctx context.Context, cfg types.BenchmarkConfig, model types
 		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.PickToken())
+	req.Header.Set("Authorization", "Bearer "+model.PickToken())
 	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := sharedClient.Do(req)
@@ -276,7 +276,7 @@ func doGeminiRequest(ctx context.Context, cfg types.BenchmarkConfig, model types
 		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.PickToken())
+	req.Header.Set("Authorization", "Bearer "+model.PickToken())
 	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := sharedClient.Do(req)
@@ -317,7 +317,7 @@ func doImageRequest(ctx context.Context, cfg types.BenchmarkConfig, model types.
 		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.PickToken())
+	req.Header.Set("Authorization", "Bearer "+model.PickToken())
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
@@ -362,7 +362,7 @@ func doOpenAIResponseRequest(ctx context.Context, cfg types.BenchmarkConfig, mod
 		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.PickToken())
+	req.Header.Set("Authorization", "Bearer "+model.PickToken())
 	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := sharedClient.Do(req)

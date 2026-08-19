@@ -49,7 +49,7 @@ cp configs/eval.example.yml eval.yml   # edit target.base_url / api_key / model
 
 # performance: run a load test
 cd cmd/performance
-cp configs/config.example.yaml config.yaml   # edit models / tokens / base_url / concurrency
+cp configs/config.example.yaml config.yaml   # edit models / token_groups / base_url / concurrency
 go run . -config config.yaml
 ```
 

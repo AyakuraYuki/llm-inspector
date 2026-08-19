@@ -185,6 +185,7 @@ func runConcurrent(ctx context.Context, cfg types.BenchmarkConfig, model types.M
 	return types.BenchmarkResult{
 		Model:       model.Name,
 		Provider:    model.Provider,
+		TokenGroup:  model.TokenGroup,
 		Concurrency: concurrency,
 		Start:       start,
 		Window:      cfg.Duration,

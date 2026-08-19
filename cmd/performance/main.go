@@ -158,7 +158,7 @@ func printHeader(cfg types.BenchmarkConfig) {
 	fmt.Printf("\nNewAPI API Benchmark\n")
 	fmt.Printf("========================\n")
 	fmt.Printf("Base URL    : %s\n", cfg.BaseURL)
-	fmt.Printf("Tokens      : %d token(s)\n", len(cfg.Tokens))
+	fmt.Printf("Tokens      : model-scoped token groups\n")
 	fmt.Printf("Duration    : %s per concurrency level\n", cfg.Duration)
 	fmt.Printf("Concurrency : %v\n", cfg.Concurrency)
 	warmupLabel := "disabled"
@@ -169,7 +169,7 @@ func printHeader(cfg types.BenchmarkConfig) {
 	fmt.Printf("Cooldown    : %s between levels\n", cfg.CooldownDuration)
 	fmt.Printf("Models (%d):\n", len(cfg.Models))
 	for _, m := range cfg.Models {
-		fmt.Printf("  - %-32s [%s]\n", m.Name, m.Provider)
+		fmt.Printf("  - %-32s [%s]  group=%s  (%d keys)\n", m.Name, m.Provider, m.TokenGroup, len(m.Tokens))
 	}
 	switch {
 	case cfg.DynamicPrompt:

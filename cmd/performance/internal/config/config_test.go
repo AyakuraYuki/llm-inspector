@@ -119,10 +119,88 @@ tokens:
 	assert.Equal(t, "a blue square", bench.ImagePrompt)
 	assert.Equal(t, 3*time.Second, bench.WarmupDuration)
 	assert.Equal(t, 2*time.Second, bench.CooldownDuration)
-	// token 前后空白被裁剪、空 token 被丢弃
-	assert.Equal(t, []string{"tok-1", "tok-2"}, bench.Tokens)
+	// token 前后空白被裁剪、空 token 被丢弃，并绑定到默认分组模型。
 	require.Len(t, bench.Models, 1)
+	assert.Equal(t, []string{"tok-1", "tok-2"}, bench.Models[0].Tokens)
+	assert.Equal(t, "default", bench.Models[0].TokenGroup)
 	assert.Equal(t, types.Provider("anthropic"), bench.Models[0].Provider)
+}
+
+func TestLoad_TokenGroups_BindModelsToTheirOwnPools(t *testing.T) {
+	path := writeTempConfig(t, `
+models:
+  - name: claude-sonnet-5
+    provider: anthropic
+    token_group: vertex
+  - name: claude-sonnet-5
+    provider: anthropic
+    token_group: bedrock
+  - name: gpt-5.6-sol
+    provider: openai
+tokens: [default-key]
+token_groups:
+  vertex: [" vertex-1 ", "", vertex-2]
+  bedrock: [bedrock-1]
+`)
+	cfg, err := Load(path)
+	require.NoError(t, err)
+
+	bench := cfg.ToBenchmark()
+	require.Len(t, bench.Models, 3)
+	assert.Equal(t, "vertex", bench.Models[0].TokenGroup)
+	assert.Equal(t, []string{"vertex-1", "vertex-2"}, bench.Models[0].Tokens)
+	assert.Equal(t, "bedrock", bench.Models[1].TokenGroup)
+	assert.Equal(t, []string{"bedrock-1"}, bench.Models[1].Tokens)
+	assert.Equal(t, "default", bench.Models[2].TokenGroup)
+	assert.Equal(t, []string{"default-key"}, bench.Models[2].Tokens)
+}
+
+func TestLoad_TokenGroupErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{
+			name: "unknown group",
+			content: `
+models:
+  - name: m
+    provider: openai
+    token_group: missing
+`,
+			wantErr: "token_group \"missing\" 不存在或不含有效 token",
+		},
+		{
+			name: "default group without tokens",
+			content: `
+models:
+  - name: m
+    provider: openai
+`,
+			wantErr: "未指定 token_group，但 tokens 中没有有效 token",
+		},
+		{
+			name: "empty named group",
+			content: `
+models:
+  - name: m
+    provider: openai
+    token_group: vertex
+token_groups:
+  vertex: ["  "]
+`,
+			wantErr: "token_group \"vertex\" 不存在或不含有效 token",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeTempConfig(t, tc.content))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
 }
 
 func TestLoad_CodexMode(t *testing.T) {
@@ -207,7 +285,7 @@ models:
 tokens:
   - "   "
 `,
-			wantErr: "tokens 为必填项",
+			wantErr: "未指定 token_group，但 tokens 中没有有效 token",
 		},
 		{
 			name: "non-positive concurrency",
