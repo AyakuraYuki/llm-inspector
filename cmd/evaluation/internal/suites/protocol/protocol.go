@@ -115,12 +115,12 @@ func checkStreaming(ctx context.Context, p provider.Provider) types.CheckResult 
 			"finish_reason": resp.FinishReason,
 		}
 		detail := strings.Join(problems, "; ")
-		// 伪流式/思考延迟提示：首内容 token 到达时几乎全部耗时已过去
+		// 伪流式转发提示：首内容 token 到达时几乎全部耗时已过去
 		if resp.TTFTMS > 0 && resp.LatencyMS > 0 {
 			ratio := resp.TTFTMS / resp.LatencyMS
 			metrics["ttft_ratio"] = ratio
 			if ratio > 0.9 && resp.LatencyMS > 2000 {
-				note := fmt.Sprintf("首内容 token 占总耗时 %.0f%%（疑似伪流式转发或思考型模型，流式对降低体感延迟无效）", ratio*100)
+				note := fmt.Sprintf("首内容 token 占总耗时 %.0f%%（疑似伪流式转发，流式对降低体感延迟无效）", ratio*100)
 				if detail == "" {
 					detail = note
 				} else {

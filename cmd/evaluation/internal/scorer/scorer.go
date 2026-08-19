@@ -157,7 +157,7 @@ func scoreNumeric(spec *Spec, out string) Verdict {
 }
 
 func scoreJSONValid(out string) Verdict {
-	s := stripCodeFence(out)
+	s := util.StripCodeFence(out)
 	if json.Valid([]byte(s)) {
 		return Verdict{Score: 1, Reason: "合法 JSON"}
 	}
@@ -165,7 +165,7 @@ func scoreJSONValid(out string) Verdict {
 }
 
 func scoreJSONSchema(spec *Spec, out string) Verdict {
-	s := stripCodeFence(out)
+	s := util.StripCodeFence(out)
 	var obj any
 	if err := json.Unmarshal([]byte(s), &obj); err != nil {
 		return Verdict{Score: 0, Reason: "输出不是合法 JSON"}
@@ -229,16 +229,4 @@ func scoreLowercase(out string) Verdict {
 		return Verdict{Score: 1, Reason: "全部小写"}
 	}
 	return Verdict{Score: 0, Reason: "存在大写字符"}
-}
-
-// stripCodeFence 去掉 ```json ... ``` 围栏。
-func stripCodeFence(s string) string {
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") {
-		if i := strings.Index(s, "\n"); i >= 0 {
-			s = s[i+1:]
-		}
-		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
-	}
-	return strings.TrimSpace(s)
 }

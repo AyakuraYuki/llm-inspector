@@ -285,6 +285,9 @@ func (c *anthropicClient) Stream(ctx context.Context, req *Request) (*Result, er
 					}
 					sb.WriteString(ev.Delta.Text)
 				case "thinking_delta":
+					if r.TTFTMS < 0 && ev.Delta.Thinking != "" {
+						r.TTFTMS = msSince(start)
+					}
 					rb.WriteString(ev.Delta.Thinking)
 				case "input_json_delta":
 					toolArgs.WriteString(ev.Delta.PartialJSON)

@@ -176,9 +176,11 @@ func (p *openaiProvider) requestOptions(req *Request) []option.RequestOption {
 }
 
 // extraString 从 SDK 响应的 ExtraFields 中取字符串字段（如方言的 reasoning_content）。
+// 注意：SDK 对未知字段标记为 invalid，但 Raw() 仍保留原始 JSON（含引号），
+// 因此不能依赖 Valid()，只判断字段是否存在。
 func extraString(fields map[string]respjson.Field, key string) string {
 	f, ok := fields[key]
-	if !ok || !f.Valid() {
+	if !ok {
 		return ""
 	}
 	var s string
@@ -225,7 +227,8 @@ func (p *openaiProvider) Stream(ctx context.Context, req *Request) (*Result, err
 	for stream.Next() {
 		chunk := stream.Current()
 		r.Chunks++
-		if r.TTFTMS < 0 && len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+		if r.TTFTMS < 0 && len(chunk.Choices) > 0 &&
+			(chunk.Choices[0].Delta.Content != "" || extraString(chunk.Choices[0].Delta.JSON.ExtraFields, "reasoning_content") != "") {
 			r.TTFTMS = msSince(start)
 		}
 		if len(chunk.Choices) > 0 {

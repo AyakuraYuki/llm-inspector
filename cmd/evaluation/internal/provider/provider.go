@@ -131,7 +131,7 @@ type Result struct {
 	PromptTokens     int64
 	CompletionTokens int64
 	Chunks           int     // 流式时的 SSE 事件数
-	TTFTMS           float64 // 流式时为首 token 延迟
+	TTFTMS           float64 // 流式时为首个有内容 chunk（含思考内容）到达延迟；未捕获到任何内容时为 -1
 	LatencyMS        float64
 }
 

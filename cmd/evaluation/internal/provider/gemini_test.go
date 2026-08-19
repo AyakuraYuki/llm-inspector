@@ -58,10 +58,10 @@ func newGeminiServer(t *testing.T) *httptest.Server {
 			return
 		}
 
-		// 流式
+		// 流式（首 chunk 带 thought part：思考内容应先于正文到达）
 		if action == "streamGenerateContent" {
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"你\"}]}}]}\n\n")
+			fmt.Fprint(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"让我想想……\",\"thought\":true},{\"text\":\"你\"}]}}]}\n\n")
 			fmt.Fprint(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"好\"}]}}]}\n\n")
 			fmt.Fprintf(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"！\"}]},\"finishReason\":\"STOP\"}],%s}\n\n", usage)
 			return
@@ -159,6 +159,9 @@ func TestGeminiStream(t *testing.T) {
 	}
 	if r.TTFTMS < 0 {
 		t.Error("未记录 TTFT")
+	}
+	if r.ReasoningContent != "让我想想……" {
+		t.Errorf("ReasoningContent = %q（thought part 应进入思考内容）", r.ReasoningContent)
 	}
 	if r.Chunks != 3 {
 		t.Errorf("Chunks = %d, want 3", r.Chunks)

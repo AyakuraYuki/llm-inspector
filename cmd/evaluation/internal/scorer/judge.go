@@ -72,7 +72,7 @@ func (j *Judge) Score(ctx context.Context, question, answer, rubric string) (Ver
 		}
 	}
 	var jr judgeResponse
-	if err = json.Unmarshal([]byte(stripCodeFence(strings.TrimSpace(resp.Content))), &jr); err != nil {
+	if err = json.Unmarshal([]byte(util.StripCodeFence(strings.TrimSpace(resp.Content))), &jr); err != nil {
 		return Verdict{}, fmt.Errorf("裁判输出解析失败: %q", util.TruncateString(resp.Content, 120))
 	}
 	score := jr.Score / 10

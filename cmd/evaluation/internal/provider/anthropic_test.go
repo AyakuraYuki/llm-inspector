@@ -158,6 +158,40 @@ func TestAnthropicStream(t *testing.T) {
 	}
 }
 
+// TestAnthropicStreamThinkingTTFT 验证思考内容先于正文到达时，
+// TTFT 以首个 thinking_delta 为准（真流式语义）。
+func TestAnthropicStreamThinkingTTFT(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\n")
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"让我想想……\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\n\n")
+		fmt.Fprint(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n")
+		fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+	c := NewAnthropic(srv.URL, "good-key", "claude-test-1", 5*time.Second)
+
+	r, err := c.Stream(t.Context(), &Request{
+		Messages:  []Message{{Role: "user", Content: "你好"}},
+		MaxTokens: 16,
+	})
+	if err != nil {
+		t.Fatalf("Stream 失败: %v", err)
+	}
+	if r.Content != "你好" {
+		t.Errorf("Content = %q", r.Content)
+	}
+	if r.ReasoningContent != "让我想想……" {
+		t.Errorf("ReasoningContent = %q", r.ReasoningContent)
+	}
+	if r.TTFTMS < 0 {
+		t.Error("思考首 chunk 后应已记录 TTFT")
+	}
+}
+
 func TestAnthropicModels(t *testing.T) {
 	srv := newAnthropicServer(t)
 	defer srv.Close()

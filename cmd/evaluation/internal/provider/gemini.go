@@ -232,11 +232,14 @@ func geminiFinishReason(s string) string {
 }
 
 // applyGeminiResponse 把 Gemini 响应（完整或流式 chunk）合并进 Result。
-func applyGeminiResponse(r *Result, resp *geminiResponse, onText func(string)) {
+// onText 接收正文文本增量；onFirst 在首个有内容的文本（含思考）到达时回调，
+// 供流式调用记录 TTFT。非流式调用（Chat）传 no-op 即可。
+func applyGeminiResponse(r *Result, resp *geminiResponse, onText, onFirst func(string)) {
 	if len(resp.Candidates) > 0 {
 		cand := resp.Candidates[0]
 		for _, part := range cand.Content.Parts {
 			if part.Thought && part.Text != "" {
+				onFirst(part.Text)
 				r.ReasoningContent += part.Text
 			}
 		}
@@ -244,6 +247,7 @@ func applyGeminiResponse(r *Result, resp *geminiResponse, onText func(string)) {
 		for i := len(cand.Content.Parts) - 1; i >= 0; i-- {
 			part := cand.Content.Parts[i]
 			if part.Text != "" && !part.Thought {
+				onFirst(part.Text)
 				onText(part.Text)
 				break
 			}
@@ -299,7 +303,8 @@ func (c *geminiClient) Chat(ctx context.Context, req *Request) (*Result, error) 
 		return nil, err
 	}
 	r := &Result{LatencyMS: msSince(start)}
-	applyGeminiResponse(r, &resp, func(t string) { r.Content += t })
+	noop := func(string) {}
+	applyGeminiResponse(r, &resp, func(t string) { r.Content += t }, noop)
 	return r, nil
 }
 
@@ -318,12 +323,15 @@ func (c *geminiClient) Stream(ctx context.Context, req *Request) (*Result, error
 				return nil // 忽略无法解析的 chunk
 			}
 			r.Chunks++
-			applyGeminiResponse(r, &chunk, func(t string) {
+			onFirst := func(t string) {
 				if r.TTFTMS < 0 && t != "" {
 					r.TTFTMS = msSince(start)
 				}
+			}
+			applyGeminiResponse(r, &chunk, func(t string) {
+				onFirst(t)
 				sb.WriteString(t)
-			})
+			}, onFirst)
 			return nil
 		})
 	r.Content = sb.String()

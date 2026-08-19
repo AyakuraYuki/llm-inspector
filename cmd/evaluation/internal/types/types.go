@@ -77,17 +77,20 @@ type TargetInfo struct {
 
 // Report 是一次评测运行的完整报告。
 type Report struct {
-	Target     TargetInfo    `json:"target"`
-	Tool       string        `json:"tool"`
-	Version    string        `json:"version"`
-	StartedAt  string        `json:"started_at"`
-	FinishedAt string        `json:"finished_at"`
-	Verdict    string        `json:"verdict"`
-	Layers     []LayerResult `json:"layers"`
-	TotalScore float64       `json:"total_score"`
+	Target     TargetInfo      `json:"target"`
+	Tool       string          `json:"tool"`
+	Version    string          `json:"version"`
+	StartedAt  string          `json:"started_at"`
+	FinishedAt string          `json:"finished_at"`
+	Verdict    string          `json:"verdict"`
+	Layers     []LayerResult   `json:"layers"`
+	TotalScore float64         `json:"total_score"`
+	Sections   []SectionResult `json:"sections"`          // 三条体检结论
+	Summary    *JudgeSummary   `json:"summary,omitempty"` // 裁判总结，judge 未配置时为 nil
 }
 
-// LayerWeight 各层在总评中的权重。
+// LayerWeight 各层在加权参考分（TotalScore）中的权重。
+// 注意：该参考分不参与判定，判定以 Sections 与 Verdict 为准。
 var LayerWeight = map[string]float64{
 	"L1": 0.10,
 	"L2": 0.15,
@@ -95,4 +98,37 @@ var LayerWeight = map[string]float64{
 	"L4": 0.15,
 	"L5": 0.15,
 	"L6": 0.15,
+}
+
+// ReportSection 标识三条体检结论之一。
+type ReportSection string
+
+const (
+	// SectionAccess 接入与合规：L1/L2/L6。
+	SectionAccess ReportSection = "access"
+	// SectionPerf 性能画像：L5。
+	SectionPerf ReportSection = "performance"
+	// SectionSmoke 可用性冒烟：L3/L4。
+	SectionSmoke ReportSection = "smoke"
+)
+
+// SectionResult 是单个决策问题的结论。
+// Status 取值：pass（通过）/ warn（有短板，不阻断接入）/ fail（不满足接入条件）/ na（未评估）。
+type SectionResult struct {
+	Section   ReportSection `json:"section"`
+	Title     string        `json:"title"`
+	Layers    []string      `json:"layers"`
+	Status    string        `json:"status"`
+	Score     float64       `json:"score"`
+	Threshold float64       `json:"threshold"`
+	Reasons   []string      `json:"reasons,omitempty"`
+}
+
+// JudgeSummary 是裁判模型生成的报告总结。
+// Status 取值：ok / error；judge 未配置时 Report.Summary 为 nil。
+type JudgeSummary struct {
+	Status string `json:"status"`
+	Text   string `json:"text,omitempty"`
+	Error  string `json:"error,omitempty"`
+	Model  string `json:"model,omitempty"`
 }

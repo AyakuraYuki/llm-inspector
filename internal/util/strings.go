@@ -1,5 +1,7 @@
 package util
 
+import "strings"
+
 // TruncateString 按 rune 截断字符串到 n 个字符，超长时追加省略号。
 func TruncateString(s string, n int) string {
 	r := []rune(s)
@@ -7,4 +9,16 @@ func TruncateString(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// StripCodeFence 去掉 ```json ... ``` 之类的 Markdown 代码围栏。
+func StripCodeFence(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```") {
+		if i := strings.Index(s, "\n"); i >= 0 {
+			s = s[i+1:]
+		}
+		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
+	}
+	return strings.TrimSpace(s)
 }
