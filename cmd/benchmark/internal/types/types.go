@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/sashabaranov/go-openai"
+	"github.com/AyakuraYuki/llm-inspector/pkg/go-openai"
 )
 
 // Question 表示一个问题及其答案

@@ -7,8 +7,12 @@ model: "gpt-4"                        # 待测模型名称
 max_tokens: 65536                     # 最大输出token数限制
 max_workers: 1                        # 测试进程数
 reasoning_effort: high                # 思考强度，支持 low | medium | high | max (部分模型)，具体参考模型规格
-#temperature: 1.0                     # 温度
-#top_p: 0.95                          # 随机性
+temperature: 1.0                      # 温度
+top_p: 0.95                           # 随机性
+
+# 额外的思考配置，会原样注入 OpenAI 兼容协议请求体顶层的 thinking 字段
+extra_thinking: |
+  {"type":"enabled","clear_thinking":true}
 
 # 使用预设数据集，数据集来自 huggingface
 dataset:

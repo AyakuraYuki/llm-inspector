@@ -8,12 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sashabaranov/go-openai"
-
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/reporter"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/types"
 	"github.com/AyakuraYuki/llm-inspector/internal/logger"
+	"github.com/AyakuraYuki/llm-inspector/pkg/go-openai"
 )
 
 const TimeoutPerRequest = 30 * time.Minute
@@ -106,7 +105,10 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 		req.Temperature = *benchmarkCfg.Temperature
 	}
 	if benchmarkCfg.TopP != nil {
-		req.Temperature = *benchmarkCfg.TopP
+		req.TopP = *benchmarkCfg.TopP
+	}
+	if len(benchmarkCfg.Thinking) > 0 {
+		req.THINKING = benchmarkCfg.Thinking
 	}
 	result.RawRequest = &req
 

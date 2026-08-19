@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -25,6 +26,7 @@ type Config struct {
 	Dataset         dataset.Config   `yaml:"dataset"`
 	CustomQuestions []types.Question `yaml:"custom_questions"`
 	ReportDir       string           `yaml:"report_dir"`
+	ExtraThinking   string           `yaml:"extra_thinking"` // json string
 
 	datasetQuestions []types.Question
 }
@@ -82,11 +84,12 @@ func (cfg *Config) Questions() []types.Question {
 
 // BenchmarkConfig 包含 benchmark 运行配置
 type BenchmarkConfig struct {
-	MaxTokens       int      `json:"max_tokens"`
-	MaxWorkers      int      `json:"max_workers"`
-	ReasoningEffort string   `json:"reasoning_effort"`
-	Temperature     *float32 `json:"temperature"`
-	TopP            *float32 `json:"top_p"`
+	MaxTokens       int             `json:"max_tokens"`
+	MaxWorkers      int             `json:"max_workers"`
+	ReasoningEffort string          `json:"reasoning_effort"`
+	Temperature     *float32        `json:"temperature"`
+	TopP            *float32        `json:"top_p"`
+	Thinking        json.RawMessage `json:"thinking"`
 }
 
 func (cfg *Config) BenchmarkConfig() (conf BenchmarkConfig) {
@@ -100,6 +103,14 @@ func (cfg *Config) BenchmarkConfig() (conf BenchmarkConfig) {
 	}
 	if cfg.TopP != nil && *cfg.TopP >= 0.0 && *cfg.TopP <= 1.0 {
 		conf.TopP = cfg.TopP
+	}
+	if cfg.ExtraThinking != "" {
+		var thinking map[string]any
+		if err := json.Unmarshal([]byte(cfg.ExtraThinking), &thinking); err == nil && len(thinking) > 0 {
+			if bs, err := json.Marshal(thinking); err == nil {
+				conf.Thinking = bs
+			}
+		}
 	}
 	return
 }

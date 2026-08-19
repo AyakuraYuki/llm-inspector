@@ -7,13 +7,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/sashabaranov/go-openai"
-
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/report"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/reporter"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/runner"
 	"github.com/AyakuraYuki/llm-inspector/internal/logger"
+	"github.com/AyakuraYuki/llm-inspector/pkg/go-openai"
 )
 
 var (
