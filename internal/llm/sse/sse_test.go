@@ -31,7 +31,7 @@ func TestParseSSELine(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ParseSSELine(tt.line)
+			got := ParseLine(tt.line)
 			if len(got) != len(tt.want) {
 				t.Errorf("ParseSSELine(%q) = %v, want %v", tt.line, got, tt.want)
 			}
@@ -41,12 +41,12 @@ func TestParseSSELine(t *testing.T) {
 
 func TestIsSSEDoneLine(t *testing.T) {
 	for _, line := range []string{"data: [DONE]", " data: [DONE] ", "[DONE]", "data:[DONE]"} {
-		if !IsSSEDoneLine(line) {
+		if !IsDoneLine(line) {
 			t.Errorf("IsSSEDoneLine(%q) = false, want true", line)
 		}
 	}
 	for _, line := range []string{"data: {}", "data: [done]", "data: {\"a\":1}"} {
-		if IsSSEDoneLine(line) {
+		if IsDoneLine(line) {
 			t.Errorf("IsSSEDoneLine(%q) = true, want false", line)
 		}
 	}
@@ -71,7 +71,7 @@ func TestSSEIsTerminal(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := SSEIsTerminal(mustObj(t, tt.payload)); got != tt.want {
+			if got := IsTerminal(mustObj(t, tt.payload)); got != tt.want {
 				t.Errorf("SSEIsTerminal = %v, want %v", got, tt.want)
 			}
 		})
@@ -99,7 +99,7 @@ func TestSSEHasOutputContent(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := SSEHasOutputContent(mustObj(t, tt.payload)); got != tt.want {
+			if got := HasOutputContent(mustObj(t, tt.payload)); got != tt.want {
 				t.Errorf("SSEHasOutputContent = %v, want %v", got, tt.want)
 			}
 		})
@@ -122,7 +122,7 @@ func TestSSEErrorInfo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg, ok := SSEErrorInfo(mustObj(t, tt.payload))
+			msg, ok := ErrorInfo(mustObj(t, tt.payload))
 			if ok != tt.wantOK || msg != tt.wantMsg {
 				t.Errorf("SSEErrorInfo = (%q, %v), want (%q, %v)", msg, ok, tt.wantMsg, tt.wantOK)
 			}
@@ -133,7 +133,7 @@ func TestSSEErrorInfo(t *testing.T) {
 func TestConsumeSSEUsage_OpenAI(t *testing.T) {
 	obj := mustObj(t, `{"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19,"prompt_tokens_details":{"cached_tokens":5}}}`)
 	var parts []string
-	p, c, ct, source := ConsumeSSEUsage(obj, &parts)
+	p, c, ct, source := ConsumeUsage(obj, &parts)
 	if p != 12 || c != 7 || ct != 5 || source != "usage" {
 		t.Errorf("ConsumeSSEUsage = (%d, %d, %d, %q), want (12, 7, 5, usage)", p, c, ct, source)
 	}
@@ -142,12 +142,12 @@ func TestConsumeSSEUsage_OpenAI(t *testing.T) {
 func TestConsumeSSEUsage_Anthropic(t *testing.T) {
 	start := mustObj(t, `{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":4}}}`)
 	var parts []string
-	p, c, ct, _ := ConsumeSSEUsage(start, &parts)
+	p, c, ct, _ := ConsumeUsage(start, &parts)
 	if p != 10 || c != -1 || ct != 4 {
 		t.Errorf("message_start = (%d, %d, %d), want (10, -1, 4)", p, c, ct)
 	}
 	delta := mustObj(t, `{"type":"message_delta","usage":{"output_tokens":7}}`)
-	p, c, _, _ = ConsumeSSEUsage(delta, &parts)
+	p, c, _, _ = ConsumeUsage(delta, &parts)
 	if p != 0 || c != 7 {
 		t.Errorf("message_delta = (%d, %d), want (0, 7)", p, c)
 	}
@@ -156,7 +156,7 @@ func TestConsumeSSEUsage_Anthropic(t *testing.T) {
 func TestConsumeSSEUsage_GeminiThoughts(t *testing.T) {
 	obj := mustObj(t, `{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":3,"thoughtsTokenCount":2,"cachedContentTokenCount":1}}`)
 	var parts []string
-	p, c, ct, _ := ConsumeSSEUsage(obj, &parts)
+	p, c, ct, _ := ConsumeUsage(obj, &parts)
 	if p != 10 || c != 5 || ct != 1 { // candidates + thoughts = 5
 		t.Errorf("ConsumeSSEUsage = (%d, %d, %d), want (10, 5, 1)", p, c, ct)
 	}
@@ -165,7 +165,7 @@ func TestConsumeSSEUsage_GeminiThoughts(t *testing.T) {
 func TestConsumeSSEUsage_Responses(t *testing.T) {
 	obj := mustObj(t, `{"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":7,"input_tokens_details":{"cached_tokens":3}}}}`)
 	var parts []string
-	p, c, ct, source := ConsumeSSEUsage(obj, &parts)
+	p, c, ct, source := ConsumeUsage(obj, &parts)
 	if p != 10 || c != 7 || ct != 3 || source != "usage" {
 		t.Errorf("ConsumeSSEUsage = (%d, %d, %d, %q), want (10, 7, 3, usage)", p, c, ct, source)
 	}

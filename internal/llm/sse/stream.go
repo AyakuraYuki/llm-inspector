@@ -29,16 +29,16 @@ func NewStreamSummary() *StreamSummary {
 // 错误 → 终止标记 → 输出内容（TTFT）→ usage。
 func ApplySSEEvent(obj map[string]any, nowMS float64, s *StreamSummary) {
 	s.Chunks++
-	if msg, found := SSEErrorInfo(obj); found && s.UpstreamErr == "" {
+	if msg, found := ErrorInfo(obj); found && s.UpstreamErr == "" {
 		s.UpstreamErr = msg
 	}
-	if SSEIsTerminal(obj) {
+	if IsTerminal(obj) {
 		s.TerminalSeen = true
 	}
-	if s.TTFTMS < 0 && SSEHasOutputContent(obj) {
+	if s.TTFTMS < 0 && HasOutputContent(obj) {
 		s.TTFTMS = nowMS
 	}
-	p, c, ct, _ := ConsumeSSEUsage(obj, &s.TextParts)
+	p, c, ct, _ := ConsumeUsage(obj, &s.TextParts)
 	if c >= 0 {
 		s.CompletionTokens = c
 		s.UsageSeen = true

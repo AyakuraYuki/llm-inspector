@@ -440,11 +440,11 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if sse.IsSSEDoneLine(line) {
+		if sse.IsDoneLine(line) {
 			s.TerminalSeen = true
 			continue
 		}
-		obj := sse.ParseSSELine(line)
+		obj := sse.ParseLine(line)
 		if obj == nil {
 			continue
 		}

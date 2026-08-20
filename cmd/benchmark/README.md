@@ -8,10 +8,10 @@
 - 内置三个 huggingface 题库（AIME 2025、AIME 2026、MMLU-Pro），编译时通过 `go:embed` 打进二进制
 - 支持在配置文件中混入自定义问题
 - 性能指标：
-  - **TTFT** (Time To First Token): 首字符延迟
-  - **TPS** (Tokens Per Second): 每秒生成 token 数
-  - **TPM** (Tokens Per Minute): 每分钟生成 token 数
-  - **总用时**: 完整响应时间
+    - **TTFT** (Time To First Token): 首字符延迟
+    - **TPS** (Tokens Per Second): 每秒生成 token 数
+    - **TPM** (Tokens Per Minute): 每分钟生成 token 数
+    - **总用时**: 完整响应时间
 - **答案验证**: 自动从 `\boxed{}` 中提取模型答案并与标准答案比较，会先剔除思考内容避免误判
 - **准确率统计**: 计算模型在有标准答案的问题上的正确率
 - **进度心跳**: 每 30 秒输出整体进度以及正在执行的问题及其已运行时长
@@ -35,13 +35,13 @@ make setup
 
 `make setup` 会下载三个数据集到 `internal/dataset/hf/` 对应目录：
 
-| 数据集 | huggingface repo | 落地路径 |
-| --- | --- | --- |
-| AIME 2025 | `math-ai/aime25` | `internal/dataset/hf/math-ai/aime25/` |
-| AIME 2026 | `math-ai/aime26` | `internal/dataset/hf/math-ai/aime26/` |
-| MMLU-Pro | `TIGER-Lab/MMLU-Pro` | `internal/dataset/hf/TIGER-Lab/MMLU-Pro/` |
+| 数据集    | huggingface repo     | 落地路径                                  |
+|-----------|----------------------|-------------------------------------------|
+| AIME 2025 | `math-ai/aime25`     | `internal/dataset/hf/math-ai/aime25/`     |
+| AIME 2026 | `math-ai/aime26`     | `internal/dataset/hf/math-ai/aime26/`     |
+| MMLU-Pro  | `TIGER-Lab/MMLU-Pro` | `internal/dataset/hf/TIGER-Lab/MMLU-Pro/` |
 
-数据集是 `go:embed` 的输入，**没有下载完成的话编译会直接失败**。
+数据集是 `go:embed` 的输入， **没有下载完成的话编译会直接失败**。
 
 ### 2. 编译
 
@@ -95,14 +95,14 @@ max_workers: 1                        # 并发数
 reasoning_effort: high                # 思考强度，支持 low | medium | high | max（部分模型）
 ```
 
-| 字段 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `base_url` | 是 | - | OpenAI-Compatible 的 API 地址 |
-| `api_key` | 是 | - | 鉴权 token |
-| `model` | 是 | - | 待测模型名 |
-| `max_tokens` | 否 | `65536` | 映射到请求的 `max_completion_tokens`，填 0 或不填时取默认值 |
-| `max_workers` | 否 | `1` | 同时在跑的问题数，小于 1 时按 1 处理 |
-| `reasoning_effort` | 否 | 空 | 非空时透传给请求的 `reasoning_effort`（会转小写），具体取值参考模型规格 |
+| 字段               | 必填 | 默认值  | 说明                                                                    |
+|--------------------|------|---------|-------------------------------------------------------------------------|
+| `base_url`         | 是   | -       | OpenAI-Compatible 的 API 地址                                           |
+| `api_key`          | 是   | -       | 鉴权 token                                                              |
+| `model`            | 是   | -       | 待测模型名                                                              |
+| `max_tokens`       | 否   | `65536` | 映射到请求的 `max_completion_tokens`，填 0 或不填时取默认值             |
+| `max_workers`      | 否   | `1`     | 同时在跑的问题数，小于 1 时按 1 处理                                    |
+| `reasoning_effort` | 否   | 空      | 非空时透传给请求的 `reasoning_effort`（会转小写），具体取值参考模型规格 |
 
 `dataset` 和 `custom_questions` 至少要有一个能产出问题，否则启动时会以「缺少测试数据集」报错退出。
 
@@ -134,21 +134,22 @@ dataset:
 
 题量与来源：
 
-| 配置 | 题量 | 说明 |
-| --- | --- | --- |
-| `aime25` | 30 | 2025 AIME I / II，答案是整数 |
-| `aime26` | 30 | 2026 AIME I / II，答案是整数 |
-| `mmlu_pro.use_validation` | 70 | MMLU-Pro validation 集，十选一（选项最多到 J） |
-| `mmlu_pro.use_pickup` | 按分类求和 | 从 test 集打乱后按分类摘选 |
-| `mmlu_pro.enabled` 但未开 pickup | 12032 | MMLU-Pro test 全集 |
+| 配置                             | 题量       | 说明                                           |
+|----------------------------------|------------|------------------------------------------------|
+| `aime25`                         | 30         | 2025 AIME I / II，答案是整数                   |
+| `aime26`                         | 30         | 2026 AIME I / II，答案是整数                   |
+| `mmlu_pro.use_validation`        | 70         | MMLU-Pro validation 集，十选一（选项最多到 J） |
+| `mmlu_pro.use_pickup`            | 按分类求和 | 从 test 集打乱后按分类摘选                     |
+| `mmlu_pro.enabled` 但未开 pickup | 12032      | MMLU-Pro test 全集                             |
 
 关于 MMLU-Pro 的两个要点：
 
-- `enabled: true` 且 `use_pickup: false` 时会**回退到加载 test 全集**，也就是 12032 道题。想小规模试跑就一定要开 `use_pickup` 并配好每个分类的数量。
-- `use_validation` 是**追加**行为，开启后 70 道验证题会和 pickup/全集的题目一起进入本次测试。
+- `enabled: true` 且 `use_pickup: false` 时会 **回退到加载 test 全集**，也就是 12032 道题。想小规模试跑就一定要开 `use_pickup` 并配好每个分类的数量。
+- `use_validation` 是 **追加**行为，开启后 70 道验证题会和 pickup/全集的题目一起进入本次测试。
 - 每个分类的摘选数量会被该分类的实际题量截断，填得比题库大不会报错。摘选是随机的，每次运行的题目组合都不一样。
 
-AIME 题目会自动追加 `Please reason step by step, and put your final answer within \boxed{}.`；MMLU-Pro 题目会自动拼装成带 `(A) (B) (C) ...` 选项的多选题模板，并要求把选项字母放进 `\boxed{}`。这些提示词由程序拼接，不需要在配置里写。
+AIME 题目会自动追加 `Please reason step by step, and put your final answer within \boxed{}.`；MMLU-Pro 题目会自动拼装成带 `(A) (B) (C) ...` 选项的多选题模板，并要求把选项字母放进 `\boxed{}`
+。这些提示词由程序拼接，不需要在配置里写。
 
 ### 自定义问题
 
@@ -255,20 +256,20 @@ reports_20260810_143025/
 
 字段说明：
 
-| 字段 | 说明 |
-| --- | --- |
-| `question_index` | 问题序号，从 0 开始 |
-| `question` | 完整的问题文本（含程序拼接的提示词） |
-| `expected_answer` | 标准答案，没有标准答案时该字段不输出 |
-| `model_answer` | 模型的完整回答 |
-| `extracted_answer` | 从 `\boxed{}` 中提取的答案 |
-| `is_correct` | 答案是否正确，仅当有标准答案时输出 |
-| `finish_reason` | 响应结束原因：`stop` 正常结束、`length` 达到 token 限制被截断、`null` 异常终止 |
-| `ttft_ms` | 首字符延迟（毫秒） |
-| `total_time_ms` | 总用时（毫秒） |
-| `tokens_used` | 生成的 token 数（近似值，见下文） |
-| `tps` / `tpm` | 每秒 / 每分钟 token 数 |
-| `error` | 错误信息，仅在出错时输出 |
+| 字段               | 说明                                                                           |
+|--------------------|--------------------------------------------------------------------------------|
+| `question_index`   | 问题序号，从 0 开始                                                            |
+| `question`         | 完整的问题文本（含程序拼接的提示词）                                           |
+| `expected_answer`  | 标准答案，没有标准答案时该字段不输出                                           |
+| `model_answer`     | 模型的完整回答                                                                 |
+| `extracted_answer` | 从 `\boxed{}` 中提取的答案                                                     |
+| `is_correct`       | 答案是否正确，仅当有标准答案时输出                                             |
+| `finish_reason`    | 响应结束原因：`stop` 正常结束、`length` 达到 token 限制被截断、`null` 异常终止 |
+| `ttft_ms`          | 首字符延迟（毫秒）                                                             |
+| `total_time_ms`    | 总用时（毫秒）                                                                 |
+| `tokens_used`      | 生成的 token 数（近似值，见下文）                                              |
+| `tps` / `tpm`      | 每秒 / 每分钟 token 数                                                         |
+| `error`            | 错误信息，仅在出错时输出                                                       |
 
 ### 单题报告
 
@@ -328,7 +329,7 @@ Finish Reason:              stop
 答案提取按以下顺序进行：
 
 1. 先剔除思考内容，只在正文里找答案。识别的闭合标签有 `</think>`、`</thinking>`、`</reasoning>`、`</thought>`、`◁/think▷`、`[/THINK]`，取最靠后的那个之后的内容。只匹配闭合标签是因为部分模型或网关会丢掉起始标签。
-2. 在正文里取**最后一个**内容非空的 `\boxed{...}`，支持嵌套大括号。取最后一个是因为模型常在推导过程中多次提及 `\boxed{}`。
+2. 在正文里取 **最后一个**内容非空的 `\boxed{...}`，支持嵌套大括号。取最后一个是因为模型常在推导过程中多次提及 `\boxed{}`。
 3. 如果正文里找不到（思考标签异常或回答被截断），回退到在完整回答里找。
 
 比较答案时会做标准化：去首尾空格、转小写、去掉所有空格和逗号。所以 `1,024` 和 `1024`、`C` 和 `c` 都会判为一致。
@@ -399,15 +400,16 @@ AIME 题目原始来源为 Mathematical Association of America (MAA)，答案表
 
 三个工具（benchmark / evaluation / performance）对 OpenAI 兼容协议的参数语义已对齐（见 `internal/llm/params` 包），本工具在映射总表中的位置：
 
-| 统一参数 | benchmark 的实现 | 说明 |
-| --- | --- | --- |
-| 输出上限 | `max_tokens` 配置 → 请求的 `max_completion_tokens`（默认 65536） | 保留（不映射到 `max_tokens`：o 系列模型不接受该字段） |
-| `reasoning_effort` | 配置项 `reasoning_effort`（自动转小写） | 与 evaluation 的 SDK 直传等价 |
-| `temperature` / `top_p` | 配置项（范围校验 0–2 / 0–1） | 与 evaluation 对齐 |
-| thinking 类厂商参数 | 配置项 `extra_thinking`（JSON 原样注入顶层 `thinking` 字段） | 等价于 evaluation 的 `ExtraParams["thinking"]` |
-| 其他厂商参数 | fork 库的 `chat_template_kwargs` / `service_tier` / `verbosity` 等字段 | 等价于 evaluation 的 `ExtraParams` 任意参数透传 |
+| 统一参数                | benchmark 的实现                                                       | 说明                                                  |
+|-------------------------|------------------------------------------------------------------------|-------------------------------------------------------|
+| 输出上限                | `max_tokens` 配置 → 请求的 `max_completion_tokens`（默认 65536）       | 保留（不映射到 `max_tokens`：o 系列模型不接受该字段） |
+| `reasoning_effort`      | 配置项 `reasoning_effort`（自动转小写）                                | 与 evaluation 的 SDK 直传等价                         |
+| `temperature` / `top_p` | 配置项（范围校验 0–2 / 0–1）                                           | 与 evaluation 对齐                                    |
+| thinking 类厂商参数     | 配置项 `extra_thinking`（JSON 原样注入顶层 `thinking` 字段）           | 等价于 evaluation 的 `ExtraParams["thinking"]`        |
+| 其他厂商参数            | fork 库的 `chat_template_kwargs` / `service_tier` / `verbosity` 等字段 | 等价于 evaluation 的 `ExtraParams` 任意参数透传       |
 
-**token 统计**：请求带 `stream_options.include_usage=true`，`TokensUsed` 采用最终 usage chunk 的 `completion_tokens`；网关不支持该选项时回退到旧行为（内容 chunk 计数）。报告 JSON 同时输出 `prompt_tokens` / `cached_tokens` / `reasoning_tokens`。
+**token 统计**：请求带 `stream_options.include_usage=true`，`TokensUsed` 采用最终 usage chunk 的 `completion_tokens`；网关不支持该选项时回退到旧行为（内容 chunk 计数）。报告 JSON 同时输出 `prompt_tokens` /
+`cached_tokens` / `reasoning_tokens`。
 
 ## 扩展建议
 

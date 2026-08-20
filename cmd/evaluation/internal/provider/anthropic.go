@@ -91,9 +91,9 @@ type anthropicContentBlock struct {
 }
 
 type anthropicUsage struct {
-	InputTokens        int64 `json:"input_tokens"`
-	OutputTokens       int64 `json:"output_tokens"`
-	CacheReadInputToks int64 `json:"cache_read_input_tokens"`
+	InputTokens          int64 `json:"input_tokens"`
+	OutputTokens         int64 `json:"output_tokens"`
+	CacheReadInputTokens int64 `json:"cache_read_input_tokens"`
 }
 
 type anthropicResponse struct {
@@ -228,7 +228,7 @@ func (c *anthropicClient) Chat(ctx context.Context, req *params.Request) (*param
 	r.FinishReason = anthropicStopReason(resp.StopReason)
 	r.PromptTokens = resp.Usage.InputTokens
 	r.CompletionTokens = resp.Usage.OutputTokens
-	r.CachedInputTokens = resp.Usage.CacheReadInputToks
+	r.CachedInputTokens = resp.Usage.CacheReadInputTokens
 	return r, nil
 }
 
@@ -274,7 +274,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req *params.Request) (*par
 			switch ev.Type {
 			case "message_start":
 				r.PromptTokens = ev.Message.Usage.InputTokens
-				r.CachedInputTokens = ev.Message.Usage.CacheReadInputToks
+				r.CachedInputTokens = ev.Message.Usage.CacheReadInputTokens
 			case "content_block_start":
 				if ev.ContentBlock.Type == "tool_use" {
 					toolID = ev.ContentBlock.ID

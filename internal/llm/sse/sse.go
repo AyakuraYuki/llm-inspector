@@ -14,8 +14,8 @@ import (
 // reasoning_content 为 DeepSeek-R1 及多数网关的写法，reasoning 为部分网关的写法。
 var ReasoningDialects = []string{"reasoning_content", "reasoning"}
 
-// IsSSEDoneLine 判断是否为 OpenAI 兼容协议的流终止标记行（data: [DONE]）。
-func IsSSEDoneLine(line string) bool {
+// IsDoneLine 判断是否为 OpenAI 兼容协议的流终止标记行（data: [DONE]）。
+func IsDoneLine(line string) bool {
 	line = strings.TrimSpace(line)
 	if strings.HasPrefix(line, "data:") {
 		line = strings.TrimSpace(line[5:])
@@ -23,12 +23,12 @@ func IsSSEDoneLine(line string) bool {
 	return line == "[DONE]"
 }
 
-// SSEIsTerminal 判断 SSE 事件是否为协议定义的正常终止信号。各协议在生成结束时
+// IsTerminal 判断 SSE 事件是否为协议定义的正常终止信号。各协议在生成结束时
 // 必然给出终止标记：OpenAI 兼容协议为 choices[].finish_reason（外加其后的 [DONE]
-// 行，见 IsSSEDoneLine）；Anthropic 为 message_delta.delta.stop_reason 与
+// 行，见 IsDoneLine）；Anthropic 为 message_delta.delta.stop_reason 与
 // message_stop；Gemini 为 candidates[].finishReason；Responses API 为
 // response.completed / response.incomplete。全程未见任何终止标记的流按截断处理。
-func SSEIsTerminal(obj map[string]any) bool {
+func IsTerminal(obj map[string]any) bool {
 	switch t, _ := obj["type"].(string); t {
 	case "message_stop", "response.completed", "response.incomplete":
 		return true
@@ -56,13 +56,13 @@ func SSEIsTerminal(obj map[string]any) bool {
 	return false
 }
 
-// SSEErrorInfo 识别流内的错误事件。网关常在 HTTP 200 建流后才发现上游失败，
+// ErrorInfo 识别流内的错误事件。网关常在 HTTP 200 建流后才发现上游失败，
 // 只能以错误事件形式发回：OpenAI 兼容协议/Gemini 为顶层 {"error":{...}}，
 // Anthropic 为 {"type":"error","error":{...}}，Responses API 为
 // {"type":"error",...} 或 {"type":"response.failed","response":{"error":{...}}}。
-func SSEErrorInfo(obj map[string]any) (msg string, found bool) {
+func ErrorInfo(obj map[string]any) (msg string, found bool) {
 	if e, ok := obj["error"].(map[string]any); ok {
-		return ErrorObjMessage(e), true
+		return extractErrorMessage(e), true
 	}
 	switch t, _ := obj["type"].(string); t {
 	case "error":
@@ -73,7 +73,7 @@ func SSEErrorInfo(obj map[string]any) (msg string, found bool) {
 	case "response.failed":
 		if r, ok := obj["response"].(map[string]any); ok {
 			if e, ok := r["error"].(map[string]any); ok {
-				return ErrorObjMessage(e), true
+				return extractErrorMessage(e), true
 			}
 		}
 		return "response.failed", true
@@ -81,8 +81,8 @@ func SSEErrorInfo(obj map[string]any) (msg string, found bool) {
 	return "", false
 }
 
-// ErrorObjMessage 从错误对象中提取 message，取不到时序列化整个对象兜底。
-func ErrorObjMessage(e map[string]any) string {
+// extractErrorMessage 从错误对象中提取 message，取不到时序列化整个对象兜底。
+func extractErrorMessage(e map[string]any) string {
 	if m, _ := e["message"].(string); m != "" {
 		return m
 	}
@@ -90,8 +90,8 @@ func ErrorObjMessage(e map[string]any) string {
 	return string(b)
 }
 
-// ParseSSELine 将 SSE 数据行解析为 JSON 对象，遇到空行/注释/[DONE] 返回 nil。
-func ParseSSELine(line string) map[string]any {
+// ParseLine 将 SSE 数据行解析为 JSON 对象，遇到空行/注释/[DONE] 返回 nil。
+func ParseLine(line string) map[string]any {
 	line = strings.TrimSpace(line)
 	if line == "" || strings.HasPrefix(line, ":") || strings.HasPrefix(line, "event:") {
 		return nil
@@ -110,13 +110,13 @@ func ParseSSELine(line string) map[string]any {
 	return obj
 }
 
-// SSEHasOutputContent 检测 SSE 对象是否包含可视文本输出或思考内容（用于标记 TTFT 时刻）。
+// HasOutputContent 检测 SSE 对象是否包含可视文本输出或思考内容（用于标记 TTFT 时刻）。
 //
 // 推理类模型（Claude extended thinking、DeepSeek-R1 系 reasoning_content、
 // Gemini thinking 等）会先流式输出思考内容，再输出正式回答。思考内容同样是
 // 用户/调用方能感知到的首个 token，因此也应计入 TTFT，而不能等到正式回答
 // 开始才打点——否则开启了思考的请求会被算出偏高、失真的 TTFT。
-func SSEHasOutputContent(obj map[string]any) bool {
+func HasOutputContent(obj map[string]any) bool {
 	// Anthropic: content_block_delta，delta.text 为正式回答，
 	// delta.type == "thinking_delta" 时 delta.thinking 为思考内容
 	if t, _ := obj["type"].(string); t == "content_block_delta" {
@@ -176,9 +176,9 @@ func SSEHasOutputContent(obj map[string]any) bool {
 	return false
 }
 
-// ConsumeSSEUsage 从 SSE 对象中提取 usage（completion_tokens/output_tokens/cached_tokens）和文本片段。
+// ConsumeUsage 从 SSE 对象中提取 usage（completion_tokens/output_tokens/cached_tokens）和文本片段。
 // compT == -1 表示本事件无 usage 信息；cachedT == -1 表示本事件未携带缓存命中信息。
-func ConsumeSSEUsage(obj map[string]any, textParts *[]string) (promptT, compT, cachedT int64, source string) {
+func ConsumeUsage(obj map[string]any, textParts *[]string) (promptT, compT, cachedT int64, source string) {
 	compT = -1
 	cachedT = -1
 
