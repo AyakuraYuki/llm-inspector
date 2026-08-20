@@ -221,7 +221,7 @@ func checkToolResultRoundTrip(ctx context.Context, p provider.Provider) types.Ch
 // 开启时应产生思考内容（reasoning_content/thinking 块）或显著多耗 completion tokens；
 // 关闭时不应产生思考内容。参数由 constraints 配置（如 GLM 的 thinking.type），
 // 未配置时跳过。
-func checkThinkingControl(ctx context.Context, p provider.Provider, constraints *ModelConstraints) types.CheckResult {
+func checkThinkingControl(ctx context.Context, p provider.Provider, constraints *config.ModelConstraints) types.CheckResult {
 	return timed("thinking_control", 1, func() types.CheckResult {
 		if constraints == nil || (constraints.ThinkingEnableParams == nil && constraints.ThinkingDisableParams == nil) {
 			return types.CheckResult{Status: types.StatusSkip, Detail: "未配置 thinking_enable_params/thinking_disable_params，跳过"}
@@ -294,7 +294,7 @@ func checkThinkingControl(ctx context.Context, p provider.Provider, constraints 
 // checkReasoningEffort 验证 reasoning_effort 各档位被接受（仅 openai 协议；
 // 档位列表由 constraints 配置，如 max/xhigh/high/medium/low/minimal/none）。
 // 逐档发起请求，被拒绝的档位记入 detail；全部接受得满分。
-func checkReasoningEffort(ctx context.Context, p provider.Provider, constraints *ModelConstraints) types.CheckResult {
+func checkReasoningEffort(ctx context.Context, p provider.Provider, constraints *config.ModelConstraints) types.CheckResult {
 	return timed("reasoning_effort", 1, func() types.CheckResult {
 		if constraints == nil || len(constraints.ReasoningEfforts) == 0 {
 			return types.CheckResult{Status: types.StatusSkip, Detail: "未配置 reasoning_efforts，跳过"}
@@ -339,7 +339,7 @@ func checkReasoningEffort(ctx context.Context, p provider.Provider, constraints 
 // 观测窗口为 config.DefaultMaxTokensTimeout：默认值较大（如 32768）的模型
 // 在窗口内通常生成不到自然截断点，此时标记 skip 并记录已生成 token 数，
 // 而非因客户端超时误判为 fail。anthropic 协议 max_tokens 必填，无默认值语义，记 skip。
-func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, tokenizerConfig string, constraints *ModelConstraints) types.CheckResult {
+func checkDefaultMaxTokens(ctx context.Context, p provider.Provider, tokenizerConfig string, constraints *config.ModelConstraints) types.CheckResult {
 	return timed("default_max_tokens", 1, func() types.CheckResult {
 		if constraints == nil || constraints.DefaultMaxTokens <= 0 {
 			return types.CheckResult{Status: types.StatusSkip, Detail: "未配置 default_max_tokens，跳过"}

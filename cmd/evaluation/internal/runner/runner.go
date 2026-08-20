@@ -127,15 +127,7 @@ func Run(ctx context.Context, cfg *config.Config) (*types.Report, error) {
 		return availability.Run(ctx, p, badKey)
 	})
 	runLayer("L2", cfg.Layers.Protocol.Enabled, func() types.LayerResult {
-		constraints := &protocol.ModelConstraints{
-			DisableTemperatureZeroCheck: cfg.Target.Constraints.DisableTemperatureZeroCheck,
-			SpecifiedTemperature:        cfg.Target.Constraints.SpecifiedTemperature,
-			ThinkingEnableParams:        cfg.Target.Constraints.ThinkingEnableParams,
-			ThinkingDisableParams:       cfg.Target.Constraints.ThinkingDisableParams,
-			ReasoningEfforts:            cfg.Target.Constraints.ReasoningEfforts,
-			DefaultMaxTokens:            cfg.Target.Constraints.DefaultMaxTokens,
-		}
-		return protocol.Run(ctx, p, cfg.Target.TokenizerConfig, constraints)
+		return protocol.Run(ctx, p, cfg.Target.TokenizerConfig, &cfg.Target.Constraints)
 	})
 	runLayer("L3", cfg.Layers.Capability.Enabled, func() types.LayerResult {
 		return capability.Run(ctx, p, cfg.Layers.Capability, judge)

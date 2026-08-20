@@ -64,7 +64,7 @@ func TestCheckStreamUsageOptions(t *testing.T) {
 }
 
 func TestCheckThinkingControl(t *testing.T) {
-	constraints := &ModelConstraints{
+	constraints := &config.ModelConstraints{
 		ThinkingEnableParams:  &config.ThinkingParams{Thinking: config.Thinking{Type: config.ThinkingEnabled}},
 		ThinkingDisableParams: &config.ThinkingParams{Thinking: config.Thinking{Type: config.ThinkingDisabled}},
 	}
@@ -102,7 +102,7 @@ func TestCheckThinkingControl(t *testing.T) {
 		p := &fakeProvider{chatFn: func(*provider.Request) (*provider.Result, error) {
 			return &provider.Result{Content: "ok"}, nil
 		}}
-		r := checkThinkingControl(t.Context(), p, &ModelConstraints{})
+		r := checkThinkingControl(t.Context(), p, &config.ModelConstraints{})
 		if r.Status != types.StatusSkip {
 			t.Errorf("未配置应 skip, status=%s", r.Status)
 		}

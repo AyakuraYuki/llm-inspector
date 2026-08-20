@@ -23,11 +23,12 @@ import (
 const contentBudget = 1024
 
 // Run 执行 L2 全部检查。
-func Run(ctx context.Context, p provider.Provider, tokenizerConfig string, constraints *ModelConstraints) types.LayerResult {
+func Run(ctx context.Context, p provider.Provider, tokenizerConfig string, constraints *config.ModelConstraints) types.LayerResult {
 	start := time.Now()
 	layer := types.LayerResult{ID: "L2", Name: "协议兼容性", Enabled: true}
 
 	layer.Checks = append(layer.Checks,
+		// 3.1 基本要求
 		checkStreaming(ctx, p),
 		checkSystemPrompt(ctx, p),
 		checkMaxTokens(ctx, p),
@@ -42,7 +43,7 @@ func Run(ctx context.Context, p provider.Provider, tokenizerConfig string, const
 		checkSeedConsistency(ctx, p),
 		checkStreamUsageOptions(ctx, p),
 		checkEncodingUnicode(ctx, p),
-		// 3.1 整体基本要求扩展
+		// 3.3 整体基本要求扩展
 		checkJSONSchema(ctx, p),
 		checkParallelToolCalls(ctx, p),
 		checkToolResultRoundTrip(ctx, p),
@@ -53,20 +54,6 @@ func Run(ctx context.Context, p provider.Provider, tokenizerConfig string, const
 	)
 	layer.DurationMS = float64(time.Since(start).Microseconds()) / 1000
 	return layer
-}
-
-// ModelConstraints 定义模型的参数约束，从 config 包传入。
-type ModelConstraints struct {
-	SpecifiedTemperature *float64
-	// ThinkingEnableParams / ThinkingDisableParams 开启/关闭思考的厂商参数，
-	// 原样透传（openai/anthropic 顶层，gemini generationConfig）。
-	ThinkingEnableParams  *config.ThinkingParams
-	ThinkingDisableParams *config.ThinkingParams
-	// ReasoningEfforts 模型声称支持的 reasoning_effort 值（仅 openai 协议探测）。
-	ReasoningEfforts []string
-	// DefaultMaxTokens 官方标称的 max_tokens 默认值，用于默认值探测。
-	DefaultMaxTokens            int
-	DisableTemperatureZeroCheck bool
 }
 
 func timed(name string, weight float64, fn func() types.CheckResult) types.CheckResult {
@@ -200,7 +187,7 @@ func checkMaxTokens(ctx context.Context, p provider.Provider) types.CheckResult 
 // 注意：GPU 推理在 temp=0 下不保证逐位确定（批处理数值抖动是普遍现实），
 // 因此本检查以"请求成功即参数被接受"为通过标准，一致率仅作为得分与指标呈现。
 // 当模型不支持 temperature=0 时，可通过 constraints.DisableTemperatureZeroCheck 跳过（不计入层均分）。
-func checkTemperatureZero(ctx context.Context, p provider.Provider, constraints *ModelConstraints) types.CheckResult {
+func checkTemperatureZero(ctx context.Context, p provider.Provider, constraints *config.ModelConstraints) types.CheckResult {
 	return timed("temperature_zero", 1, func() types.CheckResult {
 		// 检查是否禁用此检查
 		if constraints != nil && constraints.DisableTemperatureZeroCheck {
@@ -274,7 +261,7 @@ func checkTemperatureZero(ctx context.Context, p provider.Provider, constraints 
 // checkSpecifiedTemperature 验证模型要求的 temperature 值是否被接受并生效（可选检查）。
 // 未配置 SpecifiedTemperature 时跳过（不计入层均分）；配置后采样请求验证
 // 模型在指定温度下的输出行为，得分仅反映一致性，不作为协议缺陷判据。
-func checkSpecifiedTemperature(ctx context.Context, p provider.Provider, constraints *ModelConstraints) types.CheckResult {
+func checkSpecifiedTemperature(ctx context.Context, p provider.Provider, constraints *config.ModelConstraints) types.CheckResult {
 	return timed("temperature_specified", 1, func() types.CheckResult {
 		if constraints == nil || constraints.SpecifiedTemperature == nil {
 			return types.CheckResult{
@@ -289,7 +276,7 @@ func checkSpecifiedTemperature(ctx context.Context, p provider.Provider, constra
 		req := &provider.Request{
 			Messages:    []provider.Message{{Role: "user", Content: "说一个 1 到 1000000 之间的整数，只输出数字"}},
 			MaxTokens:   contentBudget,
-			Temperature: &tempValue,
+			Temperature: new(tempValue),
 		}
 		answers := map[string]int{}
 		var errs []string
