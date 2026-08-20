@@ -13,6 +13,7 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
 // Run 执行 L6 全部检查。目标 provider 未实现 RawCaller 时整层跳过。
@@ -358,8 +359,8 @@ func checkMaxCompletionTokensCompat(ctx context.Context, p provider.Provider) ty
 			return types.CheckResult{Status: types.StatusSkip, Detail: "openai 专属兼容字段"}
 		}
 		const limit = 16
-		resp, err := p.Chat(ctx, &provider.Request{
-			Messages:            []provider.Message{{Role: "user", Content: "写一首关于秋天的长诗，越长越好"}},
+		resp, err := p.Chat(ctx, &params.Request{
+			Messages:            []params.Message{{Role: "user", Content: "写一首关于秋天的长诗，越长越好"}},
 			MaxCompletionTokens: limit,
 		})
 		if err != nil {

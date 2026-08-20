@@ -61,12 +61,12 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 		// 时延分位数只统计成功请求：快速失败（毫秒级 4xx）会拉低 P50，
 		// 超时失败会拉爆 P99，混入后分布失真；失败时延保留在 FailedDetails 里。
 		latencies = append(latencies, m.TotalLatency)
-		totalToks += int64(m.OutputTokens)
-		totalInputToks += int64(m.InputTokens)
-		totalCachedToks += int64(m.CachedInputTokens)
+		totalToks += m.OutputTokens
+		totalInputToks += m.InputTokens
+		totalCachedToks += m.CachedInputTokens
 		if result.Start.IsZero() || !m.Timestamp.Add(m.TotalLatency).After(cutoff) {
 			winSuccess++
-			winToks += int64(m.OutputTokens)
+			winToks += m.OutputTokens
 		}
 
 		if isStreaming {

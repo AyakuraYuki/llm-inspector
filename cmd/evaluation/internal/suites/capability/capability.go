@@ -18,15 +18,16 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/scorer"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // Case 是数据集中的一道题。
 type Case struct {
-	ID       string             `yaml:"id"`
-	Category string             `yaml:"category"`
-	Turns    []provider.Message `yaml:"turns"`
-	Scorer   scorer.Spec        `yaml:"scorer"`
+	ID       string           `yaml:"id"`
+	Category string           `yaml:"category"`
+	Turns    []params.Message `yaml:"turns"`
+	Scorer   scorer.Spec      `yaml:"scorer"`
 }
 
 // LoadCases 加载数据集；path 为空时使用内建冒烟题库。
@@ -115,7 +116,7 @@ func runCase(ctx context.Context, p provider.Provider, judge *scorer.Judge, c *C
 		return result
 	}
 
-	resp, err := p.Chat(ctx, &provider.Request{
+	resp, err := p.Chat(ctx, &params.Request{
 		Messages:  c.Turns,
 		MaxTokens: 1024,
 	})
@@ -159,7 +160,7 @@ func runCase(ctx context.Context, p provider.Provider, judge *scorer.Judge, c *C
 	return result
 }
 
-func lastUserMessage(turns []provider.Message) string {
+func lastUserMessage(turns []params.Message) string {
 	for i := len(turns) - 1; i >= 0; i-- {
 		if strings.EqualFold(turns[i].Role, "user") {
 			return turns[i].Content

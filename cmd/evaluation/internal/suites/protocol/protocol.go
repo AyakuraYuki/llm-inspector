@@ -12,6 +12,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
@@ -73,8 +74,8 @@ func failScore(detail string) types.CheckResult {
 // 首 token 延迟占总耗时比例过高时在 detail/metrics 中提示（疑似伪流式或思考延迟），不影响得分。
 func checkStreaming(ctx context.Context, p provider.Provider) types.CheckResult {
 	return timed("streaming_sse", 2, func() types.CheckResult {
-		resp, err := p.Stream(ctx, &provider.Request{
-			Messages:  []provider.Message{{Role: "user", Content: "从 1 数到 10，用空格分隔"}},
+		resp, err := p.Stream(ctx, &params.Request{
+			Messages:  []params.Message{{Role: "user", Content: "从 1 数到 10，用空格分隔"}},
 			MaxTokens: contentBudget,
 		})
 		if err != nil {
@@ -123,8 +124,8 @@ func checkStreaming(ctx context.Context, p provider.Provider) types.CheckResult 
 func checkSystemPrompt(ctx context.Context, p provider.Provider) types.CheckResult {
 	return timed("system_prompt", 1, func() types.CheckResult {
 		const prefix = "评测前缀"
-		resp, err := p.Chat(ctx, &provider.Request{
-			Messages: []provider.Message{
+		resp, err := p.Chat(ctx, &params.Request{
+			Messages: []params.Message{
 				{Role: "system", Content: fmt.Sprintf("你的所有回答必须以「%s：」开头，之后再说别的内容。", prefix)},
 				{Role: "user", Content: "打个招呼"},
 			},
@@ -152,8 +153,8 @@ func checkSystemPrompt(ctx context.Context, p provider.Provider) types.CheckResu
 func checkMaxTokens(ctx context.Context, p provider.Provider) types.CheckResult {
 	return timed("max_tokens", 1, func() types.CheckResult {
 		const limit = 16
-		resp, err := p.Chat(ctx, &provider.Request{
-			Messages:  []provider.Message{{Role: "user", Content: "写一首关于秋天的长诗，越长越好"}},
+		resp, err := p.Chat(ctx, &params.Request{
+			Messages:  []params.Message{{Role: "user", Content: "写一首关于秋天的长诗，越长越好"}},
 			MaxTokens: limit,
 		})
 		if err != nil {
@@ -199,8 +200,8 @@ func checkTemperatureZero(ctx context.Context, p provider.Provider, constraints 
 		}
 
 		const samples = 3
-		req := &provider.Request{
-			Messages:    []provider.Message{{Role: "user", Content: "说一个 1 到 1000000 之间的整数，只输出数字"}},
+		req := &params.Request{
+			Messages:    []params.Message{{Role: "user", Content: "说一个 1 到 1000000 之间的整数，只输出数字"}},
 			MaxTokens:   contentBudget,
 			Temperature: new(0.0),
 		}
@@ -273,8 +274,8 @@ func checkSpecifiedTemperature(ctx context.Context, p provider.Provider, constra
 		tempValue := *constraints.SpecifiedTemperature
 
 		const samples = 3
-		req := &provider.Request{
-			Messages:    []provider.Message{{Role: "user", Content: "说一个 1 到 1000000 之间的整数，只输出数字"}},
+		req := &params.Request{
+			Messages:    []params.Message{{Role: "user", Content: "说一个 1 到 1000000 之间的整数，只输出数字"}},
 			MaxTokens:   contentBudget,
 			Temperature: new(tempValue),
 		}
@@ -336,8 +337,8 @@ func checkSpecifiedTemperature(ctx context.Context, p provider.Provider, constra
 // 预算过小时正文为空，会被误判为"多轮能力缺失"。
 func checkMultiTurn(ctx context.Context, p provider.Provider) types.CheckResult {
 	return timed("multi_turn", 1, func() types.CheckResult {
-		resp, err := p.Chat(ctx, &provider.Request{
-			Messages: []provider.Message{
+		resp, err := p.Chat(ctx, &params.Request{
+			Messages: []params.Message{
 				{Role: "user", Content: "记住暗号「蓝色狐狸」，只需回复「好的」。"},
 				{Role: "assistant", Content: "好的"},
 				{Role: "user", Content: "暗号是什么？只回答暗号本身。"},
@@ -364,8 +365,8 @@ func checkMultiTurn(ctx context.Context, p provider.Provider) types.CheckResult 
 // 服务返回 400 记 unsupported。
 func checkJSONMode(ctx context.Context, p provider.Provider) types.CheckResult {
 	return timed("json_mode", 1, func() types.CheckResult {
-		req := &provider.Request{
-			Messages: []provider.Message{
+		req := &params.Request{
+			Messages: []params.Message{
 				{Role: "user", Content: `输出一个 JSON 对象，包含字段 city（值为 "Paris"）。只输出 JSON，不要输出任何其他文字。`},
 			},
 			MaxTokens: contentBudget,
@@ -402,13 +403,13 @@ func checkJSONMode(ctx context.Context, p provider.Provider) types.CheckResult {
 // 避免"模型自主选择不调用"对协议兼容性判定的干扰。服务不支持记 unsupported。
 func checkToolCalling(ctx context.Context, p provider.Provider) types.CheckResult {
 	return timed("tool_calling", 1, func() types.CheckResult {
-		resp, err := p.Chat(ctx, &provider.Request{
-			Messages: []provider.Message{
+		resp, err := p.Chat(ctx, &params.Request{
+			Messages: []params.Message{
 				{Role: "user", Content: "巴黎现在天气怎么样？请使用提供的工具查询。"},
 			},
 			MaxTokens:   contentBudget,
 			ToolsChoice: "any",
-			Tools: []provider.Tool{{
+			Tools: []params.Tool{{
 				Name:        "get_weather",
 				Description: "查询指定城市的当前天气",
 				Parameters: map[string]any{
@@ -442,8 +443,8 @@ func checkToolCalling(ctx context.Context, p provider.Provider) types.CheckResul
 // checkUsageField 验证响应携带 usage 统计。
 func checkUsageField(ctx context.Context, p provider.Provider) types.CheckResult {
 	return timed("usage_field", 1, func() types.CheckResult {
-		resp, err := p.Chat(ctx, &provider.Request{
-			Messages:  []provider.Message{{Role: "user", Content: "说「你好」。"}},
+		resp, err := p.Chat(ctx, &params.Request{
+			Messages:  []params.Message{{Role: "user", Content: "说「你好」。"}},
 			MaxTokens: 8,
 		})
 		if err != nil {

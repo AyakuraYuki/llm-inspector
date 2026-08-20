@@ -62,9 +62,9 @@ type RequestMetrics struct {
 	Timestamp         time.Time     // 请求发起时刻，用于吞吐窗口判定和错误明细排查
 	TTFT              time.Duration // 首 token 时延（图片生成为 0）
 	TotalLatency      time.Duration // 端到端总时延
-	InputTokens       int           // 输入 token 数（图片生成为 0，无 usage 上报时为 0）
-	OutputTokens      int           // 输出 token 数（图片生成为 0）
-	CachedInputTokens int           // 命中缓存的输入 token 数（provider 未上报缓存字段时为 0）
+	InputTokens       int64         // 输入 token 数（图片生成为 0，无 usage 上报时为 0）
+	OutputTokens      int64         // 输出 token 数（图片生成为 0）
+	CachedInputTokens int64         // 命中缓存的输入 token 数（provider 未上报缓存字段时为 0）
 	Success           bool
 	Error             string
 	ErrorType         ErrorType

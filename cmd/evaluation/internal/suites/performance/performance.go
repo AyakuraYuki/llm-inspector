@@ -14,6 +14,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/stats"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
 const benchPrompt = "请用三句话介绍机器学习的基本概念。"
@@ -43,8 +44,8 @@ func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg conf
 	errorsCount := 0
 
 	for i := 0; i < cfg.Runs; i++ {
-		resp, err := p.Stream(ctx, &provider.Request{
-			Messages:  []provider.Message{{Role: "user", Content: benchPrompt}},
+		resp, err := p.Stream(ctx, &params.Request{
+			Messages:  []params.Message{{Role: "user", Content: benchPrompt}},
 			MaxTokens: 128,
 		})
 		if err != nil {
@@ -138,8 +139,8 @@ func checkConcurrency(ctx context.Context, p provider.Provider, cfg config.Perfo
 			wg.Go(func() {
 				for i := range jobs {
 					s := time.Now()
-					resp, err := p.Chat(ctx, &provider.Request{
-						Messages:  []provider.Message{{Role: "user", Content: benchPrompt}},
+					resp, err := p.Chat(ctx, &params.Request{
+						Messages:  []params.Message{{Role: "user", Content: benchPrompt}},
 						MaxTokens: 64,
 					})
 					mu.Lock()
@@ -224,8 +225,8 @@ func checkContextProbe(ctx context.Context, p provider.Provider, cfg config.Perf
 	for _, size := range sizes {
 		prompt := buildFiller(size) + "\n\n以上是一段无意义文本，无需阅读。请只回复 OK。"
 		s := time.Now()
-		_, err := p.Chat(ctx, &provider.Request{
-			Messages:  []provider.Message{{Role: "user", Content: prompt}},
+		_, err := p.Chat(ctx, &params.Request{
+			Messages:  []params.Message{{Role: "user", Content: prompt}},
 			MaxTokens: 8,
 		})
 		latencyByStep[fmt.Sprintf("%d", size)] = float64(time.Since(s).Microseconds()) / 1000
@@ -272,7 +273,7 @@ func buildFiller(n int) string {
 }
 
 // estimateTokens 优先使用 usage；缺失时按 1.5 字符/token 粗估（中文输出）。
-func estimateTokens(resp *provider.Result) int64 {
+func estimateTokens(resp *params.Result) int64 {
 	if resp.CompletionTokens > 0 {
 		return resp.CompletionTokens
 	}

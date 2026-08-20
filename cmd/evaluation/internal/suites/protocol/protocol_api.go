@@ -10,6 +10,7 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
@@ -31,8 +32,8 @@ func checkStopSequence(ctx context.Context, p provider.Provider) types.CheckResu
 		}
 		for _, tc := range cases {
 			total++
-			resp, err := p.Chat(ctx, &provider.Request{
-				Messages:  []provider.Message{{Role: "user", Content: prompt}},
+			resp, err := p.Chat(ctx, &params.Request{
+				Messages:  []params.Message{{Role: "user", Content: prompt}},
 				MaxTokens: contentBudget,
 				Stop:      tc.stop,
 			})
@@ -80,8 +81,8 @@ func checkSeedConsistency(ctx context.Context, p provider.Provider) types.CheckR
 		const samples = 3
 		seed := int64(42)
 		temp := 0.7
-		req := &provider.Request{
-			Messages:    []provider.Message{{Role: "user", Content: "说一个 1 到 1000000 之间的整数，只输出数字"}},
+		req := &params.Request{
+			Messages:    []params.Message{{Role: "user", Content: "说一个 1 到 1000000 之间的整数，只输出数字"}},
 			MaxTokens:   contentBudget,
 			Temperature: &temp,
 			Seed:        &seed,
@@ -135,10 +136,10 @@ func checkSeedConsistency(ctx context.Context, p provider.Provider) types.CheckR
 // anthropic/gemini 的流式协议恒携带 usage，仅验证 usage 确实存在。
 func checkStreamUsageOptions(ctx context.Context, p provider.Provider) types.CheckResult {
 	return timed("stream_usage_options", 1, func() types.CheckResult {
-		req := func(include bool) *provider.Request {
+		req := func(include bool) *params.Request {
 			v := include
-			return &provider.Request{
-				Messages:           []provider.Message{{Role: "user", Content: "说「你好」。"}},
+			return &params.Request{
+				Messages:           []params.Message{{Role: "user", Content: "说「你好」。"}},
 				MaxTokens:          contentBudget,
 				StreamIncludeUsage: &v,
 			}
@@ -213,8 +214,8 @@ func checkEncodingUnicode(ctx context.Context, p provider.Provider) types.CheckR
 		}
 		for _, tc := range echoCases {
 			total++
-			resp, err := p.Chat(ctx, &provider.Request{
-				Messages:  []provider.Message{{Role: "user", Content: fmt.Sprintf("一字不差地复述：%s", tc.text)}},
+			resp, err := p.Chat(ctx, &params.Request{
+				Messages:  []params.Message{{Role: "user", Content: fmt.Sprintf("一字不差地复述：%s", tc.text)}},
 				MaxTokens: contentBudget,
 			})
 			if err != nil {
@@ -236,8 +237,8 @@ func checkEncodingUnicode(ctx context.Context, p provider.Provider) types.CheckR
 
 		// 控制字符与 BOM：请求成功且输出合法即通过
 		total++
-		resp, err := p.Chat(ctx, &provider.Request{
-			Messages: []provider.Message{
+		resp, err := p.Chat(ctx, &params.Request{
+			Messages: []params.Message{
 				{Role: "user", Content: "\uFEFF第一行\n\t缩进的第二行\n请回答：以上共几行文字？只输出数字。"},
 			},
 			MaxTokens: contentBudget,

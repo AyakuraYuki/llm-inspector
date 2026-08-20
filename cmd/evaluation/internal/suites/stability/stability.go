@@ -13,6 +13,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/stats"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
@@ -65,8 +66,8 @@ func checkSelfConsistency(ctx context.Context, p provider.Provider, cfg config.S
 		for _, probe := range consistencyProbes {
 			answers := map[string]int{}
 			for i := 0; i < cfg.Samples; i++ {
-				resp, err := p.Chat(ctx, &provider.Request{
-					Messages:    []provider.Message{{Role: "user", Content: probe}},
+				resp, err := p.Chat(ctx, &params.Request{
+					Messages:    []params.Message{{Role: "user", Content: probe}},
 					MaxTokens:   contentBudget,
 					Temperature: cfg.Temperature,
 				})
@@ -147,8 +148,8 @@ func checkPromptPerturbation(ctx context.Context, p provider.Provider) types.Che
 		empty := 0
 		var details []string
 		for _, q := range perturbationPrompts {
-			resp, err := p.Chat(ctx, &provider.Request{
-				Messages:  []provider.Message{{Role: "user", Content: q}},
+			resp, err := p.Chat(ctx, &params.Request{
+				Messages:  []params.Message{{Role: "user", Content: q}},
 				MaxTokens: contentBudget,
 			})
 			if err != nil {
@@ -185,8 +186,8 @@ func checkSoak(ctx context.Context, p provider.Provider, cfg config.StabilityCon
 		errorsCount := 0
 		for i := 0; i < cfg.SoakRequests; i++ {
 			start := time.Now()
-			_, err := p.Chat(ctx, &provider.Request{
-				Messages:  []provider.Message{{Role: "user", Content: "回复 ok"}},
+			_, err := p.Chat(ctx, &params.Request{
+				Messages:  []params.Message{{Role: "user", Content: "回复 ok"}},
 				MaxTokens: 2,
 			})
 			if err != nil {
@@ -245,8 +246,8 @@ func checkAdversarial(ctx context.Context, p provider.Provider) types.CheckResul
 		handled := 0
 		var details []string
 		for _, in := range inputs {
-			_, err := p.Chat(ctx, &provider.Request{
-				Messages:  []provider.Message{{Role: "user", Content: in.content}},
+			_, err := p.Chat(ctx, &params.Request{
+				Messages:  []params.Message{{Role: "user", Content: in.content}},
 				MaxTokens: 8,
 			})
 			if err == nil {

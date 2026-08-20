@@ -13,6 +13,9 @@ import (
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/shared"
+
+	llmparams "github.com/AyakuraYuki/llm-inspector/internal/llm/params"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/sse"
 )
 
 var (
@@ -48,7 +51,7 @@ func NewOpenAI(baseURL, apiKey, model string, timeout time.Duration) Provider {
 func (p *openaiProvider) Protocol() string { return "openai" }
 func (p *openaiProvider) Model() string    { return p.model }
 
-func (p *openaiProvider) buildParams(req *Request, stream bool) openai.ChatCompletionNewParams {
+func (p *openaiProvider) buildParams(req *llmparams.Request, stream bool) openai.ChatCompletionNewParams {
 	model := req.Model
 	if model == "" {
 		model = p.model
@@ -168,7 +171,7 @@ func (p *openaiProvider) buildParams(req *Request, stream bool) openai.ChatCompl
 }
 
 // requestOptions 返回本次请求的 SDK 选项；RequestTimeout>0 时覆盖客户端默认超时。
-func (p *openaiProvider) requestOptions(req *Request) []option.RequestOption {
+func (p *openaiProvider) requestOptions(req *llmparams.Request) []option.RequestOption {
 	if req.RequestTimeout <= 0 {
 		return nil
 	}
@@ -176,20 +179,20 @@ func (p *openaiProvider) requestOptions(req *Request) []option.RequestOption {
 }
 
 // Chat 发起非流式调用。
-func (p *openaiProvider) Chat(ctx context.Context, req *Request) (*Result, error) {
+func (p *openaiProvider) Chat(ctx context.Context, req *llmparams.Request) (*llmparams.Result, error) {
 	start := time.Now()
 	resp, err := p.client.Chat.Completions.New(ctx, p.buildParams(req, false), p.requestOptions(req)...)
 	if err != nil {
 		return nil, err
 	}
-	r := &Result{LatencyMS: milliSince(start)}
+	r := &llmparams.Result{LatencyMS: milliSince(start)}
 	if len(resp.Choices) > 0 {
 		c := resp.Choices[0]
 		r.Content = c.Message.Content
 		r.ReasoningContent = extraReasoning(c.Message.JSON.ExtraFields)
 		r.FinishReason = c.FinishReason
 		for _, tc := range c.Message.ToolCalls {
-			r.ToolCalls = append(r.ToolCalls, ToolCall{
+			r.ToolCalls = append(r.ToolCalls, llmparams.ToolCall{
 				ID:        tc.ID,
 				Name:      tc.Function.Name,
 				Arguments: tc.Function.Arguments,
@@ -198,16 +201,19 @@ func (p *openaiProvider) Chat(ctx context.Context, req *Request) (*Result, error
 	}
 	r.PromptTokens = resp.Usage.PromptTokens
 	r.CompletionTokens = resp.Usage.CompletionTokens
+	if resp.Usage.PromptTokensDetails.CachedTokens > 0 {
+		r.CachedInputTokens = resp.Usage.PromptTokensDetails.CachedTokens
+	}
 	return r, nil
 }
 
 // Stream 发起流式调用，记录 TTFT 并聚合全部增量内容。
-func (p *openaiProvider) Stream(ctx context.Context, req *Request) (*Result, error) {
+func (p *openaiProvider) Stream(ctx context.Context, req *llmparams.Request) (*llmparams.Result, error) {
 	start := time.Now()
 	stream := p.client.Chat.Completions.NewStreaming(ctx, p.buildParams(req, true), p.requestOptions(req)...)
 	defer stream.Close()
 
-	r := &Result{TTFTMS: -1}
+	r := &llmparams.Result{TTFTMS: -1}
 	var sb, rb strings.Builder
 	for stream.Next() {
 		chunk := stream.Current()
@@ -224,7 +230,7 @@ func (p *openaiProvider) Stream(ctx context.Context, req *Request) (*Result, err
 				r.FinishReason = string(c.FinishReason)
 			}
 			for _, tc := range c.Delta.ToolCalls {
-				r.ToolCalls = append(r.ToolCalls, ToolCall{
+				r.ToolCalls = append(r.ToolCalls, llmparams.ToolCall{
 					ID:        tc.ID,
 					Name:      tc.Function.Name,
 					Arguments: tc.Function.Arguments,
@@ -234,6 +240,9 @@ func (p *openaiProvider) Stream(ctx context.Context, req *Request) (*Result, err
 		if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
 			r.PromptTokens = chunk.Usage.PromptTokens
 			r.CompletionTokens = chunk.Usage.CompletionTokens
+		}
+		if chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
+			r.CachedInputTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 		}
 	}
 	r.Content = sb.String()
@@ -272,14 +281,10 @@ func (p *openaiProvider) RawChat(ctx context.Context, req *RawRequest) (*RawResu
 	return rawPost(ctx, p.hc, p.baseURL+"/chat/completions", headers, req.Payload)
 }
 
-// reasoningDialects 是 openai 兼容网关承载思考内容的字段名方言，按优先级排列。
-// reasoning_content 为 DeepSeek-R1 及多数网关的写法，reasoning 为部分网关的写法
-// （与 cmd/performance 的流式判定保持一致）。
-var reasoningDialects = []string{"reasoning_content", "reasoning"}
-
 // extraReasoning 按方言顺序取出思考内容，均缺失或非字符串时返回 ""。
+// 方言列表复用 internal/llm/sse 的 ReasoningDialects（单一来源，与 performance 的流式判定一致）。
 func extraReasoning(fields map[string]respjson.Field) string {
-	for _, key := range reasoningDialects {
+	for _, key := range sse.ReasoningDialects {
 		if s := extraString(fields, key); s != "" {
 			return s
 		}

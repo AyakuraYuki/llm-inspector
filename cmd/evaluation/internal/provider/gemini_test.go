@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
 // newGeminiServer 构造 Gemini 协议 mock。
@@ -49,7 +51,7 @@ func newGeminiServer(t *testing.T) *httptest.Server {
 		var req geminiRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 
-		usage := `"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}`
+		usage := `"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15,"cachedContentTokenCount":3}`
 
 		// 工具调用（ANY 模式）
 		if len(req.Tools) > 0 && req.ToolConfig != nil && req.ToolConfig.FunctionCallingConfig.Mode == "ANY" {
@@ -93,8 +95,8 @@ func TestGeminiChat(t *testing.T) {
 	defer srv.Close()
 	c := NewGemini(srv.URL, "good-key", "gemini-test-1", 5*time.Second)
 
-	r, err := c.Chat(t.Context(), &Request{
-		Messages: []Message{
+	r, err := c.Chat(t.Context(), &params.Request{
+		Messages: []params.Message{
 			{Role: "system", Content: "系统指令"},
 			{Role: "user", Content: "你好"},
 		},
@@ -112,6 +114,9 @@ func TestGeminiChat(t *testing.T) {
 	if r.PromptTokens != 10 || r.CompletionTokens != 5 {
 		t.Errorf("usage = %d/%d", r.PromptTokens, r.CompletionTokens)
 	}
+	if r.CachedInputTokens != 3 {
+		t.Errorf("CachedInputTokens = %d, want 3（cachedContentTokenCount）", r.CachedInputTokens)
+	}
 }
 
 func TestGeminiJSONMode(t *testing.T) {
@@ -119,8 +124,8 @@ func TestGeminiJSONMode(t *testing.T) {
 	defer srv.Close()
 	c := NewGemini(srv.URL, "good-key", "gemini-test-1", 5*time.Second)
 
-	r, err := c.Chat(t.Context(), &Request{
-		Messages: []Message{{Role: "user", Content: "给 JSON"}},
+	r, err := c.Chat(t.Context(), &params.Request{
+		Messages: []params.Message{{Role: "user", Content: "给 JSON"}},
 		JSONMode: true,
 	})
 	if err != nil {
@@ -136,9 +141,9 @@ func TestGeminiToolCall(t *testing.T) {
 	defer srv.Close()
 	c := NewGemini(srv.URL, "good-key", "gemini-test-1", 5*time.Second)
 
-	r, err := c.Chat(t.Context(), &Request{
-		Messages:    []Message{{Role: "user", Content: "查天气"}},
-		Tools:       []Tool{{Name: "get_weather", Parameters: map[string]any{"type": "object"}}},
+	r, err := c.Chat(t.Context(), &params.Request{
+		Messages:    []params.Message{{Role: "user", Content: "查天气"}},
+		Tools:       []params.Tool{{Name: "get_weather", Parameters: map[string]any{"type": "object"}}},
 		ToolsChoice: "any",
 	})
 	if err != nil {
@@ -157,7 +162,7 @@ func TestGeminiStream(t *testing.T) {
 	defer srv.Close()
 	c := NewGemini(srv.URL, "good-key", "gemini-test-1", 5*time.Second)
 
-	r, err := c.Stream(t.Context(), &Request{Messages: []Message{{Role: "user", Content: "你好"}}})
+	r, err := c.Stream(t.Context(), &params.Request{Messages: []params.Message{{Role: "user", Content: "你好"}}})
 	if err != nil {
 		t.Fatalf("Stream 失败: %v", err)
 	}
@@ -200,15 +205,15 @@ func TestGeminiErrorStatus(t *testing.T) {
 	defer srv.Close()
 	bad := NewGemini(srv.URL, "wrong-key", "gemini-test-1", 5*time.Second)
 
-	_, err := bad.Chat(t.Context(), &Request{Messages: []Message{{Role: "user", Content: "x"}}})
+	_, err := bad.Chat(t.Context(), &params.Request{Messages: []params.Message{{Role: "user", Content: "x"}}})
 	if code := StatusCode(err); code != 400 {
 		t.Errorf("坏 key StatusCode = %d, want 400（Gemini 标准拒绝）", code)
 	}
 
 	good := NewGemini(srv.URL, "good-key", "gemini-test-1", 5*time.Second)
-	_, err = good.Chat(t.Context(), &Request{
+	_, err = good.Chat(t.Context(), &params.Request{
 		Model:    "nonexistent-model-00000000",
-		Messages: []Message{{Role: "user", Content: "x"}},
+		Messages: []params.Message{{Role: "user", Content: "x"}},
 	})
 	if code := StatusCode(err); code != 404 {
 		t.Errorf("坏模型 StatusCode = %d, want 404", code)

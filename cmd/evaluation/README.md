@@ -160,3 +160,12 @@ go test ./...    # 单测 + 基于 httptest mock 的端到端测试
 ```
 
 新增检查项：在对应 `internal/suites/<layer>/` 包中编写返回 `core.CheckResult` 的函数并挂入该层的 `Run`；新增打分器：在 `internal/scorer/scorer.go` 的 `Score` 中注册新 `type`。
+
+## 参数归一化语义
+
+本工具的协议无关参数类型已下沉到 `internal/llm/params`（`params.Request` / `params.Result` / `params.Message` 等），三个工具共享同一套语义定义：
+
+- **输出上限**：`MaxTokens` 是跨协议通用输出上限（openai `max_tokens` / anthropic `max_tokens` / gemini `maxOutputTokens`）；`MaxCompletionTokens` 是 openai 专属覆盖字段，设置时优先映射到 `max_completion_tokens`（如 L6 的 max_completion_tokens_compat 检查项）。
+- **token 统计**：`Result.PromptTokens/CompletionTokens` 为 int64；`Result.CachedInputTokens` 为缓存命中输入 token（openai `prompt_tokens_details.cached_tokens` / anthropic `cache_read_input_tokens` / gemini `cachedContentTokenCount`），未上报时为 0。
+- **思考内容方言**：`reasoning_content`/`reasoning` 的字段名列表复用 `internal/llm/sse` 的 `ReasoningDialects`（与 performance 的流式判定单一来源）。
+- **厂商特有参数**：`ExtraParams` 任意透传（openai/anthropic 合并到请求体顶层，gemini 合并到 `generationConfig`），等价于 benchmark 的 `extra_thinking`/fork 库扩展字段通道。

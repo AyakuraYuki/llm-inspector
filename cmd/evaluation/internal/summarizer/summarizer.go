@@ -7,6 +7,7 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
@@ -33,8 +34,8 @@ func (s *Summarizer) Summarize(ctx context.Context, report *types.Report) (strin
 	}
 	prompt := buildPrompt(report)
 	zero := 0.0
-	resp, err := s.p.Chat(ctx, &provider.Request{
-		Messages:    []provider.Message{{Role: "user", Content: prompt}},
+	resp, err := s.p.Chat(ctx, &params.Request{
+		Messages:    []params.Message{{Role: "user", Content: prompt}},
 		MaxTokens:   512,
 		Temperature: &zero,
 	})

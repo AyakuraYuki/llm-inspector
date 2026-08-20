@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
 // newAnthropicServer 构造 Anthropic 协议 mock。
@@ -64,7 +66,7 @@ func newAnthropicServer(t *testing.T) *httptest.Server {
 				}
 			}
 
-			send("message_start", `{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10,"output_tokens":1}}}`)
+			send("message_start", `{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":4}}}`)
 			send("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
 			send("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你"}}`)
 			send("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"好"}}`)
@@ -80,7 +82,7 @@ func newAnthropicServer(t *testing.T) *httptest.Server {
 			return
 		}
 
-		_, _ = fmt.Fprintf(w, `{"id":"msg_1","type":"message","role":"assistant","model":%q,"content":[{"type":"text","text":"你好"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}`, req.Model)
+		_, _ = fmt.Fprintf(w, `{"id":"msg_1","type":"message","role":"assistant","model":%q,"content":[{"type":"text","text":"你好"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":4}}`, req.Model)
 	})
 
 	return httptest.NewServer(mux)
@@ -91,8 +93,8 @@ func TestAnthropicChat(t *testing.T) {
 	defer srv.Close()
 	c := NewAnthropic(srv.URL, "good-key", "claude-test-1", 5*time.Second)
 
-	r, err := c.Chat(t.Context(), &Request{
-		Messages: []Message{
+	r, err := c.Chat(t.Context(), &params.Request{
+		Messages: []params.Message{
 			{Role: "system", Content: "system 应被提取"},
 			{Role: "user", Content: "你好"},
 		},
@@ -110,6 +112,9 @@ func TestAnthropicChat(t *testing.T) {
 	if r.PromptTokens != 10 || r.CompletionTokens != 2 {
 		t.Errorf("usage = %d/%d", r.PromptTokens, r.CompletionTokens)
 	}
+	if r.CachedInputTokens != 4 {
+		t.Errorf("CachedInputTokens = %d, want 4（非流式 usage 的 cache_read_input_tokens）", r.CachedInputTokens)
+	}
 }
 
 func TestAnthropicToolCall(t *testing.T) {
@@ -117,9 +122,9 @@ func TestAnthropicToolCall(t *testing.T) {
 	defer srv.Close()
 	c := NewAnthropic(srv.URL, "good-key", "claude-test-1", 5*time.Second)
 
-	r, err := c.Chat(t.Context(), &Request{
-		Messages:    []Message{{Role: "user", Content: "查天气"}},
-		Tools:       []Tool{{Name: "get_weather", Description: "查天气", Parameters: map[string]any{"type": "object"}}},
+	r, err := c.Chat(t.Context(), &params.Request{
+		Messages:    []params.Message{{Role: "user", Content: "查天气"}},
+		Tools:       []params.Tool{{Name: "get_weather", Description: "查天气", Parameters: map[string]any{"type": "object"}}},
 		ToolsChoice: "any",
 	})
 	if err != nil {
@@ -141,8 +146,8 @@ func TestAnthropicStream(t *testing.T) {
 	defer srv.Close()
 	c := NewAnthropic(srv.URL, "good-key", "claude-test-1", 5*time.Second)
 
-	r, err := c.Stream(t.Context(), &Request{
-		Messages:  []Message{{Role: "user", Content: "你好"}},
+	r, err := c.Stream(t.Context(), &params.Request{
+		Messages:  []params.Message{{Role: "user", Content: "你好"}},
 		MaxTokens: 16,
 	})
 	if err != nil {
@@ -162,6 +167,9 @@ func TestAnthropicStream(t *testing.T) {
 	}
 	if r.PromptTokens != 10 || r.CompletionTokens != 2 {
 		t.Errorf("usage = %d/%d", r.PromptTokens, r.CompletionTokens)
+	}
+	if r.CachedInputTokens != 4 {
+		t.Errorf("CachedInputTokens = %d, want 4（message_start 的 cache_read_input_tokens）", r.CachedInputTokens)
 	}
 }
 
@@ -189,8 +197,8 @@ func TestAnthropicStreamThinkingTTFT(t *testing.T) {
 	defer srv.Close()
 	c := NewAnthropic(srv.URL, "good-key", "claude-test-1", 5*time.Second)
 
-	r, err := c.Stream(t.Context(), &Request{
-		Messages:  []Message{{Role: "user", Content: "你好"}},
+	r, err := c.Stream(t.Context(), &params.Request{
+		Messages:  []params.Message{{Role: "user", Content: "你好"}},
 		MaxTokens: 16,
 	})
 	if err != nil {
@@ -226,15 +234,15 @@ func TestAnthropicErrorStatus(t *testing.T) {
 	defer srv.Close()
 	bad := NewAnthropic(srv.URL, "wrong-key", "claude-test-1", 5*time.Second)
 
-	_, err := bad.Chat(t.Context(), &Request{Messages: []Message{{Role: "user", Content: "x"}}})
+	_, err := bad.Chat(t.Context(), &params.Request{Messages: []params.Message{{Role: "user", Content: "x"}}})
 	if code := StatusCode(err); code != 401 {
 		t.Errorf("坏 key StatusCode = %d, want 401", code)
 	}
 
 	good := NewAnthropic(srv.URL, "good-key", "claude-test-1", 5*time.Second)
-	_, err = good.Chat(t.Context(), &Request{
+	_, err = good.Chat(t.Context(), &params.Request{
 		Model:    "nonexistent-model-00000000",
-		Messages: []Message{{Role: "user", Content: "x"}},
+		Messages: []params.Message{{Role: "user", Content: "x"}},
 	})
 	if code := StatusCode(err); code != 404 {
 		t.Errorf("坏模型 StatusCode = %d, want 404", code)

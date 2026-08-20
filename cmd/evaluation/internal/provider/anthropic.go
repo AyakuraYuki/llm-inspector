@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
 const anthropicVersion = "2023-06-01"
@@ -89,8 +91,9 @@ type anthropicContentBlock struct {
 }
 
 type anthropicUsage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
+	InputTokens        int64 `json:"input_tokens"`
+	OutputTokens       int64 `json:"output_tokens"`
+	CacheReadInputToks int64 `json:"cache_read_input_tokens"`
 }
 
 type anthropicResponse struct {
@@ -99,7 +102,7 @@ type anthropicResponse struct {
 	Usage      anthropicUsage          `json:"usage"`
 }
 
-func (c *anthropicClient) buildRequest(req *Request, stream bool) (map[string]any, error) {
+func (c *anthropicClient) buildRequest(req *params.Request, stream bool) (map[string]any, error) {
 	model := req.Model
 	if model == "" {
 		model = c.model
@@ -190,7 +193,7 @@ func anthropicStopReason(s string) string {
 }
 
 // chatHTTPClient 返回本次请求使用的 http.Client；RequestTimeout>0 时用副本覆盖默认超时。
-func (c *anthropicClient) chatHTTPClient(req *Request) *http.Client {
+func (c *anthropicClient) chatHTTPClient(req *params.Request) *http.Client {
 	hc := c.hc
 	if req.RequestTimeout > 0 {
 		clone := *c.hc
@@ -200,7 +203,7 @@ func (c *anthropicClient) chatHTTPClient(req *Request) *http.Client {
 	return hc
 }
 
-func (c *anthropicClient) Chat(ctx context.Context, req *Request) (*Result, error) {
+func (c *anthropicClient) Chat(ctx context.Context, req *params.Request) (*params.Result, error) {
 	start := time.Now()
 	body, err := c.buildRequest(req, false)
 	if err != nil {
@@ -210,7 +213,7 @@ func (c *anthropicClient) Chat(ctx context.Context, req *Request) (*Result, erro
 	if err = doJSON(ctx, c.chatHTTPClient(req), http.MethodPost, c.baseURL+"/messages", c.headers(), body, &resp); err != nil {
 		return nil, err
 	}
-	r := &Result{LatencyMS: milliSince(start)}
+	r := &params.Result{LatencyMS: milliSince(start)}
 	for _, b := range resp.Content {
 		switch b.Type {
 		case "text":
@@ -219,12 +222,13 @@ func (c *anthropicClient) Chat(ctx context.Context, req *Request) (*Result, erro
 			r.ReasoningContent += b.Thinking
 		case "tool_use":
 			args, _ := json.Marshal(b.Input)
-			r.ToolCalls = append(r.ToolCalls, ToolCall{ID: b.ID, Name: b.Name, Arguments: string(args)})
+			r.ToolCalls = append(r.ToolCalls, params.ToolCall{ID: b.ID, Name: b.Name, Arguments: string(args)})
 		}
 	}
 	r.FinishReason = anthropicStopReason(resp.StopReason)
 	r.PromptTokens = resp.Usage.InputTokens
 	r.CompletionTokens = resp.Usage.OutputTokens
+	r.CachedInputTokens = resp.Usage.CacheReadInputToks
 	return r, nil
 }
 
@@ -249,13 +253,13 @@ type anthropicStreamEvent struct {
 	Usage anthropicUsage `json:"usage"`
 }
 
-func (c *anthropicClient) Stream(ctx context.Context, req *Request) (*Result, error) {
+func (c *anthropicClient) Stream(ctx context.Context, req *params.Request) (*params.Result, error) {
 	start := time.Now()
 	body, err := c.buildRequest(req, true)
 	if err != nil {
 		return nil, err
 	}
-	r := &Result{TTFTMS: -1}
+	r := &params.Result{TTFTMS: -1}
 	var sb, rb strings.Builder
 	var toolID string
 	var toolName, toolArgs strings.Builder
@@ -270,6 +274,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req *Request) (*Result, er
 			switch ev.Type {
 			case "message_start":
 				r.PromptTokens = ev.Message.Usage.InputTokens
+				r.CachedInputTokens = ev.Message.Usage.CacheReadInputToks
 			case "content_block_start":
 				if ev.ContentBlock.Type == "tool_use" {
 					toolID = ev.ContentBlock.ID
@@ -303,7 +308,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req *Request) (*Result, er
 			return nil
 		})
 	if toolName.Len() > 0 {
-		r.ToolCalls = append(r.ToolCalls, ToolCall{ID: toolID, Name: toolName.String(), Arguments: toolArgs.String()})
+		r.ToolCalls = append(r.ToolCalls, params.ToolCall{ID: toolID, Name: toolName.String(), Arguments: toolArgs.String()})
 	}
 	r.Content = sb.String()
 	r.ReasoningContent = rb.String()

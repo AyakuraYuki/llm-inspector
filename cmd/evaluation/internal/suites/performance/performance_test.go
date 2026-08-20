@@ -8,16 +8,17 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
 type fakeProvider struct {
-	chatFn func(req *provider.Request) (*provider.Result, error)
+	chatFn func(req *params.Request) (*params.Result, error)
 }
 
-func (f *fakeProvider) Chat(_ context.Context, req *provider.Request) (*provider.Result, error) {
+func (f *fakeProvider) Chat(_ context.Context, req *params.Request) (*params.Result, error) {
 	return f.chatFn(req)
 }
-func (f *fakeProvider) Stream(_ context.Context, req *provider.Request) (*provider.Result, error) {
+func (f *fakeProvider) Stream(_ context.Context, req *params.Request) (*params.Result, error) {
 	return f.chatFn(req)
 }
 func (f *fakeProvider) Models(context.Context) ([]string, error) { return []string{"m"}, nil }
@@ -27,8 +28,8 @@ func (f *fakeProvider) Protocol() string                         { return "opena
 // 全档通过时只能断言"至少"，不能宣称"实测上限"（用户真实案例：
 // kimi-k3 全档通过被报告为"实测上限约 32768"，实际远大于此）。
 func TestContextProbeAllPassedWording(t *testing.T) {
-	p := &fakeProvider{chatFn: func(*provider.Request) (*provider.Result, error) {
-		return &provider.Result{Content: "OK", FinishReason: "stop"}, nil
+	p := &fakeProvider{chatFn: func(*params.Request) (*params.Result, error) {
+		return &params.Result{Content: "OK", FinishReason: "stop"}, nil
 	}}
 	r := checkContextProbe(t.Context(), p, config.PerformanceConfig{MaxProbeTokens: 4096})
 	if r.Status != types.StatusPass || r.Score != 1 {
@@ -44,11 +45,11 @@ func TestContextProbeAllPassedWording(t *testing.T) {
 
 // 中途失败时才能给出实测上限。
 func TestContextProbePartialWording(t *testing.T) {
-	p := &fakeProvider{chatFn: func(req *provider.Request) (*provider.Result, error) {
+	p := &fakeProvider{chatFn: func(req *params.Request) (*params.Result, error) {
 		if len(req.Messages[0].Content) > 3000 { // 约 2048 tokens 档开始失败
 			return nil, &provider.HTTPError{StatusCode: 400, Body: "context length exceeded"}
 		}
-		return &provider.Result{Content: "OK", FinishReason: "stop"}, nil
+		return &params.Result{Content: "OK", FinishReason: "stop"}, nil
 	}}
 	r := checkContextProbe(t.Context(), p, config.PerformanceConfig{MaxProbeTokens: 8192})
 	if !strings.Contains(r.Detail, "实测上限约") {

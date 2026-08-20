@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/openai/openai-go"
+
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
 // TestExtraStringSDKContract 锁定 extraString 依赖的 SDK 解码契约。
@@ -177,14 +179,14 @@ func TestOpenAIStreamReasoningTTFT(t *testing.T) {
 		send(delta(map[string]any{"reasoning_content": "让我想想……"}))
 		send(delta(map[string]any{"content": "你好"}))
 		send(`{"id":"chatcmpl-mock","object":"chat.completion.chunk","created":1,"model":"openai-test-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)
-		send(`{"id":"chatcmpl-mock","object":"chat.completion.chunk","created":1,"model":"openai-test-1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}`)
+		send(`{"id":"chatcmpl-mock","object":"chat.completion.chunk","created":1,"model":"openai-test-1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13,"prompt_tokens_details":{"cached_tokens":5}}}`)
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer srv.Close()
 
 	c := NewOpenAI(srv.URL+"/v1", "good-key", "openai-test-1", 5*time.Second)
-	r, err := c.Stream(t.Context(), &Request{
-		Messages:  []Message{{Role: "user", Content: "你好"}},
+	r, err := c.Stream(t.Context(), &params.Request{
+		Messages:  []params.Message{{Role: "user", Content: "你好"}},
 		MaxTokens: 16,
 	})
 	if err != nil {
@@ -198,5 +200,11 @@ func TestOpenAIStreamReasoningTTFT(t *testing.T) {
 	}
 	if r.TTFTMS < 0 {
 		t.Error("reasoning 首 chunk 后应已记录 TTFT")
+	}
+	if r.PromptTokens != 10 || r.CompletionTokens != 3 {
+		t.Errorf("usage = %d/%d, want 10/3", r.PromptTokens, r.CompletionTokens)
+	}
+	if r.CachedInputTokens != 5 {
+		t.Errorf("CachedInputTokens = %d, want 5（prompt_tokens_details.cached_tokens）", r.CachedInputTokens)
 	}
 }

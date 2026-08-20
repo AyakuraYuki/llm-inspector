@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
@@ -52,8 +53,8 @@ func (j *Judge) Score(ctx context.Context, question, answer, rubric string) (Ver
 	}
 	zero := 0.0
 	prompt := fmt.Sprintf(judgePrompt, rubric, question, answer)
-	resp, err := j.p.Chat(ctx, &provider.Request{
-		Messages:    []provider.Message{{Role: "user", Content: prompt}},
+	resp, err := j.p.Chat(ctx, &params.Request{
+		Messages:    []params.Message{{Role: "user", Content: prompt}},
 		MaxTokens:   1024,
 		Temperature: &zero,
 		JSONMode:    true,
@@ -61,8 +62,8 @@ func (j *Judge) Score(ctx context.Context, question, answer, rubric string) (Ver
 	if err != nil {
 		// 部分服务不支持 JSON mode，降级为普通请求再试一次
 		if provider.StatusCode(err) == 400 {
-			resp, err = j.p.Chat(ctx, &provider.Request{
-				Messages:    []provider.Message{{Role: "user", Content: prompt}},
+			resp, err = j.p.Chat(ctx, &params.Request{
+				Messages:    []params.Message{{Role: "user", Content: prompt}},
 				MaxTokens:   1024,
 				Temperature: &zero,
 			})

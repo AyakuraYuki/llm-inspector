@@ -6,18 +6,18 @@ import (
 	"testing"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
 type fakeProvider struct {
-	chatFn func(req *provider.Request) (*provider.Result, error)
+	chatFn func(req *params.Request) (*params.Result, error)
 }
 
-func (f *fakeProvider) Chat(_ context.Context, req *provider.Request) (*provider.Result, error) {
+func (f *fakeProvider) Chat(_ context.Context, req *params.Request) (*params.Result, error) {
 	return f.chatFn(req)
 }
-func (f *fakeProvider) Stream(_ context.Context, req *provider.Request) (*provider.Result, error) {
+func (f *fakeProvider) Stream(_ context.Context, req *params.Request) (*params.Result, error) {
 	return f.chatFn(req)
 }
 func (f *fakeProvider) Models(context.Context) ([]string, error) { return []string{"m"}, nil }
@@ -45,10 +45,10 @@ func TestNormalize(t *testing.T) {
 func TestSelfConsistencyPunctuationVariants(t *testing.T) {
 	i := 0
 	variants := []string{"巴黎", "巴黎。", "巴黎", "巴黎。", "巴黎"}
-	p := &fakeProvider{chatFn: func(*provider.Request) (*provider.Result, error) {
+	p := &fakeProvider{chatFn: func(*params.Request) (*params.Result, error) {
 		ans := variants[i%len(variants)]
 		i++
-		return &provider.Result{Content: ans, FinishReason: "stop"}, nil
+		return &params.Result{Content: ans, FinishReason: "stop"}, nil
 	}}
 	r := checkSelfConsistency(t.Context(), p, config.StabilityConfig{Samples: 5})
 	if r.Status != types.StatusPass || r.Score != 1 {
@@ -58,8 +58,8 @@ func TestSelfConsistencyPunctuationVariants(t *testing.T) {
 
 // 空输出不应被计为一种答案，且全空时应判 fail 并说明原因。
 func TestSelfConsistencyAllEmpty(t *testing.T) {
-	p := &fakeProvider{chatFn: func(*provider.Request) (*provider.Result, error) {
-		return &provider.Result{Content: "", FinishReason: "length"}, nil
+	p := &fakeProvider{chatFn: func(*params.Request) (*params.Result, error) {
+		return &params.Result{Content: "", FinishReason: "length"}, nil
 	}}
 	r := checkSelfConsistency(t.Context(), p, config.StabilityConfig{Samples: 3})
 	if r.Status != types.StatusFail {
@@ -72,8 +72,8 @@ func TestSelfConsistencyAllEmpty(t *testing.T) {
 
 // 空输出与错误答案应区分统计（用户真实案例：思考型模型预算耗尽输出空串）。
 func TestPromptPerturbationEmptyOutput(t *testing.T) {
-	p := &fakeProvider{chatFn: func(*provider.Request) (*provider.Result, error) {
-		return &provider.Result{Content: "", FinishReason: "length"}, nil
+	p := &fakeProvider{chatFn: func(*params.Request) (*params.Result, error) {
+		return &params.Result{Content: "", FinishReason: "length"}, nil
 	}}
 	r := checkPromptPerturbation(t.Context(), p)
 	if r.Status != types.StatusFail || r.Score != 0 {
@@ -90,9 +90,9 @@ func TestPromptPerturbationEmptyOutput(t *testing.T) {
 // 内容型检查项应给足预算，避免思考型模型正文为空。
 func TestContentBudgetPropagated(t *testing.T) {
 	var gotMax int
-	p := &fakeProvider{chatFn: func(req *provider.Request) (*provider.Result, error) {
+	p := &fakeProvider{chatFn: func(req *params.Request) (*params.Result, error) {
 		gotMax = req.MaxTokens
-		return &provider.Result{Content: "42", FinishReason: "stop"}, nil
+		return &params.Result{Content: "42", FinishReason: "stop"}, nil
 	}}
 	checkPromptPerturbation(t.Context(), p)
 	if gotMax != contentBudget {

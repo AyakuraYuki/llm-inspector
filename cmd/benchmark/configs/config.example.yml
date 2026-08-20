@@ -5,6 +5,8 @@ base_url: "https://api.openai.com/v1" # API 服务地址
 api_key: "sk-xxx"                     # Bearer token
 model: "gpt-4"                        # 待测模型名称
 max_tokens: 65536                     # 最大输出token数限制
+# 注意：本工具会向流式请求附加 stream_options.include_usage=true 以获取精确 token 统计；
+# 若网关不识别该字段（返回 400），请更换兼容网关或联系网关方支持该选项。
 max_workers: 1                        # 测试进程数
 reasoning_effort: high                # 思考强度，支持 low | medium | high | max (部分模型)，具体参考模型规格
 temperature: 1.0                      # 温度

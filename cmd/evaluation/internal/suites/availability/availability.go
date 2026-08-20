@@ -10,6 +10,7 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
 // Run 执行 L1 全部检查。badKeyClient 使用错误 API key 构造，用于验证鉴权错误语义。
@@ -52,8 +53,8 @@ func checkModelsEndpoint(ctx context.Context, p provider.Provider) types.CheckRe
 // checkMinimalChat 验证最小 chat completion 往返。
 func checkMinimalChat(ctx context.Context, p provider.Provider) types.CheckResult {
 	return timed("minimal_chat", 2, func() types.CheckResult {
-		resp, err := p.Chat(ctx, &provider.Request{
-			Messages:  []provider.Message{{Role: "user", Content: "ping"}},
+		resp, err := p.Chat(ctx, &params.Request{
+			Messages:  []params.Message{{Role: "user", Content: "ping"}},
 			MaxTokens: 1,
 		})
 		if err != nil {
@@ -90,8 +91,8 @@ func checkErrorSemantics(ctx context.Context, badKey, p provider.Provider) types
 
 		// 错误 API key：期望显式拒绝
 		total++
-		_, err := badKey.Chat(ctx, &provider.Request{
-			Messages:  []provider.Message{{Role: "user", Content: "ping"}},
+		_, err := badKey.Chat(ctx, &params.Request{
+			Messages:  []params.Message{{Role: "user", Content: "ping"}},
 			MaxTokens: 1,
 		})
 		code := provider.StatusCode(err)
@@ -112,9 +113,9 @@ func checkErrorSemantics(ctx context.Context, badKey, p provider.Provider) types
 
 		// 不存在的模型：期望 4xx；网关类平台常返回 5xx，视为非标准但显式拒绝
 		total++
-		_, err = p.Chat(ctx, &provider.Request{
+		_, err = p.Chat(ctx, &params.Request{
 			Model:     "nonexistent-model-00000000",
-			Messages:  []provider.Message{{Role: "user", Content: "ping"}},
+			Messages:  []params.Message{{Role: "user", Content: "ping"}},
 			MaxTokens: 1,
 		})
 		code = provider.StatusCode(err)

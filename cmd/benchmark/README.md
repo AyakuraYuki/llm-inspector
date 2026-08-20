@@ -395,13 +395,26 @@ AIME 题目原始来源为 Mathematical Association of America (MAA)，答案表
 
 检查 `base_url`、`api_key`、`model` 是否正确。单题报告里的 ERROR ANALYSIS 可以帮助定位是网络、鉴权还是限流问题。
 
+## 参数归一化语义
+
+三个工具（benchmark / evaluation / performance）对 OpenAI 兼容协议的参数语义已对齐（见 `internal/llm/params` 包），本工具在映射总表中的位置：
+
+| 统一参数 | benchmark 的实现 | 说明 |
+| --- | --- | --- |
+| 输出上限 | `max_tokens` 配置 → 请求的 `max_completion_tokens`（默认 65536） | 保留（不映射到 `max_tokens`：o 系列模型不接受该字段） |
+| `reasoning_effort` | 配置项 `reasoning_effort`（自动转小写） | 与 evaluation 的 SDK 直传等价 |
+| `temperature` / `top_p` | 配置项（范围校验 0–2 / 0–1） | 与 evaluation 对齐 |
+| thinking 类厂商参数 | 配置项 `extra_thinking`（JSON 原样注入顶层 `thinking` 字段） | 等价于 evaluation 的 `ExtraParams["thinking"]` |
+| 其他厂商参数 | fork 库的 `chat_template_kwargs` / `service_tier` / `verbosity` 等字段 | 等价于 evaluation 的 `ExtraParams` 任意参数透传 |
+
+**token 统计**：请求带 `stream_options.include_usage=true`，`TokensUsed` 采用最终 usage chunk 的 `completion_tokens`；网关不支持该选项时回退到旧行为（内容 chunk 计数）。报告 JSON 同时输出 `prompt_tokens` / `cached_tokens` / `reasoning_tokens`。
+
 ## 扩展建议
 
-1. 支持从 API 响应的 usage 字段获取精确 token 数
-2. 支持断点续传（保存进度，失败后继续）
-3. 支持按数据集分组统计准确率
-4. 支持多种输出格式（CSV、Excel 等）
-5. 超时时长和心跳间隔改为可配置
+1. 支持断点续传（保存进度，失败后继续）
+2. 支持按数据集分组统计准确率
+3. 支持多种输出格式（CSV、Excel 等）
+4. 超时时长和心跳间隔改为可配置
 
 
 

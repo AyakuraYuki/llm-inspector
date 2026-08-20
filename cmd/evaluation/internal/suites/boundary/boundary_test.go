@@ -8,6 +8,7 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
 // fakeRawProvider 用可编程的规则模拟服务端对裸请求的判定。
@@ -17,10 +18,10 @@ type fakeRawProvider struct {
 	rawFn func(req *provider.RawRequest) int
 }
 
-func (f *fakeRawProvider) Chat(context.Context, *provider.Request) (*provider.Result, error) {
-	return &provider.Result{Content: "ok", FinishReason: "stop", CompletionTokens: 4}, nil
+func (f *fakeRawProvider) Chat(context.Context, *params.Request) (*params.Result, error) {
+	return &params.Result{Content: "ok", FinishReason: "stop", CompletionTokens: 4}, nil
 }
-func (f *fakeRawProvider) Stream(ctx context.Context, req *provider.Request) (*provider.Result, error) {
+func (f *fakeRawProvider) Stream(ctx context.Context, req *params.Request) (*params.Result, error) {
 	return f.Chat(ctx, req)
 }
 func (f *fakeRawProvider) Models(context.Context) ([]string, error) { return []string{"m"}, nil }
@@ -181,10 +182,10 @@ func TestProtocolSkips(t *testing.T) {
 // plainProvider 未实现 RawCaller。
 type plainProvider struct{}
 
-func (p *plainProvider) Chat(context.Context, *provider.Request) (*provider.Result, error) {
+func (p *plainProvider) Chat(context.Context, *params.Request) (*params.Result, error) {
 	return nil, nil
 }
-func (p *plainProvider) Stream(context.Context, *provider.Request) (*provider.Result, error) {
+func (p *plainProvider) Stream(context.Context, *params.Request) (*params.Result, error) {
 	return nil, nil
 }
 func (p *plainProvider) Models(context.Context) ([]string, error) { return nil, nil }

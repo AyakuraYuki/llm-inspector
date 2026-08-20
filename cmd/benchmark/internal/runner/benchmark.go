@@ -97,6 +97,8 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 			},
 		},
 		Stream: true,
+		// 请求流结束前附加携带 usage 的最终 chunk，用于精确 token 统计
+		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
 	}
 	if benchmarkCfg.ReasoningEffort != "" {
 		req.ReasoningEffort = strings.ToLower(benchmarkCfg.ReasoningEffort)
@@ -121,7 +123,6 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 	defer func(stream *openai.ChatCompletionStream) { _ = stream.Close() }(stream)
 
 	var firstTokenTime time.Time
-	var totalTokens int
 	var fullResponse strings.Builder
 	var rawResponses []openai.ChatCompletionStreamResponse
 	receivedFirstToken := false
@@ -151,7 +152,6 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 		if len(response.Choices) > 0 {
 			content := response.Choices[0].Delta.Content
 			fullResponse.WriteString(content)
-			totalTokens++
 
 			// 捕获 finish_reason
 			if response.Choices[0].FinishReason != "" {
@@ -169,7 +169,21 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 
 	endTime := time.Now()
 	result.TotalTime = endTime.Sub(startTime)
-	result.TokensUsed = totalTokens
+	lastUsage, chunkCount := collectUsage(rawResponses)
+	// 优先采用 usage 上报的精确 completion token 数；
+	// 网关不支持 stream_options.include_usage 时回退到旧行为（chunk 计数）
+	if lastUsage != nil {
+		result.TokensUsed = lastUsage.CompletionTokens
+		result.PromptTokens = lastUsage.PromptTokens
+		if lastUsage.PromptTokensDetails != nil {
+			result.CachedTokens = lastUsage.PromptTokensDetails.CachedTokens
+		}
+		if lastUsage.CompletionTokensDetails != nil {
+			result.ReasoningTokens = lastUsage.CompletionTokensDetails.ReasoningTokens
+		}
+	} else {
+		result.TokensUsed = chunkCount
+	}
 	result.ModelAnswer = fullResponse.String()
 	result.RawResponse = rawResponses
 	result.RawResponseHeader = stream.Header()

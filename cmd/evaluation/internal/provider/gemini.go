@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
 var (
@@ -145,7 +147,7 @@ type geminiModelsResponse struct {
 	Models        []geminiModel `json:"models"`
 }
 
-func (c *geminiClient) buildRequest(req *Request) (map[string]any, error) {
+func (c *geminiClient) buildRequest(req *params.Request) (map[string]any, error) {
 	gr := geminiRequest{}
 	var systemParts []string
 	for _, m := range req.Messages {
@@ -242,10 +244,10 @@ func geminiFinishReason(s string) string {
 	}
 }
 
-// applyGeminiResponse 把 Gemini 响应（完整或流式 chunk）合并进 Result。
+// applyGeminiResponse 把 Gemini 响应（完整或流式 chunk）合并进 params.Result。
 // onText 接收正文文本增量；onFirst 在首个有内容的文本（含思考）到达时回调，
 // 供流式调用记录 TTFT。非流式调用（Chat）传 no-op 即可。
-func applyGeminiResponse(r *Result, resp *geminiResponse, onText, onFirst func(string)) {
+func applyGeminiResponse(r *params.Result, resp *geminiResponse, onText, onFirst func(string)) {
 	if len(resp.Candidates) > 0 {
 		cand := resp.Candidates[0]
 		for _, part := range cand.Content.Parts {
@@ -266,7 +268,7 @@ func applyGeminiResponse(r *Result, resp *geminiResponse, onText, onFirst func(s
 		for _, part := range cand.Content.Parts {
 			if part.FunctionCall != nil {
 				args, _ := json.Marshal(part.FunctionCall.Args)
-				r.ToolCalls = append(r.ToolCalls, ToolCall{
+				r.ToolCalls = append(r.ToolCalls, params.ToolCall{
 					Name:      part.FunctionCall.Name,
 					Arguments: string(args),
 				})
@@ -282,9 +284,12 @@ func applyGeminiResponse(r *Result, resp *geminiResponse, onText, onFirst func(s
 	if resp.UsageMetadata.CandidatesTokenCount > 0 {
 		r.CompletionTokens = resp.UsageMetadata.CandidatesTokenCount
 	}
+	if resp.UsageMetadata.CachedContentTokenCount > 0 {
+		r.CachedInputTokens = resp.UsageMetadata.CachedContentTokenCount
+	}
 }
 
-func (c *geminiClient) modelPath(req *Request) string {
+func (c *geminiClient) modelPath(req *params.Request) string {
 	model := req.Model
 	if model == "" {
 		model = c.model
@@ -293,7 +298,7 @@ func (c *geminiClient) modelPath(req *Request) string {
 }
 
 // chatHTTPClient 返回本次请求使用的 http.Client；RequestTimeout>0 时用副本覆盖默认超时。
-func (c *geminiClient) chatHTTPClient(req *Request) *http.Client {
+func (c *geminiClient) chatHTTPClient(req *params.Request) *http.Client {
 	hc := c.hc
 	if req.RequestTimeout > 0 {
 		clone := *c.hc
@@ -303,7 +308,7 @@ func (c *geminiClient) chatHTTPClient(req *Request) *http.Client {
 	return hc
 }
 
-func (c *geminiClient) Chat(ctx context.Context, req *Request) (*Result, error) {
+func (c *geminiClient) Chat(ctx context.Context, req *params.Request) (*params.Result, error) {
 	start := time.Now()
 	body, err := c.buildRequest(req)
 	if err != nil {
@@ -313,19 +318,19 @@ func (c *geminiClient) Chat(ctx context.Context, req *Request) (*Result, error) 
 	if err := doJSON(ctx, c.chatHTTPClient(req), http.MethodPost, c.modelPath(req)+":generateContent", c.headers(), body, &resp); err != nil {
 		return nil, err
 	}
-	r := &Result{LatencyMS: milliSince(start)}
+	r := &params.Result{LatencyMS: milliSince(start)}
 	noop := func(string) {}
 	applyGeminiResponse(r, &resp, func(t string) { r.Content += t }, noop)
 	return r, nil
 }
 
-func (c *geminiClient) Stream(ctx context.Context, req *Request) (*Result, error) {
+func (c *geminiClient) Stream(ctx context.Context, req *params.Request) (*params.Result, error) {
 	start := time.Now()
 	body, err := c.buildRequest(req)
 	if err != nil {
 		return nil, err
 	}
-	r := &Result{TTFTMS: -1}
+	r := &params.Result{TTFTMS: -1}
 	var sb strings.Builder
 	err = ssePost(ctx, c.chatHTTPClient(req), c.modelPath(req)+":streamGenerateContent?alt=sse", c.headers(), body,
 		func(data []byte) error {

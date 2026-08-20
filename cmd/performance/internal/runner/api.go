@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/sse"
 )
 
 // newTransport 构建连接池调优后的 Transport。
@@ -432,57 +433,26 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 	var firstByteMs float64
 	tracker := &firstByteTracker{r: body, t0: t0, firstByte: &firstByteMs}
 
-	var (
-		ttftMs       float64
-		ttftSet      bool
-		promptT      int
-		compT        int
-		cachedT      int
-		usageSet     bool
-		terminalSeen bool
-		upstreamErr  string
-		textParts    []string
-	)
+	s := sse.NewStreamSummary()
 
 	scanner := bufio.NewScanner(tracker)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if isSSEDoneLine(line) {
-			terminalSeen = true
+		if sse.IsSSEDoneLine(line) {
+			s.TerminalSeen = true
 			continue
 		}
-		obj := parseSSELine(line)
+		obj := sse.ParseSSELine(line)
 		if obj == nil {
 			continue
 		}
-		if msg, found := sseErrorInfo(obj); found && upstreamErr == "" {
-			upstreamErr = msg
-		}
-		if sseIsTerminal(obj) {
-			terminalSeen = true
-		}
-		if !ttftSet && sseHasOutputContent(obj) {
-			ttftMs = time.Since(t0).Seconds() * 1000
-			ttftSet = true
-		}
-		p, c, ct, _ := consumeSSEUsage(obj, &textParts)
-		if c >= 0 {
-			compT = c
-			usageSet = true
-			if p > 0 {
-				promptT = p
-			}
-		} else if p > 0 {
-			promptT = p
-		}
-		if ct >= 0 {
-			cachedT = ct
-		}
+		sse.ApplySSEEvent(obj, time.Since(t0).Seconds()*1000, s)
 	}
 
 	e2eMs := time.Since(t0).Seconds() * 1000
+	s.FirstByteMS = firstByteMs
 
 	// 流读取中途出错（连接被重置/网络中断等），不能当作正常结束处理，
 	// 否则已收到的部分内容会让请求被误判为成功（只是输出被截断）。
@@ -498,11 +468,11 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 	// HTTP 200 建流之后网关才发现上游失败时，只能以流内错误事件收尾。
 	// 这类请求的输出被截断甚至为空，若照常记成功，会虚高成功率，
 	// 且偏短的 E2E/token 会拉低时延分位数、污染 TPOT/TPS 分布。
-	if upstreamErr != "" {
+	if s.UpstreamErr != "" {
 		return types.RequestMetrics{
 			Success:      false,
 			TotalLatency: time.Duration(e2eMs * float64(time.Millisecond)),
-			Error:        "upstream error event: " + upstreamErr,
+			Error:        "upstream error event: " + s.UpstreamErr,
 			ErrorType:    types.ErrorTypeUpstreamError,
 		}
 	}
@@ -511,9 +481,9 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 	// 首字节往往只是 message_start/ping 之类的元数据事件，既拉低 TTFT 分位数，
 	// 又让空响应混进成功率和 QPS。仅当 usage 明确报告了输出 token（内容可能是
 	// 本程序未识别的事件格式）时，才回退用首字节时间近似 TTFT 并按成功处理。
-	if !ttftSet {
-		if usageSet && compT > 0 && firstByteMs > 0 {
-			ttftMs = firstByteMs
+	if s.TTFTMS < 0 {
+		if s.UsageSeen && s.CompletionTokens > 0 && s.FirstByteMS > 0 {
+			s.TTFTMS = s.FirstByteMS
 		} else {
 			return types.RequestMetrics{
 				Success:      false,
@@ -526,7 +496,7 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 
 	// 流干净地 EOF 但全程未出现协议终止标记：多半是网关/上游把连接提前
 	// 掐断，输出被无声截断。按成功处理会让这些偏短的请求污染分位数。
-	if !terminalSeen {
+	if !s.TerminalSeen {
 		return types.RequestMetrics{
 			Success:      false,
 			TotalLatency: time.Duration(e2eMs * float64(time.Millisecond)),
@@ -536,326 +506,19 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 	}
 
 	// 无 usage 时用字符数粗估
-	if !usageSet && len(textParts) > 0 {
-		joined := strings.Join(textParts, "")
+	if !s.UsageSeen && len(s.TextParts) > 0 {
+		joined := strings.Join(s.TextParts, "")
 		if strings.TrimSpace(joined) != "" {
-			compT = max(1, len(joined)/4)
+			s.CompletionTokens = max(int64(1), int64(len(joined)/4))
 		}
 	}
 
 	return types.RequestMetrics{
-		TTFT:              time.Duration(ttftMs * float64(time.Millisecond)),
+		TTFT:              time.Duration(s.TTFTMS * float64(time.Millisecond)),
 		TotalLatency:      time.Duration(e2eMs * float64(time.Millisecond)),
-		InputTokens:       promptT,
-		OutputTokens:      compT,
-		CachedInputTokens: max(0, cachedT),
+		InputTokens:       s.PromptTokens,
+		OutputTokens:      s.CompletionTokens,
+		CachedInputTokens: max(int64(0), s.CachedInputTokens),
 		Success:           true,
 	}
-}
-
-// isSSEDoneLine 判断是否为 OpenAI 兼容协议的流终止标记行（data: [DONE]）。
-func isSSEDoneLine(line string) bool {
-	line = strings.TrimSpace(line)
-	if strings.HasPrefix(line, "data:") {
-		line = strings.TrimSpace(line[5:])
-	}
-	return line == "[DONE]"
-}
-
-// sseIsTerminal 判断 SSE 事件是否为协议定义的正常终止信号。各协议在生成结束时
-// 必然给出终止标记：OpenAI 兼容协议为 choices[].finish_reason（外加其后的 [DONE]
-// 行，见 isSSEDoneLine）；Anthropic 为 message_delta.delta.stop_reason 与
-// message_stop；Gemini 为 candidates[].finishReason；Responses API 为
-// response.completed / response.incomplete。全程未见任何终止标记的流按截断处理。
-func sseIsTerminal(obj map[string]any) bool {
-	switch t, _ := obj["type"].(string); t {
-	case "message_stop", "response.completed", "response.incomplete":
-		return true
-	case "message_delta":
-		if delta, ok := obj["delta"].(map[string]any); ok {
-			if sr, _ := delta["stop_reason"].(string); sr != "" {
-				return true
-			}
-		}
-	}
-	if choices, ok := obj["choices"].([]any); ok && len(choices) > 0 {
-		if c, ok := choices[0].(map[string]any); ok {
-			if fr, _ := c["finish_reason"].(string); fr != "" {
-				return true
-			}
-		}
-	}
-	if candidates, ok := obj["candidates"].([]any); ok && len(candidates) > 0 {
-		if cand, ok := candidates[0].(map[string]any); ok {
-			if fr, _ := cand["finishReason"].(string); fr != "" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// sseErrorInfo 识别流内的错误事件。网关常在 HTTP 200 建流后才发现上游失败，
-// 只能以错误事件形式发回：OpenAI 兼容协议/Gemini 为顶层 {"error":{...}}，
-// Anthropic 为 {"type":"error","error":{...}}，Responses API 为
-// {"type":"error",...} 或 {"type":"response.failed","response":{"error":{...}}}。
-func sseErrorInfo(obj map[string]any) (msg string, found bool) {
-	if e, ok := obj["error"].(map[string]any); ok {
-		return errorObjMessage(e), true
-	}
-	switch t, _ := obj["type"].(string); t {
-	case "error":
-		if m, _ := obj["message"].(string); m != "" {
-			return m, true
-		}
-		return "error event", true
-	case "response.failed":
-		if r, ok := obj["response"].(map[string]any); ok {
-			if e, ok := r["error"].(map[string]any); ok {
-				return errorObjMessage(e), true
-			}
-		}
-		return "response.failed", true
-	}
-	return "", false
-}
-
-// errorObjMessage 从错误对象中提取 message，取不到时序列化整个对象兜底。
-func errorObjMessage(e map[string]any) string {
-	if m, _ := e["message"].(string); m != "" {
-		return m
-	}
-	b, _ := json.Marshal(e)
-	return string(b)
-}
-
-// parseSSELine 将 SSE 数据行解析为 JSON 对象，遇到空行/注释/[DONE] 返回 nil。
-func parseSSELine(line string) map[string]any {
-	line = strings.TrimSpace(line)
-	if line == "" || strings.HasPrefix(line, ":") || strings.HasPrefix(line, "event:") {
-		return nil
-	}
-	payload := line
-	if strings.HasPrefix(line, "data:") {
-		payload = strings.TrimSpace(line[5:])
-	}
-	if payload == "[DONE]" {
-		return nil
-	}
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(payload), &obj); err != nil {
-		return nil
-	}
-	return obj
-}
-
-// sseHasOutputContent 检测 SSE 对象是否包含可视文本输出或思考内容（用于标记 TTFT 时刻）。
-//
-// 推理类模型（Claude extended thinking、DeepSeek-R1 系 reasoning_content、
-// Gemini thinking 等）会先流式输出思考内容，再输出正式回答。思考内容同样是
-// 用户/调用方能感知到的首个 token，因此也应计入 TTFT，而不能等到正式回答
-// 开始才打点——否则开启了思考的请求会被算出偏高、失真的 TTFT。
-func sseHasOutputContent(obj map[string]any) bool {
-	// Anthropic: content_block_delta，delta.text 为正式回答，
-	// delta.type == "thinking_delta" 时 delta.thinking 为思考内容
-	if t, _ := obj["type"].(string); t == "content_block_delta" {
-		if delta, ok := obj["delta"].(map[string]any); ok {
-			if text, _ := delta["text"].(string); text != "" {
-				return true
-			}
-			if thinking, _ := delta["thinking"].(string); thinking != "" {
-				return true
-			}
-		}
-	}
-	// OpenAI 兼容协议: choices[].delta.content 为正式回答，
-	// delta.reasoning_content（DeepSeek-R1/多数网关）或 delta.reasoning（部分网关）为思考内容
-	if choices, ok := obj["choices"].([]any); ok && len(choices) > 0 {
-		if c, ok := choices[0].(map[string]any); ok {
-			if delta, ok := c["delta"].(map[string]any); ok {
-				if content, _ := delta["content"].(string); content != "" {
-					return true
-				}
-				if reasoning, _ := delta["reasoning_content"].(string); reasoning != "" {
-					return true
-				}
-				if reasoning, _ := delta["reasoning"].(string); reasoning != "" {
-					return true
-				}
-			}
-		}
-	}
-	// Gemini: candidates[].content.parts[].text
-	// 思考内容同样落在 parts[].text 里（配合 thought:true 标记），此处按文本非空
-	// 统一判断，天然覆盖思考内容，无需额外分支；逐个扫描所有 parts，
-	// 避免首个 part 为空文本时漏判
-	if candidates, ok := obj["candidates"].([]any); ok && len(candidates) > 0 {
-		if cand, ok := candidates[0].(map[string]any); ok {
-			if content, ok := cand["content"].(map[string]any); ok {
-				if parts, ok := content["parts"].([]any); ok {
-					for _, p := range parts {
-						if part, ok := p.(map[string]any); ok {
-							if text, _ := part["text"].(string); text != "" {
-								return true
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	// OpenAI Responses API: response.output_text.delta 为正式回答，
-	// response.reasoning_summary_text.delta / response.reasoning_text.delta 为思考内容
-	if t, _ := obj["type"].(string); t == "response.output_text.delta" ||
-		t == "response.reasoning_summary_text.delta" ||
-		t == "response.reasoning_text.delta" {
-		if delta, _ := obj["delta"].(string); delta != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// consumeSSEUsage 从 SSE 对象中提取 usage（completion_tokens/output_tokens/cached_tokens）和文本片段。
-// compT == -1 表示本事件无 usage 信息；cachedT == -1 表示本事件未携带缓存命中信息。
-func consumeSSEUsage(obj map[string]any, textParts *[]string) (promptT, compT, cachedT int, source string) {
-	compT = -1
-	cachedT = -1
-
-	// OpenAI 顶层 usage（stream_options include_usage 的最终 chunk）
-	if usage, ok := obj["usage"].(map[string]any); ok {
-		c := intFromMap(usage, "completion_tokens", "output_tokens")
-		if c >= 0 {
-			compT = c
-			promptT = max(0, intFromMap(usage, "prompt_tokens", "input_tokens"))
-			source = "usage"
-		}
-		// OpenAI: usage.prompt_tokens_details.cached_tokens
-		if details, ok := usage["prompt_tokens_details"].(map[string]any); ok {
-			cachedT = intFromMap(details, "cached_tokens")
-		}
-	}
-
-	// Anthropic message_delta 事件里的 usage
-	if compT < 0 {
-		if t, _ := obj["type"].(string); t == "message_delta" {
-			if usage, ok := obj["usage"].(map[string]any); ok {
-				c := intFromMap(usage, "output_tokens")
-				if c >= 0 {
-					compT = c
-					source = "usage"
-				}
-			}
-		}
-	}
-
-	// Anthropic message_start 事件里的初始 usage（携带 input_tokens 和缓存读取 token 数，此时尚无 output_tokens）
-	if t, _ := obj["type"].(string); t == "message_start" {
-		if msg, ok := obj["message"].(map[string]any); ok {
-			if usage, ok := msg["usage"].(map[string]any); ok {
-				p := intFromMap(usage, "input_tokens")
-				if p >= 0 {
-					promptT = p
-				}
-				cachedT = intFromMap(usage, "cache_read_input_tokens")
-			}
-		}
-	}
-
-	// Gemini: usageMetadata.candidatesTokenCount / thoughtsTokenCount / cachedContentTokenCount
-	if meta, ok := obj["usageMetadata"].(map[string]any); ok {
-		if compT < 0 {
-			c := intFromMap(meta, "candidatesTokenCount")
-			// candidatesTokenCount 不含思考 token（Gemini 单独记在 thoughtsTokenCount），
-			// 而 OpenAI 的 completion_tokens、Anthropic 的 output_tokens 均含思考 token。
-			// 思考时间在生成窗口里、token 却不在分母里会系统性抬高 TPOT、压低 TPS，
-			// 这里补上思考 token 保证跨协议可比。
-			th := intFromMap(meta, "thoughtsTokenCount")
-			if c >= 0 || th > 0 {
-				compT = max(c, 0) + max(th, 0)
-				promptT = max(0, intFromMap(meta, "promptTokenCount"))
-				source = "usage"
-			}
-		}
-		cachedT = intFromMap(meta, "cachedContentTokenCount")
-	}
-
-	// OpenAI Responses API: response.completed → response.usage
-	if compT < 0 {
-		if t, _ := obj["type"].(string); t == "response.completed" {
-			if r, ok := obj["response"].(map[string]any); ok {
-				if usage, ok := r["usage"].(map[string]any); ok {
-					c := intFromMap(usage, "output_tokens")
-					if c >= 0 {
-						compT = c
-						promptT = max(0, intFromMap(usage, "input_tokens"))
-						source = "usage"
-					}
-					// OpenAI Responses API: usage.input_tokens_details.cached_tokens
-					if details, ok := usage["input_tokens_details"].(map[string]any); ok {
-						cachedT = intFromMap(details, "cached_tokens")
-					}
-				}
-			}
-		}
-	}
-
-	// 收集文本片段（用于 token 估算回退）
-	if choices, ok := obj["choices"].([]any); ok && len(choices) > 0 {
-		if c, ok := choices[0].(map[string]any); ok {
-			if delta, ok := c["delta"].(map[string]any); ok {
-				if content, _ := delta["content"].(string); content != "" {
-					*textParts = append(*textParts, content)
-				}
-			}
-		}
-	}
-
-	if delta, ok := obj["delta"].(map[string]any); ok {
-		if text, _ := delta["text"].(string); text != "" {
-			*textParts = append(*textParts, text)
-		}
-	}
-
-	if candidates, ok := obj["candidates"].([]any); ok && len(candidates) > 0 {
-		if cand, ok := candidates[0].(map[string]any); ok {
-			if content, ok := cand["content"].(map[string]any); ok {
-				if parts, ok := content["parts"].([]any); ok {
-					for _, p := range parts {
-						if part, ok := p.(map[string]any); ok {
-							if text, _ := part["text"].(string); text != "" {
-								*textParts = append(*textParts, text)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// OpenAI Responses API: response.output_text.delta
-	if t, _ := obj["type"].(string); t == "response.output_text.delta" {
-		if delta, _ := obj["delta"].(string); delta != "" {
-			*textParts = append(*textParts, delta)
-		}
-	}
-
-	return
-}
-
-// intFromMap 按顺序查找 keys，返回第一个非负整数，否则返回 -1。
-func intFromMap(m map[string]any, keys ...string) int {
-	for _, k := range keys {
-		v, ok := m[k]
-		if !ok {
-			continue
-		}
-		switch x := v.(type) {
-		case float64:
-			return int(x)
-		case int:
-			return x
-		}
-	}
-	return -1
 }

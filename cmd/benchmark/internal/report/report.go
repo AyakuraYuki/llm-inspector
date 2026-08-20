@@ -26,6 +26,9 @@ func OutputResults(results []types.BenchmarkResult, reportDir string) {
 			TTFTMs:          r.TTFT.Milliseconds(),
 			TotalTimeMs:     r.TotalTime.Milliseconds(),
 			TokensUsed:      r.TokensUsed,
+			PromptTokens:    r.PromptTokens,
+			CachedTokens:    r.CachedTokens,
+			ReasoningTokens: r.ReasoningTokens,
 			TPS:             r.TPS,
 			TPM:             r.TPM,
 			Error:           r.Error,
@@ -153,6 +156,13 @@ func SaveIndividualReports(results []types.BenchmarkResult, reportDir string) {
 		report.WriteString(fmt.Sprintf("TTFT (Time To First Token): %d ms\n", r.TTFT.Milliseconds()))
 		report.WriteString(fmt.Sprintf("Total Time:                 %d ms\n", r.TotalTime.Milliseconds()))
 		report.WriteString(fmt.Sprintf("Tokens Generated:           %d\n", r.TokensUsed))
+		if r.PromptTokens > 0 {
+			report.WriteString(fmt.Sprintf("Prompt Tokens:              %d\n", r.PromptTokens))
+			report.WriteString(fmt.Sprintf("Cached Tokens:              %d\n", r.CachedTokens))
+		}
+		if r.ReasoningTokens > 0 {
+			report.WriteString(fmt.Sprintf("Reasoning Tokens:           %d\n", r.ReasoningTokens))
+		}
 		report.WriteString(fmt.Sprintf("TPS (Tokens Per Second):    %.2f\n", r.TPS))
 		report.WriteString(fmt.Sprintf("TPM (Tokens Per Minute):    %.2f\n", r.TPM))
 
