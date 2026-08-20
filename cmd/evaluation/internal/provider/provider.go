@@ -284,3 +284,7 @@ func ssePost(ctx context.Context, hc *http.Client, url string, headers map[strin
 	}
 	return sc.Err()
 }
+
+func milliSince(t time.Time) float64 {
+	return float64(time.Since(t).Milliseconds())
+}

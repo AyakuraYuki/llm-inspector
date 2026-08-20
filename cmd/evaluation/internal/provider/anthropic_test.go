@@ -18,62 +18,69 @@ func newAnthropicServer(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("x-api-key") != "good-key" {
 			w.WriteHeader(401)
-			fmt.Fprint(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`)
+			_, _ = fmt.Fprint(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`)
 			return
 		}
 		if r.Header.Get("anthropic-version") == "" {
 			w.WriteHeader(400)
-			fmt.Fprint(w, `{"type":"error","error":{"type":"invalid_request_error","message":"missing anthropic-version"}}`)
+			_, _ = fmt.Fprint(w, `{"type":"error","error":{"type":"invalid_request_error","message":"missing anthropic-version"}}`)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"data":[{"type":"model","id":"claude-test-1","display_name":"Test","created_at":"2024-01-01T00:00:00Z"}],"has_more":false}`)
+		_, _ = fmt.Fprint(w, `{"data":[{"type":"model","id":"claude-test-1","display_name":"Test","created_at":"2024-01-01T00:00:00Z"}],"has_more":false}`)
 	})
 
 	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("x-api-key") != "good-key" {
 			w.WriteHeader(401)
-			fmt.Fprint(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`)
+			_, _ = fmt.Fprint(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`)
 			return
 		}
 		var req anthropicRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		if req.Model == "nonexistent-model-00000000" {
 			w.WriteHeader(404)
-			fmt.Fprint(w, `{"type":"error","error":{"type":"not_found_error","message":"model not found"}}`)
+			_, _ = fmt.Fprint(w, `{"type":"error","error":{"type":"not_found_error","message":"model not found"}}`)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 
 		// 工具调用
 		if len(req.Tools) > 0 && req.ToolChoice != nil && req.ToolChoice.Type == "any" {
-			fmt.Fprint(w, `{"id":"msg_1","type":"message","role":"assistant","model":"`+req.Model+`",`+
-				`"content":[{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{"city":"Paris"}}],`+
-				`"stop_reason":"tool_use","usage":{"input_tokens":20,"output_tokens":15}}`)
+			_, _ = fmt.Fprintf(w,
+				`{"id":"msg_1","type":"message","role":"assistant","model":%q,"content":[{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{"city":"Paris"}}],"stop_reason":"tool_use","usage":{"input_tokens":20,"output_tokens":15}}`,
+				req.Model)
 			return
 		}
 
 		// 流式
 		if req.Stream {
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\n")
-			fmt.Fprint(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
-			fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"你\"}}\n\n")
-			fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"好\"}}\n\n")
-			fmt.Fprint(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n")
-			fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+
+			send := func(event, data string) {
+				_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+
+			send("message_start", `{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10,"output_tokens":1}}}`)
+			send("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+			send("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你"}}`)
+			send("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"好"}}`)
+			send("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`)
+			send("message_stop", `{"type":"message_stop"}`)
+
 			return
 		}
 
 		// system 提取检查
 		if req.System == "" && len(req.Messages) > 0 && strings.Contains(fmt.Sprint(req.Messages[0].Content), "system 应被提取") {
-			fmt.Fprint(w, `{"error":"system not extracted"}`)
+			_, _ = fmt.Fprint(w, `{"error":"system not extracted"}`)
 			return
 		}
 
-		fmt.Fprintf(w, `{"id":"msg_1","type":"message","role":"assistant","model":%q,`+
-			`"content":[{"type":"text","text":"你好"}],"stop_reason":"end_turn",`+
-			`"usage":{"input_tokens":10,"output_tokens":2}}`, req.Model)
+		_, _ = fmt.Fprintf(w, `{"id":"msg_1","type":"message","role":"assistant","model":%q,"content":[{"type":"text","text":"你好"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}`, req.Model)
 	})
 
 	return httptest.NewServer(mux)
@@ -163,13 +170,21 @@ func TestAnthropicStream(t *testing.T) {
 func TestAnthropicStreamThinkingTTFT(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\n")
-		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n")
-		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"让我想想……\"}}\n\n")
-		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
-		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\n\n")
-		fmt.Fprint(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n")
-		fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+
+		send := func(event, data string) {
+			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+
+		send("message_start", `{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10,"output_tokens":1}}}`)
+		send("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`)
+		send("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"让我想想……"}}`)
+		send("content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`)
+		send("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"你好"}}`)
+		send("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`)
+		send("message_stop", `{"type":"message_stop"}`)
 	}))
 	defer srv.Close()
 	c := NewAnthropic(srv.URL, "good-key", "claude-test-1", 5*time.Second)

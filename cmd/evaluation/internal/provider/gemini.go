@@ -302,7 +302,7 @@ func (c *geminiClient) Chat(ctx context.Context, req *Request) (*Result, error) 
 	if err := doJSON(ctx, c.chatHTTPClient(req), http.MethodPost, c.modelPath(req)+":generateContent", c.headers(), body, &resp); err != nil {
 		return nil, err
 	}
-	r := &Result{LatencyMS: msSince(start)}
+	r := &Result{LatencyMS: milliSince(start)}
 	noop := func(string) {}
 	applyGeminiResponse(r, &resp, func(t string) { r.Content += t }, noop)
 	return r, nil
@@ -325,7 +325,7 @@ func (c *geminiClient) Stream(ctx context.Context, req *Request) (*Result, error
 			r.Chunks++
 			onFirst := func(t string) {
 				if r.TTFTMS < 0 && t != "" {
-					r.TTFTMS = msSince(start)
+					r.TTFTMS = milliSince(start)
 				}
 			}
 			applyGeminiResponse(r, &chunk, func(t string) {
@@ -335,7 +335,7 @@ func (c *geminiClient) Stream(ctx context.Context, req *Request) (*Result, error
 			return nil
 		})
 	r.Content = sb.String()
-	r.LatencyMS = msSince(start)
+	r.LatencyMS = milliSince(start)
 	if err != nil {
 		// 超时/中断时也返回已累积的内容，便于上层统计"截止出错前的输出量"。
 		return r, err

@@ -175,21 +175,6 @@ func (p *openaiProvider) requestOptions(req *Request) []option.RequestOption {
 	return []option.RequestOption{option.WithRequestTimeout(req.RequestTimeout)}
 }
 
-// extraString 从 SDK 响应的 ExtraFields 中取字符串字段（如方言的 reasoning_content）。
-// 注意：SDK 对未知字段标记为 invalid，但 Raw() 仍保留原始 JSON（含引号），
-// 因此不能依赖 Valid()，只判断字段是否存在。
-func extraString(fields map[string]respjson.Field, key string) string {
-	f, ok := fields[key]
-	if !ok {
-		return ""
-	}
-	var s string
-	if err := json.Unmarshal([]byte(f.Raw()), &s); err != nil {
-		return ""
-	}
-	return s
-}
-
 // Chat 发起非流式调用。
 func (p *openaiProvider) Chat(ctx context.Context, req *Request) (*Result, error) {
 	start := time.Now()
@@ -197,12 +182,12 @@ func (p *openaiProvider) Chat(ctx context.Context, req *Request) (*Result, error
 	if err != nil {
 		return nil, err
 	}
-	r := &Result{LatencyMS: msSince(start)}
+	r := &Result{LatencyMS: milliSince(start)}
 	if len(resp.Choices) > 0 {
 		c := resp.Choices[0]
 		r.Content = c.Message.Content
-		r.ReasoningContent = extraString(c.Message.JSON.ExtraFields, "reasoning_content")
-		r.FinishReason = string(c.FinishReason)
+		r.ReasoningContent = extraReasoning(c.Message.JSON.ExtraFields)
+		r.FinishReason = c.FinishReason
 		for _, tc := range c.Message.ToolCalls {
 			r.ToolCalls = append(r.ToolCalls, ToolCall{
 				ID:        tc.ID,
@@ -228,13 +213,13 @@ func (p *openaiProvider) Stream(ctx context.Context, req *Request) (*Result, err
 		chunk := stream.Current()
 		r.Chunks++
 		if r.TTFTMS < 0 && len(chunk.Choices) > 0 &&
-			(chunk.Choices[0].Delta.Content != "" || extraString(chunk.Choices[0].Delta.JSON.ExtraFields, "reasoning_content") != "") {
-			r.TTFTMS = msSince(start)
+			(chunk.Choices[0].Delta.Content != "" || extraReasoning(chunk.Choices[0].Delta.JSON.ExtraFields) != "") {
+			r.TTFTMS = milliSince(start)
 		}
 		if len(chunk.Choices) > 0 {
 			c := chunk.Choices[0]
 			sb.WriteString(c.Delta.Content)
-			rb.WriteString(extraString(c.Delta.JSON.ExtraFields, "reasoning_content"))
+			rb.WriteString(extraReasoning(c.Delta.JSON.ExtraFields))
 			if c.FinishReason != "" {
 				r.FinishReason = string(c.FinishReason)
 			}
@@ -253,7 +238,7 @@ func (p *openaiProvider) Stream(ctx context.Context, req *Request) (*Result, err
 	}
 	r.Content = sb.String()
 	r.ReasoningContent = rb.String()
-	r.LatencyMS = msSince(start)
+	r.LatencyMS = milliSince(start)
 	if err := stream.Err(); err != nil {
 		// 超时/中断时也返回已累积的内容，便于上层统计"截止出错前的输出量"。
 		return r, err
@@ -287,6 +272,33 @@ func (p *openaiProvider) RawChat(ctx context.Context, req *RawRequest) (*RawResu
 	return rawPost(ctx, p.hc, p.baseURL+"/chat/completions", headers, req.Payload)
 }
 
-func msSince(t time.Time) float64 {
-	return float64(time.Since(t).Microseconds()) / 1000.0
+// reasoningDialects 是 openai 兼容网关承载思考内容的字段名方言，按优先级排列。
+// reasoning_content 为 DeepSeek-R1 及多数网关的写法，reasoning 为部分网关的写法
+// （与 cmd/performance 的流式判定保持一致）。
+var reasoningDialects = []string{"reasoning_content", "reasoning"}
+
+// extraReasoning 按方言顺序取出思考内容，均缺失或非字符串时返回 ""。
+func extraReasoning(fields map[string]respjson.Field) string {
+	for _, key := range reasoningDialects {
+		if s := extraString(fields, key); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// extraString 从 SDK 响应的 ExtraFields 中取字符串字段（如方言的 reasoning_content）。
+// 注意：SDK 未对任何响应结构声明 apijson 的 extras 解码器，未知字段一律被标记为
+// invalid 状态，但 Raw() 仍保留原始 JSON，因此不能依赖 Valid()，只判断字段是否存在。
+// 该前提由 TestExtraStringSDKContract 固化。
+func extraString(fields map[string]respjson.Field, key string) string {
+	f, ok := fields[key]
+	if !ok {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal([]byte(f.Raw()), &s); err != nil {
+		return ""
+	}
+	return s
 }

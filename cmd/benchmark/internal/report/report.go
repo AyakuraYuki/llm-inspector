@@ -3,7 +3,6 @@ package report
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
@@ -38,12 +37,12 @@ func OutputResults(results []types.BenchmarkResult, reportDir string) {
 
 	data, err := json.MarshalIndent(serializableResults, "", "  ")
 	if err != nil {
-		log.Printf("Failed to marshal results: %v", err)
+		logger.Printf("Failed to marshal results: %v", err)
 		return
 	}
 
-	if err := os.WriteFile(filename, data, 0644); err != nil {
-		log.Printf("Failed to write results: %v", err)
+	if err = os.WriteFile(filename, data, 0644); err != nil {
+		logger.Printf("Failed to write results: %v", err)
 		return
 	}
 
@@ -203,7 +202,7 @@ func SaveIndividualReports(results []types.BenchmarkResult, reportDir string) {
 
 		// 写入文件
 		if err := os.WriteFile(filename, []byte(report.String()), 0644); err != nil {
-			log.Printf("Failed to write report for question %d: %v", r.QuestionIndex+1, err)
+			logger.Printf("Failed to write report for question %d: %v", r.QuestionIndex+1, err)
 			failCount++
 		} else {
 			successCount++

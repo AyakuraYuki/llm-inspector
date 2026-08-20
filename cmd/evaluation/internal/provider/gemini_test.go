@@ -19,7 +19,7 @@ func newGeminiServer(t *testing.T) *httptest.Server {
 		if r.Header.Get("x-goog-api-key") != "good-key" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(400)
-			fmt.Fprint(w, `{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}`)
+			_, _ = fmt.Fprint(w, `{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}`)
 			return false
 		}
 		return true
@@ -30,7 +30,7 @@ func newGeminiServer(t *testing.T) *httptest.Server {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"models":[{"name":"models/gemini-test-1","displayName":"Test"}]}`)
+		_, _ = fmt.Fprint(w, `{"models":[{"name":"models/gemini-test-1","displayName":"Test"}]}`)
 	})
 
 	mux.HandleFunc("/v1beta/models/", func(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +43,7 @@ func newGeminiServer(t *testing.T) *httptest.Server {
 		if model == "nonexistent-model-00000000" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(404)
-			fmt.Fprint(w, `{"error":{"code":404,"message":"model not found","status":"NOT_FOUND"}}`)
+			_, _ = fmt.Fprint(w, `{"error":{"code":404,"message":"model not found","status":"NOT_FOUND"}}`)
 			return
 		}
 		var req geminiRequest
@@ -54,28 +54,35 @@ func newGeminiServer(t *testing.T) *httptest.Server {
 		// 工具调用（ANY 模式）
 		if len(req.Tools) > 0 && req.ToolConfig != nil && req.ToolConfig.FunctionCallingConfig.Mode == "ANY" {
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"Paris"}}}]},"finishReason":"STOP"}],%s}`, usage)
+			_, _ = fmt.Fprintf(w, `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"Paris"}}}]},"finishReason":"STOP"}],%s}`, usage)
 			return
 		}
 
 		// 流式（首 chunk 带 thought part：思考内容应先于正文到达）
 		if action == "streamGenerateContent" {
+			send := func(w http.ResponseWriter, payload string) {
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", payload)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"让我想想……\",\"thought\":true},{\"text\":\"你\"}]}}]}\n\n")
-			fmt.Fprint(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"好\"}]}}]}\n\n")
-			fmt.Fprintf(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"！\"}]},\"finishReason\":\"STOP\"}],%s}\n\n", usage)
+			send(w, `{"candidates": [{"content": {"role": "model", "parts": [{"text": "让我想想……", "thought": true}, {"text": "你"}]}}]}`)
+			send(w, `{"candidates": [{"content": {"role": "model", "parts": [{"text": "好"}]}}]}`)
+			send(w, fmt.Sprintf(`{"candidates": [{"content": {"role": "model", "parts": [{"text": "！"}]}, "finishReason": "STOP"}], %s}`, usage))
 			return
 		}
 
 		// JSON mode
 		if req.GenerationConfig != nil && req.GenerationConfig.ResponseMIMEType == "application/json" {
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"{\"city\":\"Paris\"}"}]},"finishReason":"STOP"}],%s}`, usage)
+			_, _ = fmt.Fprintf(w, `{"candidates": [{"content": {"role":"model","parts":[{"text":"{\"city\":\"Paris\"}"}]},"finishReason":"STOP"}],%s}`, usage)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"你好"}]},"finishReason":"STOP"}],%s}`, usage)
+		_, _ = fmt.Fprintf(w, `{"candidates": [{"content": {"role": "model","parts":[{"text":"你好"}]},"finishReason":"STOP"}],%s}`, usage)
 	})
 
 	return httptest.NewServer(mux)

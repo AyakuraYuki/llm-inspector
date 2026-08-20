@@ -210,7 +210,7 @@ func (c *anthropicClient) Chat(ctx context.Context, req *Request) (*Result, erro
 	if err = doJSON(ctx, c.chatHTTPClient(req), http.MethodPost, c.baseURL+"/messages", c.headers(), body, &resp); err != nil {
 		return nil, err
 	}
-	r := &Result{LatencyMS: msSince(start)}
+	r := &Result{LatencyMS: milliSince(start)}
 	for _, b := range resp.Content {
 		switch b.Type {
 		case "text":
@@ -281,12 +281,12 @@ func (c *anthropicClient) Stream(ctx context.Context, req *Request) (*Result, er
 				switch ev.Delta.Type {
 				case "text_delta":
 					if r.TTFTMS < 0 && ev.Delta.Text != "" {
-						r.TTFTMS = msSince(start)
+						r.TTFTMS = milliSince(start)
 					}
 					sb.WriteString(ev.Delta.Text)
 				case "thinking_delta":
 					if r.TTFTMS < 0 && ev.Delta.Thinking != "" {
-						r.TTFTMS = msSince(start)
+						r.TTFTMS = milliSince(start)
 					}
 					rb.WriteString(ev.Delta.Thinking)
 				case "input_json_delta":
@@ -307,7 +307,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req *Request) (*Result, er
 	}
 	r.Content = sb.String()
 	r.ReasoningContent = rb.String()
-	r.LatencyMS = msSince(start)
+	r.LatencyMS = milliSince(start)
 	if err != nil {
 		// 超时/中断时也返回已累积的内容，便于上层统计"截止出错前的输出量"。
 		return r, err
