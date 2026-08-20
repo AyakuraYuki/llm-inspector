@@ -17,6 +17,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/suites/stability"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/summarizer"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/logger"
 	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
@@ -103,7 +104,7 @@ func Run(ctx context.Context, cfg *config.Config) (*types.Report, error) {
 		}
 		// 输出当前层级进度
 		info, _ := catalogInfo(id)
-		fmt.Printf("执行 %s (%s)...\n", id, info.Name)
+		logger.Printf("执行 %s (%s)...", id, info.Name)
 		lr = fn()
 		lr.Compute(cfg.Thresholds.MinLayerScore)
 		// 输出层级完成状态
@@ -111,7 +112,7 @@ func Run(ctx context.Context, cfg *config.Config) (*types.Report, error) {
 		if !lr.Passed {
 			status = "✗"
 		}
-		fmt.Printf("  %s %s 完成 (%.1f%%, %.2fs)\n", status, id, lr.Score*100, lr.DurationMS/1000)
+		logger.Printf("  %s %s 完成 (%.1f%%, %.2fs)", status, id, lr.Score*100, lr.DurationMS/1000)
 		r.Layers = append(r.Layers, lr)
 		if id == "L1" && lr.HasFail() {
 			skipRest = true

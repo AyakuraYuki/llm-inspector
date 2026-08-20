@@ -41,7 +41,7 @@ func main() {
 	}
 
 	// 日志文件与报告目录同名，带 .txt 后缀，存放在启动时的工作目录
-	logger.SetLogfile(filepath.Join(workingDir(), filepath.Base(reportDir)+".txt"))
+	logger.SetLogfileForReportDir(reportDir)
 
 	var (
 		benchmarkCfg = cfg.BenchmarkConfig()
@@ -65,13 +65,4 @@ func main() {
 	report.OutputResults(results, reportDir)         // 输出 JSON 结果
 	report.SaveIndividualReports(results, reportDir) // 保存每个问题的详细报告
 	reporter.PrintStatistics(results)                // 计算统计信息
-}
-
-// workingDir 返回启动时的工作目录，获取失败时回退到相对路径
-func workingDir() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	return wd
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/report"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/runner"
+	"github.com/AyakuraYuki/llm-inspector/internal/logger"
 )
 
 var configPath string
@@ -26,7 +27,11 @@ var runCmd = &cobra.Command{
 
 		ctx := cmd.Context() // from main
 
-		fmt.Printf("开始评测 %s（模型 %s）...\n", conf.Target.BaseURL, conf.Target.Model)
+		// 先确定本次报告目录，日志文件与其同名并存放在当前工作目录
+		outDir := report.NewOutputDir(conf.Output.Dir)
+		logger.SetLogfileForReportDir(outDir)
+
+		logger.Printf("开始评测 %s（模型 %s）...", conf.Target.BaseURL, conf.Target.Model)
 		start := time.Now()
 		r, err := runner.Run(ctx, conf)
 		if err != nil {
@@ -34,11 +39,10 @@ var runCmd = &cobra.Command{
 		}
 		report.Console(os.Stdout, r)
 
-		outDir, err := report.Save(conf.Output.Dir, conf.Output.Formats, r)
-		if err != nil {
+		if err = report.Save(outDir, conf.Output.Formats, r); err != nil {
 			return &ExitError{Code: 1, Err: fmt.Errorf("保存报告失败: %w", err)}
 		}
-		fmt.Printf("报告已保存: %s（总耗时 %.1fs）\n", outDir, time.Since(start).Seconds())
+		logger.Printf("报告已保存: %s（总耗时 %.1fs）", outDir, time.Since(start).Seconds())
 
 		if r.Verdict != "pass" && r.Verdict != "pass_with_warnings" {
 			return &ExitError{Code: 1, Err: errors.New("评测未通过")}

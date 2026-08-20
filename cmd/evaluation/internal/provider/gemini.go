@@ -44,26 +44,58 @@ func (c *geminiClient) headers() map[string]string {
 	return map[string]string{"x-goog-api-key": c.apiKey}
 }
 
-type geminiPart struct {
-	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
-	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
-	Text             string                  `json:"text,omitempty"`
-	Thought          bool                    `json:"thought,omitempty"`
+type geminiRequest struct {
+	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
+	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
+	ToolConfig        *geminiToolConfig       `json:"toolConfig,omitempty"`
+	Contents          []geminiContent         `json:"contents"`
+	Tools             []geminiTool            `json:"tools,omitempty"`
 }
 
-type geminiFunctionCall struct {
-	Args map[string]any `json:"args,omitempty"`
-	Name string         `json:"name"`
+type geminiResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []geminiPart `json:"parts"`
+		} `json:"content"`
+		FinishReason string `json:"finishReason"`
+	} `json:"candidates"`
+	UsageMetadata geminiUsageMetadata `json:"usageMetadata"`
 }
 
-type geminiFunctionResponse struct {
-	Response map[string]any `json:"response"`
-	Name     string         `json:"name"`
+type geminiUsageMetadata struct {
+	PromptTokenCount        int64 `json:"promptTokenCount"`
+	CachedContentTokenCount int64 `json:"cachedContentTokenCount"`
+	CandidatesTokenCount    int64 `json:"candidatesTokenCount"`
+	ToolUsePromptTokenCount int64 `json:"toolUsePromptTokenCount"`
+	ThoughtsTokenCount      int64 `json:"thoughtsTokenCount"`
+	TotalTokenCount         int64 `json:"totalTokenCount"`
 }
 
 type geminiContent struct {
-	Role  string       `json:"role,omitempty"`
 	Parts []geminiPart `json:"parts"`
+	Role  string       `json:"role,omitempty"`
+}
+
+type geminiPart struct {
+	Thought          bool   `json:"thought,omitempty"`
+	ThoughtSignature string `json:"thoughtSignature,omitempty"`
+
+	Text             string                  `json:"text,omitempty"`
+	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
+	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
+}
+
+type geminiFunctionCall struct {
+	ID   string         `json:"id"`
+	Name string         `json:"name"`
+	Args map[string]any `json:"args,omitempty"`
+}
+
+type geminiFunctionResponse struct {
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	Response     map[string]any `json:"response"`
+	WillContinue bool           `json:"willContinue,omitempty"`
 }
 
 type geminiGenerationConfig struct {
@@ -90,27 +122,6 @@ type geminiToolConfig struct {
 	FunctionCallingConfig struct {
 		Mode string `json:"mode"` // AUTO / ANY / NONE
 	} `json:"functionCallingConfig"`
-}
-
-type geminiRequest struct {
-	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
-	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
-	ToolConfig        *geminiToolConfig       `json:"toolConfig,omitempty"`
-	Contents          []geminiContent         `json:"contents"`
-	Tools             []geminiTool            `json:"tools,omitempty"`
-}
-
-type geminiResponse struct {
-	Candidates []struct {
-		Content struct {
-			Parts []geminiPart `json:"parts"`
-		} `json:"content"`
-		FinishReason string `json:"finishReason"`
-	} `json:"candidates"`
-	UsageMetadata struct {
-		PromptTokenCount     int64 `json:"promptTokenCount"`
-		CandidatesTokenCount int64 `json:"candidatesTokenCount"`
-	} `json:"usageMetadata"`
 }
 
 type geminiModel struct {

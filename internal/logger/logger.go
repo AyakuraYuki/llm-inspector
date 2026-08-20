@@ -4,6 +4,7 @@ package logger
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,16 @@ func SetLogfile(path string) {
 	mu.Lock()
 	defer mu.Unlock()
 	logfile = path
+}
+
+// SetLogfileForReportDir 按「报告目录名 + .txt」的约定，在当前工作目录下启用日志文件。
+// reportDir 不必已经存在，此处只取它的目录名。
+func SetLogfileForReportDir(reportDir string) {
+	wd, err := os.Getwd()
+	if err != nil {
+		wd = "."
+	}
+	SetLogfile(filepath.Join(wd, filepath.Base(reportDir)+".txt"))
 }
 
 // Printf 输出带时间戳的日志，用于跟踪测试进度

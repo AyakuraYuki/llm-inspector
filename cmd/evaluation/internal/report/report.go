@@ -36,27 +36,32 @@ func VerdictLabel(v string) string {
 	}
 }
 
-// Save 按 formats 将报告写入 dir/<timestamp>/ 下，返回输出目录。
-func Save(dir string, formats []string, r *types.Report) (string, error) {
-	outDir := filepath.Join(dir, time.Now().Format("20060102_150405"))
+// NewOutputDir 生成本次运行的报告输出目录路径（dir/<时间戳>），不创建目录。
+// 目录名同时用于日志文件命名，需要在评测开始前先行确定，因此与 Save 分离。
+func NewOutputDir(dir string) string {
+	return filepath.Join(dir, time.Now().Format("20060102_150405"))
+}
+
+// Save 按 formats 将报告写入 outDir，目录不存在时创建。
+func Save(outDir string, formats []string, r *types.Report) error {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return "", fmt.Errorf("创建报告目录失败: %w", err)
+		return fmt.Errorf("创建报告目录失败: %w", err)
 	}
 	for _, f := range formats {
 		switch strings.ToLower(f) {
 		case "json":
 			if err := writeJSON(filepath.Join(outDir, "report.json"), r); err != nil {
-				return "", err
+				return err
 			}
 		case "markdown", "md":
 			if err := writeMarkdown(filepath.Join(outDir, "report.md"), r); err != nil {
-				return "", err
+				return err
 			}
 		default:
-			return "", fmt.Errorf("未知报告格式: %q", f)
+			return fmt.Errorf("未知报告格式: %q", f)
 		}
 	}
-	return outDir, nil
+	return nil
 }
 
 func writeJSON(path string, r *types.Report) error {
