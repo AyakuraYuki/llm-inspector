@@ -81,7 +81,7 @@ func runGolden(t *testing.T, dir, golden string) {
 
 // TestHuggingFaceGolden 对拍 HuggingFace transformers 的输出。
 func TestHuggingFaceGolden(t *testing.T) {
-	runGolden(t, "deepseek-v4-flash-0731", "deepseek.golden.json")
+	runGolden(t, "deepseek-v4", "deepseek.golden.json")
 }
 
 // TestTiktokenGolden 对拍官方 tiktoken 库的输出。
@@ -91,7 +91,7 @@ func TestTiktokenGolden(t *testing.T) {
 
 // TestDeepSeekV4Pro 确认第二份 DeepSeek 配置同样可用。
 func TestDeepSeekV4Pro(t *testing.T) {
-	path := requireConfig(t, "deepseek-v4-pro-0813")
+	path := requireConfig(t, "deepseek-v4")
 	tk, err := New(path)
 	require.NoError(t, err)
 
@@ -103,7 +103,7 @@ func TestDeepSeekV4Pro(t *testing.T) {
 
 // TestNewAcceptsFilePaths 验证 New 既接受目录也接受目录下的具体文件。
 func TestNewAcceptsFilePaths(t *testing.T) {
-	dir := requireConfig(t, "deepseek-v4-flash-0731")
+	dir := requireConfig(t, "deepseek-v4")
 
 	for _, path := range []string{
 		dir,
@@ -122,7 +122,7 @@ func TestNewAcceptsFilePaths(t *testing.T) {
 
 // TestNewCaches 验证同一路径不会被重复解析。
 func TestNewCaches(t *testing.T) {
-	dir := requireConfig(t, "deepseek-v4-flash-0731")
+	dir := requireConfig(t, "deepseek-v4")
 	a, err := New(dir)
 	require.NoError(t, err)
 	b, err := New(dir)
@@ -208,7 +208,7 @@ func TestNilTokenizer(t *testing.T) {
 
 // TestEmptyText 空串编码为零个 token，与 HuggingFace 一致。
 func TestEmptyText(t *testing.T) {
-	dir := requireConfig(t, "deepseek-v4-flash-0731")
+	dir := requireConfig(t, "deepseek-v4")
 	tk, err := New(dir)
 	require.NoError(t, err)
 
@@ -220,7 +220,7 @@ func TestEmptyText(t *testing.T) {
 
 // TestAddedTokensAreAtomic 验证 added token 整体成为一个 token，不被 BPE 拆开。
 func TestAddedTokensAreAtomic(t *testing.T) {
-	dir := requireConfig(t, "deepseek-v4-flash-0731")
+	dir := requireConfig(t, "deepseek-v4")
 	tk, err := New(dir)
 	require.NoError(t, err)
 
@@ -390,7 +390,7 @@ func TestParseMerges(t *testing.T) {
 
 // TestBPECacheIsConsistent 验证缓存命中与未命中给出相同结果。
 func TestBPECacheIsConsistent(t *testing.T) {
-	dir := requireConfig(t, "deepseek-v4-flash-0731")
+	dir := requireConfig(t, "deepseek-v4")
 	tk, err := New(dir)
 	require.NoError(t, err)
 
@@ -404,7 +404,7 @@ func TestBPECacheIsConsistent(t *testing.T) {
 
 // TestConcurrentEncode 验证分词器可被并发使用。
 func TestConcurrentEncode(t *testing.T) {
-	dir := requireConfig(t, "deepseek-v4-flash-0731")
+	dir := requireConfig(t, "deepseek-v4")
 	tk, err := New(dir)
 	require.NoError(t, err)
 
@@ -436,7 +436,7 @@ func TestConcurrentEncode(t *testing.T) {
 
 // TestLongTextDoesNotBlowUp 用超长文本探一遍回溯引擎的超时保护。
 func TestLongTextDoesNotBlowUp(t *testing.T) {
-	dir := requireConfig(t, "deepseek-v4-flash-0731")
+	dir := requireConfig(t, "deepseek-v4")
 	tk, err := New(dir)
 	require.NoError(t, err)
 
@@ -447,7 +447,7 @@ func TestLongTextDoesNotBlowUp(t *testing.T) {
 }
 
 func BenchmarkEncodeHuggingFace(b *testing.B) {
-	tk, err := New(filepath.Join(configRoot, "deepseek-v4-flash-0731"))
+	tk, err := New(filepath.Join(configRoot, "deepseek-v4"))
 	if err != nil {
 		b.Skipf("缺少分词器配置: %v", err)
 	}
