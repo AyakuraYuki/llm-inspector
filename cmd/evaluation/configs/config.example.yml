@@ -23,7 +23,7 @@ target:
     # default_max_tokens: 32768  # 官方标称的 max_tokens 默认值（未配置则跳过 default_max_tokens 探测）
   protocol: openai # openai（默认）/ anthropic / gemini
   timeout: 60s
-  tokenizer_config: tokenizer.json # 分词器配置文件路径
+  tokenizer_config: tokenizer/model-name # 分词器配置文件目录路径
 
 # Anthropic 原生示例：
 # target:
