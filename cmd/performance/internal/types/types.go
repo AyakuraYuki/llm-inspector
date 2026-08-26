@@ -162,12 +162,13 @@ type AggregatedMetrics struct {
 	FailedDetails []RequestMetrics // 每条失败请求的原始记录，用于错误明细 sheet
 
 	// 仅流式端点有效
-	TTFT       PercentileStats // 首 token 时延，仅统计成功请求
-	TPOT       PercentileStats // Time Per Output Token（gen_window / output_tokens）
-	TpsPr      FloatStats      // per-request tokens/s 分位数
-	TpmPr      FloatStats      // per-request tokens/min 分位数
-	IOR        FloatStats      // per-request 输出/输入 token 比（output_tokens / input_tokens）分位数
-	CacheHitPr FloatStats      // per-request 缓存命中率（cached_input_tokens / input_tokens * 100）分位数，仅上报了缓存字段的 provider 有效
+	TTFT             PercentileStats // 首 token 时延，仅统计成功请求
+	TPOT             PercentileStats // Time Per Output Token（gen_window / output_tokens）
+	TpsPr            FloatStats      // per-request tokens/s 分位数
+	TpmPr            FloatStats      // per-request tokens/min 分位数
+	GenSpeedExcluded int             // 因生成窗口过窄（响应一次性到达，测不出真实解码速度）被 TPOT/TPS/TPM 剔除的成功样本数
+	IOR              FloatStats      // per-request 输出/输入 token 比（output_tokens / input_tokens）分位数
+	CacheHitPr       FloatStats      // per-request 缓存命中率（cached_input_tokens / input_tokens * 100）分位数，仅上报了缓存字段的 provider 有效
 
 	// 所有端点均有
 	Latency PercentileStats // 端到端时延，仅统计成功请求（失败时延见 FailedDetails）

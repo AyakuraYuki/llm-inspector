@@ -66,6 +66,12 @@ func printOne(agg types.AggregatedMetrics) {
 		fmt.Printf("  [WARN] %s\n", note)
 	}
 
+	// 生成窗口过窄的样本（响应一次性到达）不参与 TPOT/TPS/TPM 分位数
+	if agg.GenSpeedExcluded > 0 {
+		fmt.Printf("  [NOTE] %d 条样本因生成窗口过窄（响应一次性到达）被剔除出 TPOT/TPS 分位数，疑似网关缓冲或压测机读流饥饿\n",
+			agg.GenSpeedExcluded)
+	}
+
 	// 失败原因分类
 	if agg.Failed > 0 && len(agg.ErrorCounts) > 0 {
 		var parts []string

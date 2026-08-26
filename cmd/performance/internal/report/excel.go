@@ -131,8 +131,8 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 	rows = append(rows, []any{"指标说明", "见下"})
 	rows = append(rows, []any{"- TTFT", "首 token 时延"})
 	rows = append(rows, []any{"- TPOT", "每 token 生成耗时（gen_window/tokens）"})
-	rows = append(rows, []any{"- TPS", "per-request tokens/s（P50/P95/P99/P99.5/P99.9）"})
-	rows = append(rows, []any{"- TPM", "per-request tokens/min（P50/P95/P99/P99.5/P99.9）"})
+	rows = append(rows, []any{"- TPS", "per-request tokens/s（P50/P95/P99/P99.5/P99.9；生成窗口 <100ms 或 <5%×E2E 的样本视为一次性到达，不入样，剔除数见备注列）"})
+	rows = append(rows, []any{"- TPM", "per-request tokens/min（P50/P95/P99/P99.5/P99.9；入样口径同 TPS）"})
 	rows = append(rows, []any{"- System TPS", "吞吐窗口内完成的总 tokens/窗口时长（窗口外完成的长尾请求不计入）"})
 	rows = append(rows, []any{"- QPS（又称RPS）", "系统级 req/s"})
 	rows = append(rows, []any{"- QPM（又称RPM）", "系统级 req/min"})
@@ -234,10 +234,14 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 		if agg.Provider == types.ProviderOpenAIImage {
 			continue
 		}
-		note := ""
+		var notes []string
 		if agg.TpsPr.N > 0 && agg.TpsPr.N < 20 {
-			note = fmt.Sprintf("样本量少(N=%d)，P99 仅供参考", agg.TpsPr.N)
+			notes = append(notes, fmt.Sprintf("样本量少(N=%d)，P99 仅供参考", agg.TpsPr.N))
 		}
+		if agg.GenSpeedExcluded > 0 {
+			notes = append(notes, fmt.Sprintf("剔除 %d 条生成窗口过窄的样本（响应一次性到达，测不出真实解码速度）", agg.GenSpeedExcluded))
+		}
+		note := strings.Join(notes, "；")
 		xlSetRow(f, sh, row, []any{
 			agg.Model,
 			string(agg.Provider),
