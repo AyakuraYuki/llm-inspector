@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/report"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/reporter"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/runner"
+	"github.com/AyakuraYuki/llm-inspector/internal/errlog"
 	"github.com/AyakuraYuki/llm-inspector/internal/logger"
 	"github.com/AyakuraYuki/llm-inspector/pkg/go-openai"
 )
@@ -43,6 +45,9 @@ func main() {
 	// 日志文件与报告目录同名，带 .txt 后缀，存放在启动时的工作目录
 	logger.SetLogfileForReportDir(reportDir)
 
+	// 请求错误日志（JSONL）随报告目录存放，只有出现错误时才会创建文件
+	errlog.Init(filepath.Join(reportDir, "request_errors.jsonl"))
+
 	var (
 		benchmarkCfg = cfg.BenchmarkConfig()
 		questions    = cfg.Questions()
@@ -52,15 +57,19 @@ func main() {
 	logger.Printf("Config: max_tokens=%d, max_workers=%d", benchmarkCfg.MaxTokens, benchmarkCfg.MaxWorkers)
 	logger.Printf("Model: %s, Base URL: %s", cfg.Model, cfg.BaseURL)
 
-	// 创建 OpenAI 客户端
+	// 创建 OpenAI 客户端；Transport 包一层请求错误记录（传输失败/非 2xx/流中断）
 	clientConfig := openai.DefaultConfig(cfg.APIKey)
 	clientConfig.BaseURL = cfg.BaseURL
+	clientConfig.HTTPClient = &http.Client{Transport: errlog.WrapTransport(nil)}
 	client := openai.NewClientWithConfig(clientConfig)
 
 	// 运行 benchmark
 	logger.Printf("Benchmark started")
 	results := runner.RunBenchmark(client, cfg.Model, questions, benchmarkCfg)
 	logger.Printf("Benchmark finished")
+	if n := errlog.Count(); n > 0 {
+		logger.Printf("请求错误日志（%d 条）: %s", n, errlog.Path())
+	}
 
 	report.OutputResults(results, reportDir)         // 输出 JSON 结果
 	report.SaveIndividualReports(results, reportDir) // 保存每个问题的详细报告

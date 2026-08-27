@@ -68,6 +68,7 @@ type RequestMetrics struct {
 	Success           bool
 	Error             string
 	ErrorType         ErrorType
+	RequestID         string // 失败请求从响应 Header/响应体提取的请求 ID（拿不到响应时为空）
 }
 
 // BenchmarkConfig 保存测试参数

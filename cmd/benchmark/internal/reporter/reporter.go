@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/logger"
 )
 
 // ReportInterval 是心跳监控器输出当前进度的间隔
@@ -58,42 +59,43 @@ func PrintStatistics(results []types.BenchmarkResult) {
 		return
 	}
 
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("BENCHMARK STATISTICS")
-	fmt.Println(strings.Repeat("=", 60))
-	fmt.Printf("Total questions: %d\n", len(results))
-	fmt.Printf("Successful: %d\n", successCount)
-	fmt.Printf("Failed: %d\n", len(results)-successCount)
-	fmt.Println()
+	logger.Printf("")
+	logger.Printf("%s", strings.Repeat("=", 60))
+	logger.Printf("BENCHMARK SUMMARY")
+	logger.Printf("%s", strings.Repeat("=", 60))
+	logger.Printf("Total questions: %d", len(results))
+	logger.Printf("Successful: %d", successCount)
+	logger.Printf("Failed: %d", len(results)-successCount)
+	logger.Printf("")
 
 	// finish_reason 分布
-	fmt.Println("Finish Reason Distribution:")
+	logger.Printf("Finish Reason Distribution:")
 	for reason, count := range finishReasonCounts {
 		percentage := float64(count) / float64(successCount) * 100
-		fmt.Printf("  %s: %d (%.1f%%)\n", reason, count, percentage)
+		logger.Printf("  %s: %d (%.1f%%)", reason, count, percentage)
 	}
-	fmt.Println()
+	logger.Printf("")
 
 	// 答案正确性统计
 	if questionsWithAnswer > 0 {
 		accuracy := float64(correctCount) / float64(questionsWithAnswer) * 100
-		fmt.Printf("Questions with answers: %d\n", questionsWithAnswer)
-		fmt.Printf("Correct answers: %d\n", correctCount)
-		fmt.Printf("Wrong answers: %d\n", questionsWithAnswer-correctCount)
-		fmt.Printf("Accuracy: %.2f%%\n", accuracy)
-		fmt.Printf("In datasets:\n")
+		logger.Printf("Questions with answers: %d", questionsWithAnswer)
+		logger.Printf("Correct answers: %d", correctCount)
+		logger.Printf("Wrong answers: %d", questionsWithAnswer-correctCount)
+		logger.Printf("Accuracy: %.2f%%", accuracy)
+		logger.Printf("In datasets:")
 		for _, dataset := range slices.Sorted(maps.Keys(datasetQuestionsWithAnswer)) {
 			datasetAccuracy := float64(datasetCorrectCount[dataset]) / float64(datasetQuestionsWithAnswer[dataset]) * 100
-			fmt.Printf("  - %s: %d/%d (%.2f%%)\n", dataset, datasetCorrectCount[dataset], datasetQuestionsWithAnswer[dataset], datasetAccuracy)
+			logger.Printf("  - %s: %d/%d (%.2f%%)", dataset, datasetCorrectCount[dataset], datasetQuestionsWithAnswer[dataset], datasetAccuracy)
 		}
-		fmt.Println()
+		logger.Printf("")
 	}
 
 	// 性能统计
-	fmt.Printf("Average TTFT: %d ms\n", totalTTFT.Milliseconds()/int64(successCount))
-	fmt.Printf("Average Total Time: %d ms\n", totalTime.Milliseconds()/int64(successCount))
-	fmt.Printf("Average Tokens: %d\n", totalTokens/successCount)
-	fmt.Printf("Average TPS: %.2f\n", totalTPS/float64(successCount))
-	fmt.Printf("Average TPM: %.2f\n", totalTPM/float64(successCount))
-	fmt.Println(strings.Repeat("=", 60))
+	logger.Printf("Average TTFT: %d ms", totalTTFT.Milliseconds()/int64(successCount))
+	logger.Printf("Average Total Time: %d ms", totalTime.Milliseconds()/int64(successCount))
+	logger.Printf("Average Tokens: %d", totalTokens/successCount)
+	logger.Printf("Average TPS: %.2f", totalTPS/float64(successCount))
+	logger.Printf("Average TPM: %.2f", totalTPM/float64(successCount))
+	logger.Printf("%s", strings.Repeat("=", 60))
 }

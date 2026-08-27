@@ -17,6 +17,7 @@ import (
 	"github.com/openai/openai-go"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
+	"github.com/AyakuraYuki/llm-inspector/internal/errlog"
 	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
@@ -108,6 +109,12 @@ func StatusCode(err error) int {
 
 const maxErrorBody = 4096
 
+// newHTTPClient 构造带请求错误记录的 HTTP 客户端：传输层失败、非 2xx 响应和
+// 2xx 建流后读中断都会自动写入 internal/errlog 的请求错误日志。
+func newHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: errlog.WrapTransport(nil)}
+}
+
 // doJSON 发送 JSON 请求并解码响应；状态码 >=400 时返回 *HTTPError。
 func doJSON(ctx context.Context, hc *http.Client, method, url string, headers map[string]string, body, out any) error {
 	var rdr io.Reader
@@ -145,7 +152,10 @@ func doJSON(ctx context.Context, hc *http.Client, method, url string, headers ma
 
 // rawPost 原样 POST payload 到 url，返回原始状态码与响应体（不视 4xx/5xx 为 error）。
 // headers 已由调用方按 RawRequest 的鉴权语义构造完毕。
+// 裸请求只用于边界测试（故意发送非法/畸形负载），4xx 是期望结果，
+// 不写入请求错误日志。
 func rawPost(ctx context.Context, hc *http.Client, url string, headers map[string]string, payload map[string]any) (*RawResult, error) {
+	ctx = errlog.Suppress(ctx)
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("序列化请求失败: %w", err)
@@ -204,6 +214,22 @@ func ssePost(ctx context.Context, hc *http.Client, url string, headers map[strin
 			continue
 		}
 		if err := fn([]byte(payload)); err != nil {
+			// 流内错误事件（如 anthropic 的 error event）：HTTP 已 2xx，
+			// Transport 层记录不到，在此带响应上下文补记一条请求错误。
+			if !errlog.Suppressed(ctx) {
+				e := errlog.Entry{
+					Stage:               errlog.StageStream,
+					Method:              http.MethodPost,
+					URL:                 errlog.RedactURLString(url),
+					Status:              resp.StatusCode,
+					ResponseHeaders:     resp.Header,
+					RequestIDs:          errlog.ExtractRequestIDs(resp.Header, []byte(payload)),
+					ResponseBodySnippet: payload,
+					Error:               err.Error(),
+				}
+				e.RequestBody, e.RequestBodyTruncated, e.RequestBodySize = errlog.BodyForLog(data)
+				errlog.Record(e)
+			}
 			return err
 		}
 	}

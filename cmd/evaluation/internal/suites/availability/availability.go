@@ -10,6 +10,7 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/errlog"
 	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
@@ -89,9 +90,11 @@ func checkErrorSemantics(ctx context.Context, badKey, p provider.Provider) types
 			expect = "400/401/403"
 		}
 
-		// 错误 API key：期望显式拒绝
+		// 错误 API key：期望显式拒绝。
+		// 这是故意构造的失败请求，跳过请求错误日志（Suppress），
+		// 避免期望中的 401/403 混进真正的错误记录。
 		total++
-		_, err := badKey.Chat(ctx, &params.Request{
+		_, err := badKey.Chat(errlog.Suppress(ctx), &params.Request{
 			Messages:  []params.Message{{Role: "user", Content: "ping"}},
 			MaxTokens: 1,
 		})
@@ -111,9 +114,10 @@ func checkErrorSemantics(ctx context.Context, badKey, p provider.Provider) types
 			details = append(details, fmt.Sprintf("错误 key 未被正确拒绝（状态码 %d）", code))
 		}
 
-		// 不存在的模型：期望 4xx；网关类平台常返回 5xx，视为非标准但显式拒绝
+		// 不存在的模型：期望 4xx；网关类平台常返回 5xx，视为非标准但显式拒绝。
+		// 同样是故意构造的失败请求，跳过请求错误日志。
 		total++
-		_, err = p.Chat(ctx, &params.Request{
+		_, err = p.Chat(errlog.Suppress(ctx), &params.Request{
 			Model:     "nonexistent-model-00000000",
 			Messages:  []params.Message{{Role: "user", Content: "ping"}},
 			MaxTokens: 1,

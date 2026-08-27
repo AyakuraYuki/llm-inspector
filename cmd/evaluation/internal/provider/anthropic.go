@@ -37,7 +37,7 @@ func NewAnthropic(baseURL, apiKey, model string, timeout time.Duration) Provider
 		baseURL: base,
 		apiKey:  apiKey,
 		model:   model,
-		hc:      &http.Client{Timeout: timeout},
+		hc:      newHTTPClient(timeout),
 	}
 }
 

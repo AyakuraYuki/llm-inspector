@@ -438,7 +438,7 @@ func writeErrorSheet(f *excelize.File, results []types.AggregatedMetrics, hdrSty
 // writeErrorDetailSheet 把每条失败请求的原始记录按发生时间排成一行一条的错误日志。
 func writeErrorDetailSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "错误明细"
-	headers := []any{"序号", "模型 ID", "Provider", "Token Group", "并发数", "发生时间", "错误类型", "总时延(ms)", "错误信息"}
+	headers := []any{"序号", "模型 ID", "Provider", "Token Group", "并发数", "发生时间", "错误类型", "RequestID", "总时延(ms)", "错误信息"}
 	xlSetRow(f, sh, 1, headers, hdrStyle)
 	_ = f.SetColWidth(sh, "A", "A", 8)
 	_ = f.SetColWidth(sh, "B", "B", 30)
@@ -447,8 +447,9 @@ func writeErrorDetailSheet(f *excelize.File, results []types.AggregatedMetrics, 
 	_ = f.SetColWidth(sh, "E", "E", 10)
 	_ = f.SetColWidth(sh, "F", "F", 22)
 	_ = f.SetColWidth(sh, "G", "G", 16)
-	_ = f.SetColWidth(sh, "H", "H", 12)
-	_ = f.SetColWidth(sh, "I", "I", 90)
+	_ = f.SetColWidth(sh, "H", "H", 36)
+	_ = f.SetColWidth(sh, "I", "I", 12)
+	_ = f.SetColWidth(sh, "J", "J", 90)
 
 	type detailRow struct {
 		model       string
@@ -475,6 +476,7 @@ func writeErrorDetailSheet(f *excelize.File, results []types.AggregatedMetrics, 
 			r.concurrency,
 			r.m.Timestamp.Format("2006-01-02 15:04:05.000"),
 			string(r.m.ErrorType),
+			r.m.RequestID,
 			durMs(r.m.TotalLatency),
 			r.m.Error,
 		}, 0)

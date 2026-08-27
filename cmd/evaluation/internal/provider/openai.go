@@ -33,18 +33,20 @@ type openaiProvider struct {
 
 // NewOpenAI 创建 OpenAI 兼容端点客户端。
 func NewOpenAI(baseURL, apiKey, model string, timeout time.Duration) Provider {
+	hc := newHTTPClient(timeout)
 	c := openai.NewClient(
 		option.WithBaseURL(baseURL),
 		option.WithAPIKey(apiKey),
 		option.WithMaxRetries(0),
 		option.WithRequestTimeout(timeout),
+		option.WithHTTPClient(hc),
 	)
 	return &openaiProvider{
 		client:  c,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		model:   model,
-		hc:      &http.Client{Timeout: timeout},
+		hc:      hc,
 	}
 }
 

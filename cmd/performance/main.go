@@ -17,6 +17,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/reporter"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/runner"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/errlog"
 )
 
 const (
@@ -55,12 +56,16 @@ func main() {
 
 	startAt := time.Now()
 
+	// 请求错误日志与 Excel 报告同前缀，只有出现错误时才会创建文件
+	errlog.Init(fmt.Sprintf("bench-%s-request-errors.jsonl", startAt.Format("20060102T150405")))
+
 	var results []types.AggregatedMetrics
 	if useTUI(cfg.NoTUI) {
 		results, err = runWithTUI(bench)
 	} else {
 		results, err = runWithConsole(bench)
 	}
+	printErrlogNotice()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -86,6 +91,13 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "Excel 导出失败: %v\n", err)
 	} else {
 		fmt.Printf("Excel 已保存: %s\n", outPath)
+	}
+}
+
+// printErrlogNotice 在压测结束（含中止/预检失败）后提示请求错误日志的位置。
+func printErrlogNotice() {
+	if n := errlog.Count(); n > 0 {
+		fmt.Printf("\n请求错误日志（%d 条）: %s\n", n, errlog.Path())
 	}
 }
 

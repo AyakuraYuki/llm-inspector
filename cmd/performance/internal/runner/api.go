@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/errlog"
 	"github.com/AyakuraYuki/llm-inspector/internal/llm/sse"
 )
 
@@ -129,6 +130,70 @@ const (
 
 type doSSERequest func(context.Context, types.BenchmarkConfig, types.ModelSpec) types.RequestMetrics
 
+// reqInfo 记录一次请求的可复述上下文（方法、地址、原始请求体），供失败时写入错误日志。
+type reqInfo struct {
+	method  string
+	url     string
+	payload []byte
+}
+
+// stageOf 把错误分类映射到 errlog 的阶段标识。
+func stageOf(t types.ErrorType) string {
+	switch t {
+	case types.ErrorTypeRateLimit, types.ErrorTypeServerError, types.ErrorTypeHTTP:
+		return errlog.StageHTTPStatus
+	case types.ErrorTypeStreamBroken, types.ErrorTypeStreamTruncated, types.ErrorTypeUpstreamError, types.ErrorTypeNoContent:
+		return errlog.StageStream
+	default:
+		return errlog.StageTransport
+	}
+}
+
+// logFailure 把一次失败请求写入错误日志并回填 RequestID 后原样返回指标。
+// resp/respBody 允许为 nil（传输层失败拿不到响应）。压测中止批量取消的
+// 在途请求（canceled）不属于服务端错误，不记录，避免中止瞬间刷屏。
+func logFailure(info reqInfo, resp *http.Response, respBody []byte, m types.RequestMetrics) types.RequestMetrics {
+	if m.ErrorType == types.ErrorTypeCanceled {
+		return m
+	}
+	e := errlog.Entry{
+		Stage:  stageOf(m.ErrorType),
+		Method: info.method,
+		URL:    errlog.RedactURLString(info.url),
+		Error:  m.Error,
+	}
+	e.RequestBody, e.RequestBodyTruncated, e.RequestBodySize = errlog.BodyForLog(info.payload)
+	if resp != nil {
+		e.Status = resp.StatusCode
+		e.ResponseHeaders = resp.Header
+		e.RequestIDs = errlog.ExtractRequestIDs(resp.Header, respBody)
+		e.ResponseBodySnippet = string(respBody)
+		m.RequestID = errlog.PrimaryRequestID(e.RequestIDs)
+	}
+	errlog.Record(e)
+	return m
+}
+
+// maxErrorBodyPeek 是错误响应体的读取上限：错误信息只保留前 512 字节（与历史
+// 行为一致），但完整读到的部分都参与 RequestID 提取并进入错误日志。
+const maxErrorBodyPeek = 4096
+
+// httpStatusFailure 处理非 200 响应：构造失败指标并写入错误日志。
+func httpStatusFailure(info reqInfo, t0 time.Time, resp *http.Response) types.RequestMetrics {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyPeek))
+	msg := body
+	if len(msg) > 512 {
+		msg = msg[:512]
+	}
+	m := types.RequestMetrics{
+		Success:      false,
+		TotalLatency: time.Since(t0),
+		Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
+		ErrorType:    classifyHTTPStatus(resp.StatusCode),
+	}
+	return logFailure(info, resp, body, m)
+}
+
 // doSSERequests 声明了受支持的接口协议类型，并且可根据接口协议类型获取相应的
 // 流式调用方法。
 var doSSERequests = map[types.Provider]doSSERequest{
@@ -181,9 +246,10 @@ func doAnthropicRequest(ctx context.Context, cfg types.BenchmarkConfig, model ty
 	reqCtx, cancel := context.WithTimeout(ctx, streamTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.BaseURL+"/v1/messages", bytes.NewReader(payload))
+	info := reqInfo{method: http.MethodPost, url: cfg.BaseURL + "/v1/messages", payload: payload}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, info.url, bytes.NewReader(payload))
 	if err != nil {
-		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
+		return logFailure(info, nil, nil, types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect})
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+model.PickToken())
@@ -192,21 +258,19 @@ func doAnthropicRequest(ctx context.Context, cfg types.BenchmarkConfig, model ty
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
-		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
+		return logFailure(info, nil, nil, types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)})
 	}
 	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return types.RequestMetrics{
-			Success:      false,
-			TotalLatency: time.Since(t0),
-			Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
-			ErrorType:    classifyHTTPStatus(resp.StatusCode),
-		}
+		return httpStatusFailure(info, t0, resp)
 	}
 
-	return parseStreamMetrics(t0, resp.Body)
+	m := parseStreamMetrics(t0, resp.Body)
+	if !m.Success {
+		return logFailure(info, resp, nil, m)
+	}
+	return m
 }
 
 // doOpenAIRequest 向 /v1/chat/completions 发起 SSE 流式请求。
@@ -227,9 +291,10 @@ func doOpenAIRequest(ctx context.Context, cfg types.BenchmarkConfig, model types
 	reqCtx, cancel := context.WithTimeout(ctx, streamTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.BaseURL+"/v1/chat/completions", bytes.NewReader(payload))
+	info := reqInfo{method: http.MethodPost, url: cfg.BaseURL + "/v1/chat/completions", payload: payload}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, info.url, bytes.NewReader(payload))
 	if err != nil {
-		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
+		return logFailure(info, nil, nil, types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect})
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+model.PickToken())
@@ -237,21 +302,19 @@ func doOpenAIRequest(ctx context.Context, cfg types.BenchmarkConfig, model types
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
-		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
+		return logFailure(info, nil, nil, types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)})
 	}
 	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return types.RequestMetrics{
-			Success:      false,
-			TotalLatency: time.Since(t0),
-			Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
-			ErrorType:    classifyHTTPStatus(resp.StatusCode),
-		}
+		return httpStatusFailure(info, t0, resp)
 	}
 
-	return parseStreamMetrics(t0, resp.Body)
+	m := parseStreamMetrics(t0, resp.Body)
+	if !m.Success {
+		return logFailure(info, resp, nil, m)
+	}
+	return m
 }
 
 // doGeminiRequest 向 /v1beta/models/{model}:streamGenerateContent 发起 SSE 流式请求。
@@ -272,9 +335,10 @@ func doGeminiRequest(ctx context.Context, cfg types.BenchmarkConfig, model types
 	defer cancel()
 
 	url := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse", cfg.BaseURL, model.Name)
+	info := reqInfo{method: http.MethodPost, url: url, payload: payload}
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
-		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
+		return logFailure(info, nil, nil, types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect})
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+model.PickToken())
@@ -282,21 +346,19 @@ func doGeminiRequest(ctx context.Context, cfg types.BenchmarkConfig, model types
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
-		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
+		return logFailure(info, nil, nil, types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)})
 	}
 	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return types.RequestMetrics{
-			Success:      false,
-			TotalLatency: time.Since(t0),
-			Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
-			ErrorType:    classifyHTTPStatus(resp.StatusCode),
-		}
+		return httpStatusFailure(info, t0, resp)
 	}
 
-	return parseStreamMetrics(t0, resp.Body)
+	m := parseStreamMetrics(t0, resp.Body)
+	if !m.Success {
+		return logFailure(info, resp, nil, m)
+	}
+	return m
 }
 
 // doImageRequest 向 /v1/images/generations 发起同步请求。
@@ -313,27 +375,22 @@ func doImageRequest(ctx context.Context, cfg types.BenchmarkConfig, model types.
 	reqCtx, cancel := context.WithTimeout(ctx, imageTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.BaseURL+"/v1/images/generations", bytes.NewReader(payload))
+	info := reqInfo{method: http.MethodPost, url: cfg.BaseURL + "/v1/images/generations", payload: payload}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, info.url, bytes.NewReader(payload))
 	if err != nil {
-		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
+		return logFailure(info, nil, nil, types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect})
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+model.PickToken())
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
-		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
+		return logFailure(info, nil, nil, types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)})
 	}
 	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return types.RequestMetrics{
-			Success:      false,
-			TotalLatency: time.Since(t0),
-			Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
-			ErrorType:    classifyHTTPStatus(resp.StatusCode),
-		}
+		return httpStatusFailure(info, t0, resp)
 	}
 
 	// 读完响应体确保连接可复用
@@ -358,9 +415,10 @@ func doOpenAIResponseRequest(ctx context.Context, cfg types.BenchmarkConfig, mod
 	reqCtx, cancel := context.WithTimeout(ctx, streamTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.BaseURL+"/v1/responses", bytes.NewReader(payload))
+	info := reqInfo{method: http.MethodPost, url: cfg.BaseURL + "/v1/responses", payload: payload}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, info.url, bytes.NewReader(payload))
 	if err != nil {
-		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
+		return logFailure(info, nil, nil, types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect})
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+model.PickToken())
@@ -368,21 +426,19 @@ func doOpenAIResponseRequest(ctx context.Context, cfg types.BenchmarkConfig, mod
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
-		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
+		return logFailure(info, nil, nil, types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)})
 	}
 	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return types.RequestMetrics{
-			Success:      false,
-			TotalLatency: time.Since(t0),
-			Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
-			ErrorType:    classifyHTTPStatus(resp.StatusCode),
-		}
+		return httpStatusFailure(info, t0, resp)
 	}
 
-	return parseStreamMetrics(t0, resp.Body)
+	m := parseStreamMetrics(t0, resp.Body)
+	if !m.Success {
+		return logFailure(info, resp, nil, m)
+	}
+	return m
 }
 
 // doBaselineRequest 对完全不经过任何大模型调用的静态接口发起同步 GET 请求，
@@ -395,9 +451,10 @@ func doBaselineRequest(ctx context.Context, cfg types.BenchmarkConfig, _ types.M
 	reqCtx, cancel := context.WithTimeout(ctx, streamTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, cfg.BaseURL+"/api/user-agreement", nil)
+	info := reqInfo{method: http.MethodGet, url: cfg.BaseURL + "/api/user-agreement"}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, info.url, nil)
 	if err != nil {
-		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect}
+		return logFailure(info, nil, nil, types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: types.ErrorTypeConnect})
 	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Sec-Fetch-Dest", "empty")
@@ -406,18 +463,12 @@ func doBaselineRequest(ctx context.Context, cfg types.BenchmarkConfig, _ types.M
 
 	resp, err := sharedClient.Do(req)
 	if err != nil {
-		return types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)}
+		return logFailure(info, nil, nil, types.RequestMetrics{Success: false, TotalLatency: time.Since(t0), Error: err.Error(), ErrorType: classifyNetError(err)})
 	}
 	defer func(Body io.ReadCloser) { _ = Body.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return types.RequestMetrics{
-			Success:      false,
-			TotalLatency: time.Since(t0),
-			Error:        fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg))),
-			ErrorType:    classifyHTTPStatus(resp.StatusCode),
-		}
+		return httpStatusFailure(info, t0, resp)
 	}
 
 	// 读完响应体确保连接可复用

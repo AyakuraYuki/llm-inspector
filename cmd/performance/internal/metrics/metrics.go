@@ -17,8 +17,8 @@ import (
 // 剔除只作用于 TPOT/TPS/TPM 分位数；系统级 TPS/TPM 按窗口总 token 计算，
 // 时延分位数按 E2E 计算，均不受影响。剔除数记入 GenSpeedExcluded 供报表标注。
 const (
-	minGenWindow     = 100 * time.Millisecond // gen_window 绝对下限
-	minGenWindowFrac = 0.05                   // gen_window 占 E2E 的最小比例（TTFT ≥ 95% E2E 即视为一次性到达）
+	minGenWindow     = 50 * time.Millisecond // gen_window 绝对下限
+	minGenWindowFrac = 0.05                  // gen_window 占 E2E 的最小比例（TTFT ≥ 95% E2E 即视为一次性到达）
 )
 
 // AggregateMetrics 将原始请求结果聚合为汇聚指标。

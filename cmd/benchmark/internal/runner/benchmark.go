@@ -136,6 +136,8 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 		}
 		if err != nil {
 			result.Error = fmt.Sprintf("Stream error: %v", err)
+			// 出错时也保留响应 Header，便于结合请求错误日志按 RequestID 排查
+			result.RawResponseHeader = stream.Header()
 			return result
 		}
 		rawResponses = append(rawResponses, response)
