@@ -29,7 +29,7 @@ func initTemp(t *testing.T) func() []Entry {
 			t.Fatalf("读取错误日志失败: %v", err)
 		}
 		var entries []Entry
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 			if line == "" {
 				continue
 			}

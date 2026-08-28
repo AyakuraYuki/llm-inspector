@@ -93,7 +93,7 @@ type ImageRequest struct {
 type ImageResponse struct {
 	Created int64                    `json:"created,omitempty"`
 	Data    []ImageResponseDataInner `json:"data,omitempty"`
-	Usage   ImageResponseUsage       `json:"usage,omitempty"`
+	Usage   ImageResponseUsage       `json:"usage"`
 
 	httpHeader
 }
@@ -109,7 +109,7 @@ type ImageResponseUsage struct {
 	TotalTokens        int                             `json:"total_tokens,omitempty"`
 	InputTokens        int                             `json:"input_tokens,omitempty"`
 	OutputTokens       int                             `json:"output_tokens,omitempty"`
-	InputTokensDetails ImageResponseInputTokensDetails `json:"input_tokens_details,omitempty"`
+	InputTokensDetails ImageResponseInputTokensDetails `json:"input_tokens_details"`
 }
 
 // ImageResponseDataInner represents a response data structure for image API.

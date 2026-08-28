@@ -1,6 +1,9 @@
 package types
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // SectionLayerWeight 各层在 Section 结论内的权重（均权）。
 var SectionLayerWeight = map[string]float64{
@@ -83,16 +86,17 @@ func ComputeSections(layers []LayerResult, threshold float64) []SectionResult {
 		// 供报告渲染顶部直接引用。
 		for _, l := range participating {
 			if !l.Passed {
-				reason := fmt.Sprintf("%s %s 得分 %.0f%%", l.ID, l.Name, l.Score*100)
+				var reason strings.Builder
+				reason.WriteString(fmt.Sprintf("%s %s 得分 %.0f%%", l.ID, l.Name, l.Score*100))
 				n := 0
 				for _, c := range l.Checks {
 					if c.Status != StatusFail || n >= 2 {
 						continue
 					}
-					reason += "; " + c.Name + ": " + truncateRunes(c.Detail, 60)
+					reason.WriteString("; " + c.Name + ": " + truncateRunes(c.Detail, 60))
 					n++
 				}
-				sr.Reasons = append(sr.Reasons, reason)
+				sr.Reasons = append(sr.Reasons, reason.String())
 			}
 		}
 

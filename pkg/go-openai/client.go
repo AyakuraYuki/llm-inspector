@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -91,9 +92,7 @@ func withExtraBody(extraBody map[string]any) requestOption {
 		if ok {
 			// If it's a map[string]any then only add extraBody
 			// fields to args.body otherwise keep only fields in request struct.
-			for key, value := range extraBody {
-				bodyMap[key] = value
-			}
+			maps.Copy(bodyMap, extraBody)
 		}
 	}
 }

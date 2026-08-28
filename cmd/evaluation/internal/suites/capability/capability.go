@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,7 +75,7 @@ func Run(ctx context.Context, p provider.Provider, cfg config.CapabilityConfig, 
 	fmt.Printf("  加载 %d 道题目，并发度 %d\n", len(cases), cfg.Concurrency)
 
 	checks := make([]types.CheckResult, len(cases))
-	var completed int32 // 原子计数器
+	var completed atomic.Int32 // 原子计数器
 	var wg sync.WaitGroup
 	jobs := make(chan int)
 	workers := max(cfg.Concurrency, 1)
@@ -83,7 +84,7 @@ func Run(ctx context.Context, p provider.Provider, cfg config.CapabilityConfig, 
 			for i := range jobs {
 				checks[i] = runCase(ctx, p, judge, &cases[i])
 				// 原子递增并输出进度
-				done := atomic.AddInt32(&completed, 1)
+				done := completed.Add(1)
 				fmt.Printf("  [%d/%d] %s: %.0f%%\n", done, len(cases), cases[i].ID, checks[i].Score*100)
 			}
 		})
@@ -161,9 +162,9 @@ func runCase(ctx context.Context, p provider.Provider, judge *scorer.Judge, c *C
 }
 
 func lastUserMessage(turns []params.Message) string {
-	for i := len(turns) - 1; i >= 0; i-- {
-		if strings.EqualFold(turns[i].Role, "user") {
-			return turns[i].Content
+	for _, turn := range slices.Backward(turns) {
+		if strings.EqualFold(turn.Role, "user") {
+			return turn.Content
 		}
 	}
 	return ""

@@ -94,12 +94,10 @@ func (e *HTTPError) Error() string {
 
 // StatusCode 从错误中提取 HTTP 状态码；非 HTTP 错误返回 0。
 func StatusCode(err error) int {
-	var apiErr *openai.Error
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*openai.Error](err); ok {
 		return apiErr.StatusCode
 	}
-	var httpErr *HTTPError
-	if errors.As(err, &httpErr) {
+	if httpErr, ok := errors.AsType[*HTTPError](err); ok {
 		return httpErr.StatusCode
 	}
 	return 0

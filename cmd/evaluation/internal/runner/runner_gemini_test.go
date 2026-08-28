@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -152,9 +153,9 @@ func newGeminiE2EServer(t *testing.T) *httptest.Server {
 				}
 			}
 		}
-		for i := len(req.Contents) - 1; i >= 0; i-- {
-			if req.Contents[i].Role != "model" && len(req.Contents[i].Parts) > 0 {
-				last = req.Contents[i].Parts[len(req.Contents[i].Parts)-1].Text
+		for _, v := range slices.Backward(req.Contents) {
+			if v.Role != "model" && len(v.Parts) > 0 {
+				last = v.Parts[len(v.Parts)-1].Text
 				break
 			}
 		}

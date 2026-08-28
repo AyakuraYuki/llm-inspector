@@ -14,7 +14,7 @@ import (
 type ProgressTracker struct {
 	total      int
 	startTime  time.Time
-	completed  int64             // 原子计数：已完成的问题数
+	completed  atomic.Int64      // 原子计数：已完成的问题数
 	mu         sync.Mutex        // 保护 inProgress
 	inProgress map[int]time.Time // 问题索引（0-based） -> 开始执行的时间
 }
@@ -40,12 +40,12 @@ func (p *ProgressTracker) Finish(index int) int {
 	p.mu.Lock()
 	delete(p.inProgress, index)
 	p.mu.Unlock()
-	return int(atomic.AddInt64(&p.completed, 1))
+	return int(p.completed.Add(1))
 }
 
 // Report 输出整体进度以及当前正在执行的测试项目及其已运行时长
 func (p *ProgressTracker) Report() {
-	completed := atomic.LoadInt64(&p.completed)
+	completed := p.completed.Load()
 
 	p.mu.Lock()
 	running := make([]int, 0, len(p.inProgress))

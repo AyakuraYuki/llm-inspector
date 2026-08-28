@@ -3,6 +3,7 @@ package jsonschema
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 )
 
 func CollectDefs(def Definition) map[string]Definition {
@@ -65,7 +66,7 @@ func Validate(schema Definition, data any, opts ...ValidateOption) bool {
 	case String:
 		v, ok := data.(string)
 		if ok && len(schema.Enum) > 0 {
-			return contains(schema.Enum, v)
+			return slices.Contains(schema.Enum, v)
 		}
 		return ok
 	case Number: // float64 and int
@@ -110,7 +111,7 @@ func validateObject(schema Definition, data any, defs map[string]Definition) boo
 		value, exists := dataMap[key]
 		if exists && !Validate(valueSchema, value, WithDefs(defs)) {
 			return false
-		} else if !exists && contains(schema.Required, key) {
+		} else if !exists && slices.Contains(schema.Required, key) {
 			return false
 		}
 	}
@@ -128,13 +129,4 @@ func validateArray(schema Definition, data any, defs map[string]Definition) bool
 		}
 	}
 	return true
-}
-
-func contains[S ~[]E, E comparable](s S, v E) bool {
-	for i := range s {
-		if v == s[i] {
-			return true
-		}
-	}
-	return false
 }

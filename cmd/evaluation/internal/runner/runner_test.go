@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -217,9 +218,9 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 }
 
 func lastUser(req *chatReq) string {
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" {
-			return req.Messages[i].Content
+	for _, v := range slices.Backward(req.Messages) {
+		if v.Role == "user" {
+			return v.Content
 		}
 	}
 	return ""

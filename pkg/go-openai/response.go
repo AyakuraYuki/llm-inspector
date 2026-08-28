@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -169,9 +170,7 @@ func (r CreateResponseRequest) MarshalJSON() ([]byte, error) {
 	if err = json.Unmarshal(base, &body); err != nil {
 		return nil, err
 	}
-	for key, value := range r.ExtraBody {
-		body[key] = value
-	}
+	maps.Copy(body, r.ExtraBody)
 	return json.Marshal(body)
 }
 

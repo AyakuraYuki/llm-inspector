@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -257,8 +258,8 @@ func applyGeminiResponse(r *params.Result, resp *geminiResponse, onText, onFirst
 			}
 		}
 		// 取最后一个非 thought 的 text part
-		for i := len(cand.Content.Parts) - 1; i >= 0; i-- {
-			part := cand.Content.Parts[i]
+		for _, part := range slices.Backward(cand.Content.Parts) {
+
 			if part.Text != "" && !part.Thought {
 				onFirst(part.Text)
 				onText(part.Text)
