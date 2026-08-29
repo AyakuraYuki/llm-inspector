@@ -137,7 +137,7 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 	rows = append(rows, []any{"- QPS（又称RPS）", "系统级 req/s"})
 	rows = append(rows, []any{"- QPM（又称RPM）", "系统级 req/min"})
 	rows = append(rows, []any{"- I/O Ratio", "输出/输入 token 比（output_tokens/input_tokens，per-request 分位数及 System 总量比）"})
-	rows = append(rows, []any{"- Cache Hit Rate", "缓存命中率（cached_input_tokens/input_tokens*100%，per-request 分位数及 System 总量比，仅部分 provider 上报缓存字段，未上报时显示 N/A）"})
+	rows = append(rows, []any{"- Cache Hit Rate", "缓存命中率（cached_input_tokens/input_tokens*100%，input_tokens 为全量输入口径：Anthropic 已补入 cache_read/cache_creation；per-request 分位数及 System 总量比，仅上报了缓存字段的 provider 有效，未上报时显示 N/A）"})
 
 	for i, row := range rows {
 		xlSetCell(f, sh, 1, i+3, row[0])
@@ -296,8 +296,8 @@ func writeIORSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 			agg.IOR.N,
 			fVal(agg.IOR.P50), fVal(agg.IOR.P95), fVal(agg.IOR.P99), fVal(agg.IOR.P995), fVal(agg.IOR.P999), fVal(agg.IOR.Avg),
 			fVal(agg.IORatio),
-			fVal(agg.CacheHitPr.P50), fVal(agg.CacheHitPr.P95), fVal(agg.CacheHitPr.P99), fVal(agg.CacheHitPr.P995), fVal(agg.CacheHitPr.P999), fVal(agg.CacheHitPr.Avg),
-			fVal(agg.CacheHitRatio), agg.TotalInputTokens, agg.TotalCachedTokens,
+			fCache(agg.CacheHitPr.P50, agg.CacheHitPr.N), fCache(agg.CacheHitPr.P95, agg.CacheHitPr.N), fCache(agg.CacheHitPr.P99, agg.CacheHitPr.N), fCache(agg.CacheHitPr.P995, agg.CacheHitPr.N), fCache(agg.CacheHitPr.P999, agg.CacheHitPr.N), fCache(agg.CacheHitPr.Avg, agg.CacheHitPr.N),
+			fCache(agg.CacheHitRatio, agg.CacheReportedCount), agg.TotalInputTokens, agg.TotalCachedTokens,
 			note,
 		}, 0)
 		row++
@@ -390,6 +390,15 @@ func durMs(d time.Duration) any {
 // fVal 将 float64 保留 2 位小数，≤0 返回 "N/A"。
 func fVal(v float64) any {
 	if v <= 0 {
+		return "N/A"
+	}
+	return round2(v)
+}
+
+// fCache 渲染缓存命中率：provider 未上报缓存字段（n == 0）时返回 "N/A"，
+// 否则保留 2 位小数——0.00% 是合法命中率（缓存启用但未命中），与 N/A 区分。
+func fCache(v float64, n int) any {
+	if n == 0 {
 		return "N/A"
 	}
 	return round2(v)

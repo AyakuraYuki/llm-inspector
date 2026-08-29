@@ -140,16 +140,33 @@ func TestConsumeSSEUsage_OpenAI(t *testing.T) {
 }
 
 func TestConsumeSSEUsage_Anthropic(t *testing.T) {
+	// Anthropic 口径：input_tokens 不含缓存读/写 token，promptT 需补回
 	start := mustObj(t, `{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":4}}}`)
 	var parts []string
 	p, c, ct, _ := ConsumeUsage(start, &parts)
-	if p != 10 || c != -1 || ct != 4 {
-		t.Errorf("message_start = (%d, %d, %d), want (10, -1, 4)", p, c, ct)
+	if p != 14 || c != -1 || ct != 4 {
+		t.Errorf("message_start = (%d, %d, %d), want (14, -1, 4)（promptT = input + cache_read）", p, c, ct)
 	}
 	delta := mustObj(t, `{"type":"message_delta","usage":{"output_tokens":7}}`)
 	p, c, _, _ = ConsumeUsage(delta, &parts)
 	if p != 0 || c != 7 {
 		t.Errorf("message_delta = (%d, %d), want (0, 7)", p, c)
+	}
+}
+
+func TestConsumeSSEUsage_AnthropicCacheCreation(t *testing.T) {
+	// 旧版整型 cache_creation_input_tokens 计入 promptT
+	start := mustObj(t, `{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":4,"cache_creation_input_tokens":6}}}`)
+	var parts []string
+	p, _, ct, _ := ConsumeUsage(start, &parts)
+	if p != 20 || ct != 4 {
+		t.Errorf("message_start = (%d, %d), want (20, 4)（promptT = input + cache_read + cache_creation）", p, ct)
+	}
+	// 新版嵌套对象 cache_creation.ephemeral_* 同样计入
+	start = mustObj(t, `{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":4,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":1}}}}`)
+	p, _, ct, _ = ConsumeUsage(start, &parts)
+	if p != 20 || ct != 4 {
+		t.Errorf("message_start(嵌套 cache_creation) = (%d, %d), want (20, 4)", p, ct)
 	}
 }
 
@@ -188,8 +205,23 @@ func TestApplySSEEvent_OpenAIFlow(t *testing.T) {
 	if s.PromptTokens != 12 || s.CompletionTokens != 7 {
 		t.Errorf("tokens = (%d, %d), want (12, 7)", s.PromptTokens, s.CompletionTokens)
 	}
+	if s.CacheSeen {
+		t.Errorf("CacheSeen = true, want false（usage 未携带缓存字段）")
+	}
 	if len(s.TextParts) != 1 || s.TextParts[0] != "hi" {
 		t.Errorf("TextParts = %v, want [hi]", s.TextParts)
+	}
+}
+
+func TestApplySSEEvent_CacheSeen(t *testing.T) {
+	// 缓存字段存在但命中为 0：CacheSeen 置位，与「未上报」区分
+	s := NewStreamSummary()
+	ApplySSEEvent(mustObj(t, `{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":0}}}`), 10, s)
+	if !s.CacheSeen {
+		t.Errorf("CacheSeen = false, want true（prompt_tokens_details.cached_tokens 已上报）")
+	}
+	if s.CachedInputTokens != 0 {
+		t.Errorf("CachedInputTokens = %d, want 0", s.CachedInputTokens)
 	}
 }
 

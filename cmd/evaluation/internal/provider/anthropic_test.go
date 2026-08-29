@@ -109,8 +109,8 @@ func TestAnthropicChat(t *testing.T) {
 	if r.FinishReason != "stop" {
 		t.Errorf("FinishReason = %q, want stop", r.FinishReason)
 	}
-	if r.PromptTokens != 10 || r.CompletionTokens != 2 {
-		t.Errorf("usage = %d/%d", r.PromptTokens, r.CompletionTokens)
+	if r.PromptTokens != 14 || r.CompletionTokens != 2 {
+		t.Errorf("usage = %d/%d, want 14/2（PromptTokens = input_tokens + cache_read_input_tokens）", r.PromptTokens, r.CompletionTokens)
 	}
 	if r.CachedInputTokens != 4 {
 		t.Errorf("CachedInputTokens = %d, want 4（非流式 usage 的 cache_read_input_tokens）", r.CachedInputTokens)
@@ -165,8 +165,8 @@ func TestAnthropicStream(t *testing.T) {
 	if r.FinishReason != "stop" {
 		t.Errorf("FinishReason = %q", r.FinishReason)
 	}
-	if r.PromptTokens != 10 || r.CompletionTokens != 2 {
-		t.Errorf("usage = %d/%d", r.PromptTokens, r.CompletionTokens)
+	if r.PromptTokens != 14 || r.CompletionTokens != 2 {
+		t.Errorf("usage = %d/%d, want 14/2（PromptTokens = input_tokens + cache_read_input_tokens）", r.PromptTokens, r.CompletionTokens)
 	}
 	if r.CachedInputTokens != 4 {
 		t.Errorf("CachedInputTokens = %d, want 4（message_start 的 cache_read_input_tokens）", r.CachedInputTokens)
@@ -246,5 +246,38 @@ func TestAnthropicErrorStatus(t *testing.T) {
 	})
 	if code := StatusCode(err); code != 404 {
 		t.Errorf("坏模型 StatusCode = %d, want 404", code)
+	}
+}
+
+// TestAnthropicCacheCreationUsage 验证缓存写入 token 计入 PromptTokens，
+// 兼容旧版顶层整型与新版嵌套对象两种 cache_creation 上报形态。
+func TestAnthropicCacheCreationUsage(t *testing.T) {
+	cases := []struct {
+		name  string
+		usage string
+	}{
+		{"旧版顶层整型", `"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":4,"cache_creation_input_tokens":6`},
+		{"新版嵌套对象", `"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":4,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":1}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"id":"msg_1","type":"message","role":"assistant","model":"claude-test-1","content":[{"type":"text","text":"你好"}],"stop_reason":"end_turn","usage":{%s}}`, tc.usage)
+			}))
+			defer srv.Close()
+			c := NewAnthropic(srv.URL, "good-key", "claude-test-1", 5*time.Second)
+
+			r, err := c.Chat(t.Context(), &params.Request{
+				Messages:  []params.Message{{Role: "user", Content: "你好"}},
+				MaxTokens: 16,
+			})
+			if err != nil {
+				t.Fatalf("Chat 失败: %v", err)
+			}
+			if r.PromptTokens != 20 {
+				t.Errorf("PromptTokens = %d, want 20（input 10 + cache_read 4 + cache_creation 6）", r.PromptTokens)
+			}
+		})
 	}
 }

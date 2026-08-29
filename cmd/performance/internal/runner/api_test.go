@@ -57,6 +57,9 @@ func TestParseStreamMetrics_OpenAISuccess(t *testing.T) {
 	if m.InputTokens != 12 || m.OutputTokens != 7 {
 		t.Errorf("tokens = (%d, %d), want (12, 7)", m.InputTokens, m.OutputTokens)
 	}
+	if m.CacheReported {
+		t.Errorf("CacheReported = true, want false（usage 未携带缓存字段）")
+	}
 	if m.TTFT <= 0 {
 		t.Errorf("TTFT = %v, want > 0（reasoning 首 chunk 应计 TTFT）", m.TTFT)
 	}
@@ -74,11 +77,14 @@ func TestParseStreamMetrics_AnthropicSuccess(t *testing.T) {
 	if !m.Success {
 		t.Fatalf("Success = false, Error = %q, ErrorType = %s", m.Error, m.ErrorType)
 	}
-	if m.InputTokens != 10 || m.OutputTokens != 7 {
-		t.Errorf("tokens = (%d, %d), want (10, 7)", m.InputTokens, m.OutputTokens)
+	if m.InputTokens != 14 || m.OutputTokens != 7 {
+		t.Errorf("tokens = (%d, %d), want (14, 7)（InputTokens = input_tokens + cache_read_input_tokens）", m.InputTokens, m.OutputTokens)
 	}
 	if m.CachedInputTokens != 4 {
 		t.Errorf("CachedInputTokens = %d, want 4", m.CachedInputTokens)
+	}
+	if !m.CacheReported {
+		t.Errorf("CacheReported = false, want true（message_start 携带 cache_read_input_tokens）")
 	}
 	if m.TTFT <= 0 {
 		t.Errorf("TTFT = %v, want > 0（thinking_delta 应计 TTFT）", m.TTFT)
@@ -101,6 +107,9 @@ func TestParseStreamMetrics_GeminiSuccess(t *testing.T) {
 	if m.CachedInputTokens != 1 {
 		t.Errorf("CachedInputTokens = %d, want 1", m.CachedInputTokens)
 	}
+	if !m.CacheReported {
+		t.Errorf("CacheReported = false, want true（usageMetadata 携带 cachedContentTokenCount）")
+	}
 }
 
 func TestParseStreamMetrics_ResponsesSuccess(t *testing.T) {
@@ -117,6 +126,9 @@ func TestParseStreamMetrics_ResponsesSuccess(t *testing.T) {
 	}
 	if m.CachedInputTokens != 3 {
 		t.Errorf("CachedInputTokens = %d, want 3", m.CachedInputTokens)
+	}
+	if !m.CacheReported {
+		t.Errorf("CacheReported = false, want true（input_tokens_details 携带 cached_tokens）")
 	}
 }
 

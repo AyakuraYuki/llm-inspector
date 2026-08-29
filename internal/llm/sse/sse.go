@@ -178,6 +178,9 @@ func HasOutputContent(obj map[string]any) bool {
 
 // ConsumeUsage 从 SSE 对象中提取 usage（completion_tokens/output_tokens/cached_tokens）和文本片段。
 // compT == -1 表示本事件无 usage 信息；cachedT == -1 表示本事件未携带缓存命中信息。
+// promptT 在各协议下统一为「全部输入上下文」口径：OpenAI/Gemini 的输入计数本身
+// 包含缓存命中部分；Anthropic 的 input_tokens 不含缓存读/写 token，这里补回，
+// 保证缓存命中率 cachedT/promptT ≤ 100% 且跨协议可比。
 func ConsumeUsage(obj map[string]any, textParts *[]string) (promptT, compT, cachedT int64, source string) {
 	compT = -1
 	cachedT = -1
@@ -213,11 +216,13 @@ func ConsumeUsage(obj map[string]any, textParts *[]string) (promptT, compT, cach
 	if t, _ := obj["type"].(string); t == "message_start" {
 		if msg, ok := obj["message"].(map[string]any); ok {
 			if usage, ok := msg["usage"].(map[string]any); ok {
-				p := IntFromMap(usage, "input_tokens")
-				if p >= 0 {
-					promptT = p
+				cacheRead := IntFromMap(usage, "cache_read_input_tokens")
+				if p := IntFromMap(usage, "input_tokens"); p >= 0 {
+					// Anthropic 口径的 input_tokens 不含缓存读/写 token（与 OpenAI
+					// prompt_tokens 含 cached_tokens 不同），补回这两部分对齐口径。
+					promptT = p + max(cacheRead, 0) + cacheCreationTokens(usage)
 				}
-				cachedT = IntFromMap(usage, "cache_read_input_tokens")
+				cachedT = cacheRead
 			}
 		}
 	}
@@ -318,4 +323,18 @@ func IntFromMap(m map[string]any, keys ...string) int64 {
 		}
 	}
 	return -1
+}
+
+// cacheCreationTokens 提取 Anthropic 缓存写入 token 数，兼容两种上报形态：
+// 顶层整型 cache_creation_input_tokens（旧版）与嵌套对象
+// cache_creation.ephemeral_*_input_tokens（新版按 TTL 拆分）。
+func cacheCreationTokens(usage map[string]any) int64 {
+	if v := IntFromMap(usage, "cache_creation_input_tokens"); v > 0 {
+		return v
+	}
+	if cc, ok := usage["cache_creation"].(map[string]any); ok {
+		return max(IntFromMap(cc, "ephemeral_5m_input_tokens"), 0) +
+			max(IntFromMap(cc, "ephemeral_1h_input_tokens"), 0)
+	}
+	return 0
 }

@@ -82,6 +82,9 @@ type Result struct {
 	ReasoningContent string
 	FinishReason     string
 	ToolCalls        []ToolCall
+	// PromptTokens 全量输入 token 数。各协议统一为「含缓存」口径：openai 的
+	// prompt_tokens、gemini 的 promptTokenCount 本身含缓存命中部分；anthropic 的
+	// input_tokens 不含缓存读/写 token，provider 已补回 cache_read/cache_creation。
 	PromptTokens     int64
 	CompletionTokens int64
 	// CachedInputTokens 缓存命中的输入 token 数（openai 的

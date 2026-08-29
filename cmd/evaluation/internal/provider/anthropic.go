@@ -90,10 +90,29 @@ type anthropicContentBlock struct {
 	Name     string         `json:"name"`
 }
 
+type anthropicCacheCreation struct {
+	Ephemeral5mInputTokens int64 `json:"ephemeral_5m_input_tokens"`
+	Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
+}
+
 type anthropicUsage struct {
-	InputTokens          int64 `json:"input_tokens"`
-	OutputTokens         int64 `json:"output_tokens"`
-	CacheReadInputTokens int64 `json:"cache_read_input_tokens"`
+	InputTokens              int64                  `json:"input_tokens"`
+	OutputTokens             int64                  `json:"output_tokens"`
+	CacheReadInputTokens     int64                  `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int64                  `json:"cache_creation_input_tokens"`
+	CacheCreation            anthropicCacheCreation `json:"cache_creation"`
+}
+
+// totalInputTokens 返回全量输入 token 数。Anthropic 口径的 input_tokens 不含
+// 缓存读/写 token（与 OpenAI prompt_tokens 含 cached_tokens 不同），补回
+// cache_read 与 cache_creation 对齐各协议口径。cache_creation 兼容旧版顶层
+// 整型与新版按 TTL 拆分的嵌套对象两种上报形态。
+func (u anthropicUsage) totalInputTokens() int64 {
+	creation := u.CacheCreationInputTokens
+	if creation == 0 {
+		creation = u.CacheCreation.Ephemeral5mInputTokens + u.CacheCreation.Ephemeral1hInputTokens
+	}
+	return u.InputTokens + u.CacheReadInputTokens + creation
 }
 
 type anthropicResponse struct {
@@ -226,7 +245,7 @@ func (c *anthropicClient) Chat(ctx context.Context, req *params.Request) (*param
 		}
 	}
 	r.FinishReason = anthropicStopReason(resp.StopReason)
-	r.PromptTokens = resp.Usage.InputTokens
+	r.PromptTokens = resp.Usage.totalInputTokens()
 	r.CompletionTokens = resp.Usage.OutputTokens
 	r.CachedInputTokens = resp.Usage.CacheReadInputTokens
 	return r, nil
@@ -273,7 +292,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req *params.Request) (*par
 			r.Chunks++
 			switch ev.Type {
 			case "message_start":
-				r.PromptTokens = ev.Message.Usage.InputTokens
+				r.PromptTokens = ev.Message.Usage.totalInputTokens()
 				r.CachedInputTokens = ev.Message.Usage.CacheReadInputTokens
 			case "content_block_start":
 				if ev.ContentBlock.Type == "tool_use" {

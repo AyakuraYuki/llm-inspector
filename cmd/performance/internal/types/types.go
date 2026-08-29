@@ -65,6 +65,7 @@ type RequestMetrics struct {
 	InputTokens       int64         // 输入 token 数（图片生成为 0，无 usage 上报时为 0）
 	OutputTokens      int64         // 输出 token 数（图片生成为 0）
 	CachedInputTokens int64         // 命中缓存的输入 token 数（provider 未上报缓存字段时为 0）
+	CacheReported     bool          // provider 是否上报了缓存命中字段（区分「未上报」与「上报了但命中为 0」）
 	Success           bool
 	Error             string
 	ErrorType         ErrorType
@@ -167,7 +168,7 @@ type AggregatedMetrics struct {
 	TpmPr            FloatStats      // per-request tokens/min 分位数
 	GenSpeedExcluded int             // 因生成窗口过窄（响应一次性到达，测不出真实解码速度）被 TPOT/TPS/TPM 剔除的成功样本数
 	IOR              FloatStats      // per-request 输出/输入 token 比（output_tokens / input_tokens）分位数
-	CacheHitPr       FloatStats      // per-request 缓存命中率（cached_input_tokens / input_tokens * 100）分位数，仅上报了缓存字段的 provider 有效
+	CacheHitPr       FloatStats      // per-request 缓存命中率（cached_input_tokens / input_tokens * 100）分位数，仅上报了缓存字段的请求入样
 
 	// 所有端点均有
 	Latency PercentileStats // 端到端时延，仅统计成功请求（失败时延见 FailedDetails）
@@ -182,7 +183,8 @@ type AggregatedMetrics struct {
 	IORatio float64
 
 	// 系统级缓存命中统计（原始 token 总量 + 命中率，仅统计有 usage 上报的请求）
-	TotalInputTokens  int64
-	TotalCachedTokens int64
-	CacheHitRatio     float64 // TotalCachedTokens / TotalInputTokens * 100(%)
+	TotalInputTokens   int64
+	TotalCachedTokens  int64
+	CacheReportedCount int     // 上报了缓存命中字段的成功请求数；为 0 时缓存命中率无意义，报表显示 N/A
+	CacheHitRatio      float64 // TotalCachedTokens / TotalInputTokens * 100(%)
 }

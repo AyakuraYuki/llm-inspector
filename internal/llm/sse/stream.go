@@ -10,6 +10,7 @@ type StreamSummary struct {
 	PromptTokens      int64
 	CompletionTokens  int64
 	CachedInputTokens int64
+	CacheSeen         bool     // 出现过携带缓存命中字段的 usage 事件（区分「provider 未上报缓存字段」与「上报了但命中为 0」）
 	UsageSeen         bool     // 出现过携带 completion token 的 usage 事件
 	TerminalSeen      bool     // 出现过协议终止标记（[DONE]/finish_reason/message_stop 等）
 	UpstreamErr       string   // 流内错误事件的首个错误消息
@@ -46,5 +47,6 @@ func ApplySSEEvent(obj map[string]any, nowMS float64, s *StreamSummary) {
 	}
 	if ct >= 0 {
 		s.CachedInputTokens = ct
+		s.CacheSeen = true
 	}
 }

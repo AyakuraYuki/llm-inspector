@@ -128,3 +128,45 @@ func TestAggregateMetrics_SystemThroughputUnaffected(t *testing.T) {
 		t.Errorf("TPM = %f, want %f", agg.TPM, wantTPS*60)
 	}
 }
+
+func TestAggregateMetrics_CacheHitReporting(t *testing.T) {
+	// 上报缓存字段的请求：命中率 50/100 = 50%
+	reported := types.RequestMetrics{
+		InputTokens:       100,
+		CachedInputTokens: 50,
+		CacheReported:     true,
+	}
+	// 未上报缓存字段的请求：不得入样 per-request 分位数
+	unreported := types.RequestMetrics{
+		InputTokens: 100,
+	}
+	agg := AggregateMetrics(mkResult(reported, unreported))
+
+	if agg.CacheReportedCount != 1 {
+		t.Errorf("CacheReportedCount = %d, want 1", agg.CacheReportedCount)
+	}
+	if agg.CacheHitPr.N != 1 {
+		t.Fatalf("CacheHitPr.N = %d, want 1（未上报缓存字段的请求不应入样）", agg.CacheHitPr.N)
+	}
+	if math.Abs(agg.CacheHitPr.Avg-50) > 0.01 {
+		t.Errorf("CacheHitPr.Avg = %f, want 50", agg.CacheHitPr.Avg)
+	}
+	// 系统级比率分母为全部输入 token：50 / 200 = 25%
+	if math.Abs(agg.CacheHitRatio-25) > 0.01 {
+		t.Errorf("CacheHitRatio = %f, want 25", agg.CacheHitRatio)
+	}
+}
+
+func TestAggregateMetrics_CacheHitNotReported(t *testing.T) {
+	// provider 未上报缓存字段：分位数无样本、计数与比率为 0，由报表层渲染 N/A
+	agg := AggregateMetrics(mkResult(types.RequestMetrics{InputTokens: 100, OutputTokens: 10}))
+	if agg.CacheReportedCount != 0 {
+		t.Errorf("CacheReportedCount = %d, want 0", agg.CacheReportedCount)
+	}
+	if agg.CacheHitPr.N != 0 {
+		t.Errorf("CacheHitPr.N = %d, want 0（未上报不应产生样本）", agg.CacheHitPr.N)
+	}
+	if agg.CacheHitRatio != 0 {
+		t.Errorf("CacheHitRatio = %f, want 0", agg.CacheHitRatio)
+	}
+}

@@ -54,6 +54,7 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 		totalToks       int64
 		totalInputToks  int64
 		totalCachedToks int64
+		cacheReported   int
 		winSuccess      int
 		winToks         int64
 	)
@@ -102,9 +103,14 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 			if m.InputTokens > 0 && m.OutputTokens > 0 {
 				iorValues = append(iorValues, float64(m.OutputTokens)/float64(m.InputTokens))
 			}
-			// per-request 缓存命中率（%），仅在 provider 上报了缓存字段时有意义
-			if m.InputTokens > 0 {
-				cacheHitValues = append(cacheHitValues, float64(m.CachedInputTokens)/float64(m.InputTokens)*100)
+			// per-request 缓存命中率（%），仅在 provider 上报了缓存字段时入样：
+			// 未上报时 CachedInputTokens 恒为 0，入样会把分位数压成 0%，
+			// 与「上报了但真实命中 0%」无法区分
+			if m.CacheReported {
+				cacheReported++
+				if m.InputTokens > 0 {
+					cacheHitValues = append(cacheHitValues, float64(m.CachedInputTokens)/float64(m.InputTokens)*100)
+				}
 			}
 		}
 	}
@@ -145,6 +151,7 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 	// 系统级缓存命中统计
 	agg.TotalInputTokens = totalInputToks
 	agg.TotalCachedTokens = totalCachedToks
+	agg.CacheReportedCount = cacheReported
 	if totalInputToks > 0 {
 		agg.CacheHitRatio = float64(totalCachedToks) / float64(totalInputToks) * 100
 	}
