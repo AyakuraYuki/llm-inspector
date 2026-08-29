@@ -102,7 +102,7 @@ func PrintStatistics(results []types.BenchmarkResult) {
 	logger.Printf("Average TPS: %.2f", totalTPS/float64(successCount))
 	logger.Printf("Average TPM: %.2f", totalTPM/float64(successCount))
 	if totalPromptTokens > 0 {
-		logger.Printf("Cache Hit Ratio: %.2f", float64(totalCacheTokens)/float64(totalPromptTokens))
+		logger.Printf("Cache Hit Ratio: %.2f%%", float64(totalCacheTokens)/float64(totalPromptTokens)*100)
 	} else {
 		logger.Printf("Cache Hit Ratio: n/a")
 	}
