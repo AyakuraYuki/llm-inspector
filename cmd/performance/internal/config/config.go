@@ -3,6 +3,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
@@ -82,7 +83,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	var cfg Config
-	dec := yaml.NewDecoder(strings.NewReader(string(data)))
+	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true) // 拒绝未知字段，及早暴露拼写错误
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("解析配置文件失败: %w", err)

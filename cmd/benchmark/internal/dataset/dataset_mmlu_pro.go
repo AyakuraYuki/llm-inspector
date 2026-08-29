@@ -139,7 +139,7 @@ func (cfg MMLUProConfig) loadDataset(data string) ([]mmluProRow, error) {
 	}
 
 	reader := parquet.NewGenericReader[mmluProRow](pf)
-	defer func(reader *parquet.GenericReader[mmluProRow]) { _ = reader.Close() }(reader)
+	defer reader.Close()
 
 	rows := make([]mmluProRow, reader.NumRows())
 	for {

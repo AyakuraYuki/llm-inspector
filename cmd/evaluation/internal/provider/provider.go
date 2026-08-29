@@ -19,6 +19,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/internal/errlog"
 	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // Provider 是模型服务客户端的统一接口。
@@ -85,11 +86,7 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
-	body := e.Body
-	if r := []rune(body); len(r) > 200 {
-		body = string(r[:200]) + "…"
-	}
-	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, body)
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, util.TruncateString(e.Body, 200))
 }
 
 // StatusCode 从错误中提取 HTTP 状态码；非 HTTP 错误返回 0。

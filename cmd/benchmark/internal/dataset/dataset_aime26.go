@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"strconv"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/types"
@@ -25,7 +24,7 @@ func (cfg *Config) aime26() ([]types.Question, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func(fileBytes fs.File) { _ = fileBytes.Close() }(f)
+	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
 	problems := make([]aime26Row, 0)

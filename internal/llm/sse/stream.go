@@ -13,7 +13,6 @@ type StreamSummary struct {
 	UsageSeen         bool     // 出现过携带 completion token 的 usage 事件
 	TerminalSeen      bool     // 出现过协议终止标记（[DONE]/finish_reason/message_stop 等）
 	UpstreamErr       string   // 流内错误事件的首个错误消息
-	Chunks            int      // SSE 数据事件数
 	TextParts         []string // 收集的文本片段（usage 缺失时的 token 估算回退）
 }
 
@@ -28,7 +27,6 @@ func NewStreamSummary() *StreamSummary {
 // 处理顺序与原 parseStreamMetrics 的扫描循环一致：
 // 错误 → 终止标记 → 输出内容（TTFT）→ usage。
 func ApplySSEEvent(obj map[string]any, nowMS float64, s *StreamSummary) {
-	s.Chunks++
 	if msg, found := ErrorInfo(obj); found && s.UpstreamErr == "" {
 		s.UpstreamErr = msg
 	}

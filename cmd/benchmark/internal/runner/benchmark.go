@@ -120,9 +120,8 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 		result.Error = fmt.Sprintf("Failed to create stream: %v", err)
 		return result
 	}
-	defer func(stream *openai.ChatCompletionStream) { _ = stream.Close() }(stream)
+	defer stream.Close()
 
-	var firstTokenTime time.Time
 	var fullResponse strings.Builder
 	var rawResponses []openai.ChatCompletionStreamResponse
 	receivedFirstToken := false
@@ -144,9 +143,8 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 
 		// 记录首个 token 时间
 		if !receivedFirstToken && len(response.Choices) > 0 && response.Choices[0].Delta.Content != "" {
-			firstTokenTime = time.Now()
 			receivedFirstToken = true
-			result.TTFT = firstTokenTime.Sub(startTime)
+			result.TTFT = time.Since(startTime)
 			logger.Printf("Question %d first token received (TTFT=%dms)", index+1, result.TTFT.Milliseconds())
 		}
 
@@ -169,8 +167,7 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 		result.FinishReason = "null"
 	}
 
-	endTime := time.Now()
-	result.TotalTime = endTime.Sub(startTime)
+	result.TotalTime = time.Since(startTime)
 	lastUsage, chunkCount := collectUsage(rawResponses)
 	// 优先采用 usage 上报的精确 completion token 数；
 	// 网关不支持 stream_options.include_usage 时回退到旧行为（chunk 计数）

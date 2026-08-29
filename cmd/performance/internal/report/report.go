@@ -36,12 +36,12 @@ func printOne(agg types.AggregatedMetrics) {
 		formatDuration(agg.Elapsed), formatDuration(agg.Window), agg.Total, agg.Success, agg.Failed, errPct)
 	fmt.Printf("%s\n", strings.Repeat("-", colWidth))
 
-	if isStreaming {
-		hdr := fmt.Sprintf("  %-16s  %-11s  %-11s  %-11s  %-11s  %s",
-			"Metric", "P50", "P95", "P99", "Avg", "N")
-		fmt.Println(hdr)
-		fmt.Printf("  %s\n", strings.Repeat("-", colWidth-2))
+	hdr := fmt.Sprintf("  %-16s  %-11s  %-11s  %-11s  %-11s  %s",
+		"Metric", "P50", "P95", "P99", "Avg", "N")
+	fmt.Println(hdr)
+	fmt.Printf("  %s\n", strings.Repeat("-", colWidth-2))
 
+	if isStreaming {
 		printRow("TTFT", agg.TTFT)
 		printRow("TPOT", agg.TPOT)
 		printRow("E2E Latency", agg.Latency)
@@ -50,11 +50,6 @@ func printOne(agg types.AggregatedMetrics) {
 		fmt.Printf("  TPS: %8.2f tok/s  |  TPM: %8.1f tok/min  |  QPS: %.4f req/s  |  QPM: %.2f req/min  |  I/O Ratio: %s\n",
 			agg.TPS, agg.TPM, agg.QPS, agg.QPM, formatRatio(agg.IORatio))
 	} else {
-		hdr := fmt.Sprintf("  %-16s  %-11s  %-11s  %-11s  %-11s  %s",
-			"Metric", "P50", "P95", "P99", "Avg", "N")
-		fmt.Println(hdr)
-		fmt.Printf("  %s\n", strings.Repeat("-", colWidth-2))
-
 		printRow("E2E Latency", agg.Latency)
 
 		fmt.Printf("  %s\n", strings.Repeat("-", colWidth-2))

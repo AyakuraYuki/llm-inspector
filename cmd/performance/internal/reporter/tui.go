@@ -43,23 +43,21 @@ type failSample struct {
 // 热路径计数走 counters 的原子操作；其余低频字段由 mu 保护，
 // 渲染协程每帧加锁做一次快照。
 type TUIState struct {
-	counters      LevelCounters
-	mu            sync.Mutex
-	phase         tuiPhase
-	seq, total    int
-	model         types.ModelSpec
-	concurrency   int
-	phaseStart    time.Time
-	deadline      time.Time
-	log           []string
-	samples       []failSample
-	lastSampleAt  map[types.ErrorType]time.Time
-	cumRequests   int64 // 已完成档位的累计请求数（不含当前档位）
-	cumFailed     int64
-	aborting      bool
-	benchStart    time.Time
-	preflightOK   int
-	preflightFail int
+	counters     LevelCounters
+	mu           sync.Mutex
+	phase        tuiPhase
+	seq, total   int
+	model        types.ModelSpec
+	concurrency  int
+	phaseStart   time.Time
+	deadline     time.Time
+	log          []string
+	samples      []failSample
+	lastSampleAt map[types.ErrorType]time.Time
+	cumRequests  int64 // 已完成档位的累计请求数（不含当前档位）
+	cumFailed    int64
+	aborting     bool
+	benchStart   time.Time
 }
 
 func NewTuiState() *TUIState {
@@ -100,11 +98,9 @@ func (r *TUIReporter) PreflightResult(model types.ModelSpec, m types.RequestMetr
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if m.Success {
-		s.preflightOK++
 		s.AppendLog(fmt.Sprintf("[预检 OK] %s (%s, group=%s) %.0fms",
 			model.Name, model.Provider, model.TokenGroup, float64(m.TotalLatency)/float64(time.Millisecond)))
 	} else {
-		s.preflightFail++
 		s.AppendLog(fmt.Sprintf("[预检 FAIL] %s (%s, group=%s) %s",
 			model.Name, model.Provider, model.TokenGroup, oneLine(m.Error, 120)))
 	}

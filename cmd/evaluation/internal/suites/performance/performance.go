@@ -88,7 +88,7 @@ func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg conf
 	} else {
 		p99 := stats.Percentile(ttfts, 99)
 		latency.Score = min(1, cfg.SLO.TTFTP99MS/max(p99, 1))
-		latency.Status = statusOf(latency.Score)
+		latency.Status = statusOfThreshold(latency.Score, 0.99)
 		latency.Detail = fmt.Sprintf("TTFT P99=%.0fms（SLO %.0fms）", p99, cfg.SLO.TTFTP99MS)
 		if errorsCount > 0 {
 			latency.Detail += fmt.Sprintf("，%d 次失败", errorsCount)
@@ -110,7 +110,7 @@ func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg conf
 	} else {
 		mean := stats.Mean(tpsList)
 		throughput.Score = min(1, mean/cfg.SLO.MinTokensPerSec)
-		throughput.Status = statusOf(throughput.Score)
+		throughput.Status = statusOfThreshold(throughput.Score, 0.99)
 		throughput.Detail = fmt.Sprintf("单流吞吐均值 %.1f tokens/s（SLO %.1f）", mean, cfg.SLO.MinTokensPerSec)
 	}
 	return latency, throughput
@@ -282,13 +282,6 @@ func estimateTokens(resp *params.Result) int64 {
 		n = 1
 	}
 	return n
-}
-
-func statusOf(score float64) types.Status {
-	if score >= 0.99 {
-		return types.StatusPass
-	}
-	return types.StatusFail
 }
 
 func statusOfThreshold(score, threshold float64) types.Status {

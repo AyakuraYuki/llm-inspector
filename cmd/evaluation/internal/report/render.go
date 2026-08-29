@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // renderConsole 向 w 打印终端汇总（体检结论 + 逐层 + 接入结论）。
@@ -177,19 +178,6 @@ func sectionReasonSummary(s types.SectionResult) string {
 	return fmt.Sprintf("得分 %.0f%%", s.Score*100)
 }
 
-func layerStatus(l *types.LayerResult) string {
-	switch {
-	case !l.Enabled:
-		return "未启用"
-	case l.Skipped:
-		return "跳过: " + l.Reason
-	case l.Passed:
-		return "✅ PASS"
-	default:
-		return "❌ FAIL"
-	}
-}
-
 func checkStatus(s types.Status) string {
 	switch s {
 	case types.StatusPass:
@@ -229,12 +217,7 @@ func metricsJSON(l *types.LayerResult) string {
 }
 
 func oneLine(s string, n int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	r := []rune(s)
-	if len(r) > n {
-		s = string(r[:n]) + "…"
-	}
-	return s
+	return util.TruncateString(strings.ReplaceAll(s, "\n", " "), n)
 }
 
 func escapeMD(s string) string {

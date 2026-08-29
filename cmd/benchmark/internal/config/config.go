@@ -10,7 +10,6 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/dataset"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/types"
-	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // Config 从 YAML 加载运行所需的配置
@@ -93,8 +92,12 @@ type BenchmarkConfig struct {
 }
 
 func (cfg *Config) BenchmarkConfig() (conf BenchmarkConfig) {
+	maxTokens := cfg.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 65536
+	}
 	conf = BenchmarkConfig{
-		MaxTokens:       util.Ternary(cfg.MaxTokens > 0, cfg.MaxTokens, 65536),
+		MaxTokens:       maxTokens,
 		MaxWorkers:      max(cfg.MaxWorkers, 1),
 		ReasoningEffort: cfg.ReasoningEffort,
 	}

@@ -385,7 +385,7 @@ func checkJSONMode(ctx context.Context, p provider.Provider) types.CheckResult {
 			}
 			return failScore("JSON mode 请求失败: " + err.Error())
 		}
-		s := stripFence(resp.Content)
+		s := util.StripCodeFence(resp.Content)
 		if json.Valid([]byte(s)) {
 			detail := ""
 			if promptInduced {
@@ -459,15 +459,4 @@ func checkUsageField(ctx context.Context, p provider.Provider) types.CheckResult
 		}
 		return failScore("响应缺少 usage 字段或为 0")
 	})
-}
-
-func stripFence(s string) string {
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") {
-		if i := strings.Index(s, "\n"); i >= 0 {
-			s = s[i+1:]
-		}
-		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
-	}
-	return strings.TrimSpace(s)
 }

@@ -63,9 +63,9 @@ func SaveIndividualReports(results []types.BenchmarkResult, reportDir string) {
 
 		// 构建报告内容
 		var report strings.Builder
-		report.WriteString("=" + strings.Repeat("=", 79) + "\n")
+		report.WriteString(strings.Repeat("=", 80) + "\n")
 		report.WriteString(fmt.Sprintf("QUESTION #%d BENCHMARK REPORT\n", r.QuestionIndex+1))
-		report.WriteString("=" + strings.Repeat("=", 79) + "\n\n")
+		report.WriteString(strings.Repeat("=", 80) + "\n\n")
 
 		// 问题部分
 		report.WriteString("QUESTION:\n")
@@ -169,7 +169,7 @@ func SaveIndividualReports(results []types.BenchmarkResult, reportDir string) {
 		// Finish Reason
 		if r.FinishReason != "" {
 			report.WriteString(fmt.Sprintf("Finish Reason:              %s", r.FinishReason))
-			if r.FinishReason == "null" || r.FinishReason == "" {
+			if r.FinishReason == "null" {
 				report.WriteString(" ⚠ WARNING: Abnormal termination")
 			} else if r.FinishReason != "stop" {
 				report.WriteString(" ⚠ WARNING: Non-normal finish")

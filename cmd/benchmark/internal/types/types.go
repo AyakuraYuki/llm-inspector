@@ -14,28 +14,28 @@ type Question struct {
 	Answer   *string `json:"answer" yaml:"answer"` // 可能为 null
 }
 
-// BenchmarkResult 包含单个问题的测试结果
+// BenchmarkResult 包含单个问题的测试结果（仅在内存中使用，落盘序列化走 SerializableResult）
 type BenchmarkResult struct {
-	QuestionIndex     int                                   `json:"question_index"`
-	Dataset           string                                `json:"dataset"`
-	Question          string                                `json:"question"`
-	ExpectedAnswer    *string                               `json:"expected_answer,omitempty"`  // 标准答案
-	ModelAnswer       string                                `json:"model_answer"`               // 模型的完整回答
-	ExtractedAnswer   string                                `json:"extracted_answer"`           // 从回答中提取的答案
-	IsCorrect         *bool                                 `json:"is_correct,omitempty"`       // 答案是否正确（如果有标准答案）
-	FinishReason      string                                `json:"finish_reason,omitempty"`    // 完成原因：stop, length, null 等
-	TTFT              time.Duration                         `json:"ttft_ms"`                    // Time To First Token (ms)
-	TotalTime         time.Duration                         `json:"total_time_ms"`              // 总用时 (ms)
-	TokensUsed        int                                   `json:"tokens_used"`                // 生成的 token 数
-	PromptTokens      int                                   `json:"prompt_tokens,omitempty"`    // 输入 token 数（usage 上报；网关不支持 include_usage 时为 0）
-	CachedTokens      int                                   `json:"cached_tokens,omitempty"`    // 缓存命中的输入 token 数
-	ReasoningTokens   int                                   `json:"reasoning_tokens,omitempty"` // 思考 token 数（usage.completion_tokens_details.reasoning_tokens）
-	TPS               float64                               `json:"tps"`                        // Tokens Per Second
-	TPM               float64                               `json:"tpm"`                        // Tokens Per Minute
-	Error             string                                `json:"error,omitempty"`            // 错误信息
-	RawRequest        *openai.ChatCompletionRequest         `json:"-"`                          // 原始请求
-	RawResponseHeader http.Header                           `json:"-"`                          // 原始响应头
-	RawResponse       []openai.ChatCompletionStreamResponse `json:"-"`                          // 原始响应
+	QuestionIndex     int
+	Dataset           string
+	Question          string
+	ExpectedAnswer    *string // 标准答案
+	ModelAnswer       string  // 模型的完整回答
+	ExtractedAnswer   string  // 从回答中提取的答案
+	IsCorrect         *bool   // 答案是否正确（如果有标准答案）
+	FinishReason      string  // 完成原因：stop, length, null 等
+	TTFT              time.Duration
+	TotalTime         time.Duration
+	TokensUsed        int                                   // 生成的 token 数
+	PromptTokens      int                                   // 输入 token 数（usage 上报；网关不支持 include_usage 时为 0）
+	CachedTokens      int                                   // 缓存命中的输入 token 数
+	ReasoningTokens   int                                   // 思考 token 数（usage.completion_tokens_details.reasoning_tokens）
+	TPS               float64                               // Tokens Per Second
+	TPM               float64                               // Tokens Per Minute
+	Error             string                                // 错误信息
+	RawRequest        *openai.ChatCompletionRequest         // 原始请求
+	RawResponseHeader http.Header                           // 原始响应头
+	RawResponse       []openai.ChatCompletionStreamResponse // 原始响应
 }
 
 // SerializableResult 转换为可序列化的格式

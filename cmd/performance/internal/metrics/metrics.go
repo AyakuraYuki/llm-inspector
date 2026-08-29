@@ -152,7 +152,7 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 	return agg
 }
 
-// percentileStats 计算一组时延样本的 P50/P95/P99/Avg/Min/Max。
+// percentileStats 计算一组时延样本的 P50/P95/P99/Avg。
 func percentileStats(durations []time.Duration) types.PercentileStats {
 	n := len(durations)
 	if n == 0 {
@@ -170,9 +170,6 @@ func percentileStats(durations []time.Duration) types.PercentileStats {
 
 	pct := func(p float64) time.Duration {
 		idx := max(int(math.Ceil(float64(n)*p))-1, 0)
-		if idx >= n {
-			idx = n - 1
-		}
 		return sorted[idx]
 	}
 
@@ -183,8 +180,6 @@ func percentileStats(durations []time.Duration) types.PercentileStats {
 		P995: pct(0.995),
 		P999: pct(0.999),
 		Avg:  total / time.Duration(n),
-		Min:  sorted[0],
-		Max:  sorted[n-1],
 		N:    n,
 	}
 }
@@ -207,9 +202,6 @@ func floatPercentileStats(values []float64) types.FloatStats {
 
 	pct := func(p float64) float64 {
 		idx := max(int(math.Ceil(float64(n)*p))-1, 0)
-		if idx >= n {
-			idx = n - 1
-		}
 		return sorted[idx]
 	}
 

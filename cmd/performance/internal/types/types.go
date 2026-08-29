@@ -131,8 +131,6 @@ type PercentileStats struct {
 	P995 time.Duration
 	P999 time.Duration
 	Avg  time.Duration
-	Min  time.Duration
-	Max  time.Duration
 	N    int
 }
 

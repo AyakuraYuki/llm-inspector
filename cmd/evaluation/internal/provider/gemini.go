@@ -69,9 +69,6 @@ type geminiUsageMetadata struct {
 	PromptTokenCount        int64 `json:"promptTokenCount"`
 	CachedContentTokenCount int64 `json:"cachedContentTokenCount"`
 	CandidatesTokenCount    int64 `json:"candidatesTokenCount"`
-	ToolUsePromptTokenCount int64 `json:"toolUsePromptTokenCount"`
-	ThoughtsTokenCount      int64 `json:"thoughtsTokenCount"`
-	TotalTokenCount         int64 `json:"totalTokenCount"`
 }
 
 type geminiContent struct {
@@ -80,8 +77,7 @@ type geminiContent struct {
 }
 
 type geminiPart struct {
-	Thought          bool   `json:"thought,omitempty"`
-	ThoughtSignature string `json:"thoughtSignature,omitempty"`
+	Thought bool `json:"thought,omitempty"`
 
 	Text             string                  `json:"text,omitempty"`
 	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
@@ -95,10 +91,9 @@ type geminiFunctionCall struct {
 }
 
 type geminiFunctionResponse struct {
-	ID           string         `json:"id"`
-	Name         string         `json:"name"`
-	Response     map[string]any `json:"response"`
-	WillContinue bool           `json:"willContinue,omitempty"`
+	ID       string         `json:"id"`
+	Name     string         `json:"name"`
+	Response map[string]any `json:"response"`
 }
 
 type geminiGenerationConfig struct {
@@ -127,25 +122,13 @@ type geminiToolConfig struct {
 	} `json:"functionCallingConfig"`
 }
 
+// geminiModel 只保留 Models() 实际消费的字段，其余响应字段解码时忽略。
 type geminiModel struct {
-	Name                       string   `json:"name"`
-	BaseModelId                string   `json:"baseModelId"`
-	Version                    string   `json:"version"`
-	DisplayName                string   `json:"displayName"`
-	Description                string   `json:"description"`
-	SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
-	InputTokenLimit            int64    `json:"inputTokenLimit"`
-	OutputTokenLimit           int64    `json:"outputTokenLimit"`
-	Temperature                float64  `json:"temperature"`
-	MaxTemperature             float64  `json:"maxTemperature"`
-	TopP                       float64  `json:"topP"`
-	TopK                       int64    `json:"topK"`
-	Thinking                   bool     `json:"thinking"`
+	Name string `json:"name"`
 }
 
 type geminiModelsResponse struct {
-	NextPageToken string        `json:"nextPageToken,omitempty"`
-	Models        []geminiModel `json:"models"`
+	Models []geminiModel `json:"models"`
 }
 
 func (c *geminiClient) buildRequest(req *params.Request) (map[string]any, error) {

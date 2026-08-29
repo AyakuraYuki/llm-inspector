@@ -152,10 +152,8 @@ func runCase(ctx context.Context, p provider.Provider, judge *scorer.Judge, c *C
 	result.Detail = verdict.Reason
 	if verdict.Score >= 0.99 {
 		result.Status = types.StatusPass
-	} else if verdict.Score > 0 {
-		// 部分得分仍记 fail，但保留分值计入层均分
-		result.Status = types.StatusFail
 	} else {
+		// 部分得分仍记 fail，但保留分值计入层均分
 		result.Status = types.StatusFail
 	}
 	return result

@@ -38,17 +38,3 @@ func Mean(samples []float64) float64 {
 	}
 	return sum / float64(len(samples))
 }
-
-// Max 返回样本最大值。空切片返回 0。
-func Max(samples []float64) float64 {
-	if len(samples) == 0 {
-		return 0
-	}
-	m := samples[0]
-	for _, v := range samples[1:] {
-		if v > m {
-			m = v
-		}
-	}
-	return m
-}

@@ -3,6 +3,8 @@ package types
 import (
 	"fmt"
 	"strings"
+
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // SectionLayerWeight 各层在 Section 结论内的权重（均权）。
@@ -56,7 +58,6 @@ func ComputeSections(layers []LayerResult, threshold float64) []SectionResult {
 			sr.Score = 0
 		} else {
 			allPass := true
-			anyFail := false
 			var sum, wSum float64
 			for _, l := range participating {
 				w := SectionLayerWeight[l.ID]
@@ -66,8 +67,7 @@ func ComputeSections(layers []LayerResult, threshold float64) []SectionResult {
 				sum += l.Score * w
 				wSum += w
 				if !l.Passed {
-					allPass = false
-					anyFail = true // Passed=false 即 Score < threshold（Compute 后二者等价）
+					allPass = false // Passed=false 即 Score < threshold（Compute 后二者等价）
 				}
 			}
 			sr.Score = sum / wSum
@@ -75,7 +75,7 @@ func ComputeSections(layers []LayerResult, threshold float64) []SectionResult {
 			switch {
 			case allPass:
 				sr.Status = "pass"
-			case anyFail && def.warnOK:
+			case def.warnOK:
 				sr.Status = "warn"
 			default:
 				sr.Status = "fail"
@@ -93,7 +93,7 @@ func ComputeSections(layers []LayerResult, threshold float64) []SectionResult {
 					if c.Status != StatusFail || n >= 2 {
 						continue
 					}
-					reason.WriteString("; " + c.Name + ": " + truncateRunes(c.Detail, 60))
+					reason.WriteString("; " + c.Name + ": " + util.TruncateString(c.Detail, 60))
 					n++
 				}
 				sr.Reasons = append(sr.Reasons, reason.String())
@@ -103,13 +103,4 @@ func ComputeSections(layers []LayerResult, threshold float64) []SectionResult {
 		sections = append(sections, sr)
 	}
 	return sections
-}
-
-// truncateRunes 按 rune 截断字符串，超过 n 时以 "…" 结尾。
-func truncateRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
 }

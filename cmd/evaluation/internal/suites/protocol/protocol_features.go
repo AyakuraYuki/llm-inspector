@@ -63,7 +63,7 @@ func checkJSONSchema(ctx context.Context, p provider.Provider) types.CheckResult
 		}
 
 		var obj map[string]any
-		if err := json.Unmarshal([]byte(stripFence(resp.Content)), &obj); err != nil {
+		if err := json.Unmarshal([]byte(util.StripCodeFence(resp.Content)), &obj); err != nil {
 			return failScore("输出不是合法 JSON: " + util.TruncateString(resp.Content, 80))
 		}
 		var problems []string
