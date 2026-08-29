@@ -18,7 +18,9 @@ const ReportInterval = 30 * time.Second
 func PrintStatistics(results []types.BenchmarkResult) {
 	var (
 		totalTTFT, totalTime       time.Duration
-		totalTokens                int
+		totalTokens                int64
+		totalPromptTokens          int64
+		totalCacheTokens           int64
 		totalTPS, totalTPM         float64
 		successCount               = 0
 		correctCount               = 0
@@ -32,7 +34,9 @@ func PrintStatistics(results []types.BenchmarkResult) {
 		if r.Error == "" {
 			totalTTFT += r.TTFT
 			totalTime += r.TotalTime
-			totalTokens += r.TokensUsed
+			totalPromptTokens += int64(r.PromptTokens)
+			totalTokens += int64(r.TokensUsed + r.PromptTokens) // input + output
+			totalCacheTokens += int64(r.CachedTokens)
 			totalTPS += r.TPS
 			totalTPM += r.TPM
 			successCount++
@@ -94,8 +98,13 @@ func PrintStatistics(results []types.BenchmarkResult) {
 	// 性能统计
 	logger.Printf("Average TTFT: %d ms", totalTTFT.Milliseconds()/int64(successCount))
 	logger.Printf("Average Total Time: %d ms", totalTime.Milliseconds()/int64(successCount))
-	logger.Printf("Average Tokens: %d", totalTokens/successCount)
+	logger.Printf("Average Tokens: %d", totalTokens/int64(successCount))
 	logger.Printf("Average TPS: %.2f", totalTPS/float64(successCount))
 	logger.Printf("Average TPM: %.2f", totalTPM/float64(successCount))
+	if totalPromptTokens > 0 {
+		logger.Printf("Cache Hit Ratio: %.2f", float64(totalCacheTokens)/float64(totalPromptTokens))
+	} else {
+		logger.Printf("Cache Hit Ratio: n/a")
+	}
 	logger.Printf("%s", strings.Repeat("=", 60))
 }
