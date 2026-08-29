@@ -33,7 +33,7 @@ func SetLogfileForReportDir(reportDir string) {
 
 // Printf 输出带时间戳的日志，用于跟踪测试进度
 func Printf(format string, args ...any) {
-	line := fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
+	line := fmt.Sprintf("[%s] %s", time.Now().Format(time.DateTime), fmt.Sprintf(format, args...))
 
 	mu.Lock()
 	defer mu.Unlock()
