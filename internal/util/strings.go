@@ -22,3 +22,15 @@ func StripCodeFence(s string) string {
 	}
 	return strings.TrimSpace(s)
 }
+
+// MaxLen 返回字符串切片中最长者的字符数，用于对齐动态标签（如 finish_reason、
+// 数据集名）。空切片返回 0。
+func MaxLen(strs []string) int {
+	m := 0
+	for _, s := range strs {
+		if n := len([]rune(s)); n > m {
+			m = n
+		}
+	}
+	return m
+}
