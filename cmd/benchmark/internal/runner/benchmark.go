@@ -191,6 +191,14 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 		}
 		if lastUsage.CompletionTokensDetails != nil {
 			result.ReasoningTokens = lastUsage.CompletionTokensDetails.ReasoningTokens
+			// completion_tokens 按 OpenAI 约定应已包含 reasoning_tokens（细分关系，
+			// 子集不可能大于全集）。若 reasoning_tokens 反而更大，说明该网关把
+			// 两者算作独立计数上报，需要合并回真实解码 token 总数，
+			// 否则思考型模型的 TPS 会被系统性低估
+			if result.ReasoningTokens > result.TokensUsed {
+				result.TokensUsed += result.ReasoningTokens
+				result.ReasoningTokensMerged = true
+			}
 		}
 	} else {
 		result.TokensUsed = int(tokstats.EstimateTokens(fullResponse.String() + reasoningResponse.String()))

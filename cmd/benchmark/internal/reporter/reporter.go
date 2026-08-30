@@ -15,11 +15,13 @@ import (
 // ReportInterval 是心跳监控器输出当前进度的间隔
 const ReportInterval = 30 * time.Second
 
-// PrintStatistics 打印统计信息
-func PrintStatistics(results []types.BenchmarkResult) {
+// PrintStatistics 打印统计信息。elapsed 是整批运行（全部 MaxWorkers 并发）的
+// 墙钟耗时，用于计算 System TPS/TPM。
+func PrintStatistics(results []types.BenchmarkResult, elapsed time.Duration) {
 	var (
 		totalTTFT, totalTime       time.Duration
 		totalTokens                int64
+		totalOutputTokens          int64 // 成功问题的 output tokens 总和，用于 System TPS
 		totalPromptTokens          int64
 		totalCacheTokens           int64
 		totalTPSE2E, totalTPME2E   float64
@@ -28,6 +30,7 @@ func PrintStatistics(results []types.BenchmarkResult) {
 		decodeWindow               time.Duration
 		decodeValidCount           = 0
 		tokensEstimatedCount       = 0
+		reasoningMergedCount       = 0
 		successCount               = 0
 		correctCount               = 0
 		questionsWithAnswer        = 0
@@ -42,11 +45,15 @@ func PrintStatistics(results []types.BenchmarkResult) {
 			totalTime += r.TotalTime
 			totalPromptTokens += int64(r.PromptTokens)
 			totalTokens += int64(r.TokensUsed + r.PromptTokens) // input + output
+			totalOutputTokens += int64(r.TokensUsed)
 			totalCacheTokens += int64(r.CachedTokens)
 			totalTPSE2E += r.TPSE2E
 			totalTPME2E += r.TPME2E
 			if r.TokensEstimated {
 				tokensEstimatedCount++
+			}
+			if r.ReasoningTokensMerged {
+				reasoningMergedCount++
 			}
 			// 解码速率只统计通过有效性校验的样本：判伪样本（一次性到达的
 			// 排空速度、超物理上限的虚高值）若进入平均会拉爆整体
@@ -128,6 +135,17 @@ func PrintStatistics(results []types.BenchmarkResult) {
 		logger.Printf("Aggregate Decode TPM: %.2f", aggDecodeTPS*60)
 		logger.Printf("Average Decode TPS: %.2f", totalTPSDecode/float64(decodeValidCount))
 	}
+
+	// System TPS/TPM：全部成功问题的 output tokens 总量 / 整批运行的墙钟耗时，
+	// 天然反映 MaxWorkers 并发下的真实系统吞吐——与上面 Aggregate Decode TPS
+	// 不同，后者是各请求生成窗口时长直接相加做分母，并发越高这些窗口重叠越多，
+	// 结果会退化成单流平均解码速度，测不出并发带来的系统吞吐提升
+	if elapsed.Seconds() > 0 && totalOutputTokens > 0 {
+		systemTPS := float64(totalOutputTokens) / elapsed.Seconds()
+		logger.Printf("System TPS: %.2f (tokens/s，%d 个成功问题的 Σoutput_tokens / 整批运行墙钟耗时 %s)",
+			systemTPS, successCount, elapsed.Round(time.Millisecond))
+		logger.Printf("System TPM: %.2f", systemTPS*60)
+	}
 	if excluded := successCount - decodeValidCount; excluded > 0 {
 		logger.Printf("Decode TPS excluded: %d/%d 条样本未通过速率有效性校验（一次性到达、超单流物理上限或未捕获 TTFT），已从解码速率剔除",
 			excluded, successCount)
@@ -135,6 +153,10 @@ func PrintStatistics(results []types.BenchmarkResult) {
 	if tokensEstimatedCount > 0 {
 		logger.Printf("Tokens estimated: %d/%d 条样本的 token 数为文本估算（网关未上报 usage），速率可信度下降",
 			tokensEstimatedCount, successCount)
+	}
+	if reasoningMergedCount > 0 {
+		logger.Printf("Reasoning tokens merged: %d/%d 条样本的网关把 reasoning_tokens 算作独立于 completion_tokens 的计数，已合并进 token 总数，避免思考型模型 TPS 被低估",
+			reasoningMergedCount, successCount)
 	}
 	if totalPromptTokens > 0 {
 		logger.Printf("Cache Hit Ratio: %.2f%%", util.CacheHitRatio(totalCacheTokens, totalPromptTokens))

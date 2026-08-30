@@ -15,27 +15,28 @@ func OutputResults(results []types.BenchmarkResult, reportDir string) {
 	serializableResults := make([]types.SerializableResult, len(results))
 	for i, r := range results {
 		serializableResults[i] = types.SerializableResult{
-			Dataset:         r.Dataset,
-			QuestionIndex:   r.QuestionIndex,
-			Question:        r.Question,
-			ExpectedAnswer:  r.ExpectedAnswer,
-			ModelAnswer:     r.ModelAnswer,
-			ExtractedAnswer: r.ExtractedAnswer,
-			IsCorrect:       r.IsCorrect,
-			FinishReason:    r.FinishReason,
-			TTFTMs:          r.TTFT.Milliseconds(),
-			TotalTimeMs:     r.TotalTime.Milliseconds(),
-			TokensUsed:      r.TokensUsed,
-			TokensEstimated: r.TokensEstimated,
-			PromptTokens:    r.PromptTokens,
-			CachedTokens:    r.CachedTokens,
-			ReasoningTokens: r.ReasoningTokens,
-			TPSE2E:          r.TPSE2E,
-			TPME2E:          r.TPME2E,
-			TPSDecode:       r.TPSDecode,
-			TPMDecode:       r.TPMDecode,
-			DecodeValid:     r.DecodeValid,
-			Error:           r.Error,
+			Dataset:               r.Dataset,
+			QuestionIndex:         r.QuestionIndex,
+			Question:              r.Question,
+			ExpectedAnswer:        r.ExpectedAnswer,
+			ModelAnswer:           r.ModelAnswer,
+			ExtractedAnswer:       r.ExtractedAnswer,
+			IsCorrect:             r.IsCorrect,
+			FinishReason:          r.FinishReason,
+			TTFTMs:                r.TTFT.Milliseconds(),
+			TotalTimeMs:           r.TotalTime.Milliseconds(),
+			TokensUsed:            r.TokensUsed,
+			TokensEstimated:       r.TokensEstimated,
+			PromptTokens:          r.PromptTokens,
+			CachedTokens:          r.CachedTokens,
+			ReasoningTokens:       r.ReasoningTokens,
+			ReasoningTokensMerged: r.ReasoningTokensMerged,
+			TPSE2E:                r.TPSE2E,
+			TPME2E:                r.TPME2E,
+			TPSDecode:             r.TPSDecode,
+			TPMDecode:             r.TPMDecode,
+			DecodeValid:           r.DecodeValid,
+			Error:                 r.Error,
 		}
 	}
 
@@ -169,6 +170,9 @@ func SaveIndividualReports(results []types.BenchmarkResult, reportDir string) {
 		}
 		if r.ReasoningTokens > 0 {
 			report.WriteString(fmt.Sprintf("Reasoning Tokens:           %d\n", r.ReasoningTokens))
+			if r.ReasoningTokensMerged {
+				report.WriteString("                              ⚠ 网关把 reasoning_tokens 算作独立于 completion_tokens 的计数，已合并进 Tokens Generated\n")
+			}
 		}
 		report.WriteString(fmt.Sprintf("E2E TPS (用户感知速度):      %.2f\n", r.TPSE2E))
 		report.WriteString(fmt.Sprintf("E2E TPM:                    %.2f\n", r.TPME2E))

@@ -65,7 +65,9 @@ func main() {
 
 	// 运行 benchmark
 	logger.Printf("Benchmark started")
+	runStart := time.Now()
 	results := runner.RunBenchmark(client, cfg.Model, questions, benchmarkCfg)
+	elapsed := time.Since(runStart) // 整批运行的墙钟耗时，用于 System TPS/TPM
 	logger.Printf("Benchmark finished")
 	if n := errlog.Count(); n > 0 {
 		logger.Printf("请求错误日志（%d 条）: %s", n, errlog.Path())
@@ -73,5 +75,5 @@ func main() {
 
 	report.OutputResults(results, reportDir)         // 输出 JSON 结果
 	report.SaveIndividualReports(results, reportDir) // 保存每个问题的详细报告
-	reporter.PrintStatistics(results)                // 计算统计信息
+	reporter.PrintStatistics(results, elapsed)       // 计算统计信息
 }
