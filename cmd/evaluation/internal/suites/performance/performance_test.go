@@ -2,60 +2,120 @@ package performance
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
-	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
 )
 
-type fakeProvider struct {
-	chatFn func(req *params.Request) (*params.Result, error)
+// stubProvider 按预设结果应答 Stream 调用。
+type stubProvider struct {
+	results []*params.Result
 }
 
-func (f *fakeProvider) Chat(_ context.Context, req *params.Request) (*params.Result, error) {
-	return f.chatFn(req)
+func (s *stubProvider) Chat(context.Context, *params.Request) (*params.Result, error) {
+	return s.results[0], nil
 }
-func (f *fakeProvider) Stream(_ context.Context, req *params.Request) (*params.Result, error) {
-	return f.chatFn(req)
-}
-func (f *fakeProvider) Models(context.Context) ([]string, error) { return []string{"m"}, nil }
-func (f *fakeProvider) Model() string                            { return "m" }
-func (f *fakeProvider) Protocol() string                         { return "openai" }
 
-// 全档通过时只能断言"至少"，不能宣称"实测上限"（用户真实案例：
-// kimi-k3 全档通过被报告为"实测上限约 32768"，实际远大于此）。
-func TestContextProbeAllPassedWording(t *testing.T) {
-	p := &fakeProvider{chatFn: func(*params.Request) (*params.Result, error) {
-		return &params.Result{Content: "OK", FinishReason: "stop"}, nil
+func (s *stubProvider) Stream(_ context.Context, _ *params.Request) (*params.Result, error) {
+	resp := s.results[0]
+	s.results = s.results[1:]
+	return resp, nil
+}
+
+func (s *stubProvider) Models(context.Context) ([]string, error) { return nil, nil }
+func (s *stubProvider) Model() string                            { return "stub-model" }
+func (s *stubProvider) Protocol() string                         { return "openai" }
+
+func testConfig(runs int) config.PerformanceConfig {
+	return config.PerformanceConfig{
+		Runs: runs,
+		SLO: config.SLOConfig{
+			TTFTP99MS:       2000,
+			MinTokensPerSec: 10,
+		},
+	}
+}
+
+func metricInt(t *testing.T, c types.CheckResult, key string) int {
+	t.Helper()
+	v, ok := c.Metrics[key].(int)
+	if !ok {
+		t.Fatalf("metric %q missing or not int: %v", key, c.Metrics[key])
+	}
+	return v
+}
+
+func metricFloat64(t *testing.T, c types.CheckResult, key string) float64 {
+	t.Helper()
+	v, ok := c.Metrics[key].(float64)
+	if !ok {
+		t.Fatalf("metric %q missing or not float64: %v", key, c.Metrics[key])
+	}
+	return v
+}
+
+// 正常流式：生成窗口 1s、50 tokens → 解码 TPS 50，样本入样。
+func TestMeasureLatencyThroughput_NormalSample(t *testing.T) {
+	p := &stubProvider{results: []*params.Result{
+		{TTFTMS: 100, LatencyMS: 1100, CompletionTokens: 50},
 	}}
-	r := checkContextProbe(t.Context(), p, config.PerformanceConfig{MaxProbeTokens: 4096})
-	if r.Status != types.StatusPass || r.Score != 1 {
-		t.Fatalf("全档通过应满分, status=%s score=%v", r.Status, r.Score)
+	_, throughput := measureLatencyThroughput(context.Background(), p, testConfig(1))
+
+	if got := metricFloat64(t, throughput, "tps_mean"); got != 50 {
+		t.Errorf("tps_mean = %f, want 50", got)
 	}
-	if !strings.Contains(r.Detail, "至少") || !strings.Contains(r.Detail, "真实上限可能更高") {
-		t.Errorf("全档通过的 detail 应说明只是下界, got %q", r.Detail)
+	if got := metricInt(t, throughput, "tps_excluded"); got != 0 {
+		t.Errorf("tps_excluded = %d, want 0", got)
 	}
-	if strings.Contains(r.Detail, "实测上限约") {
-		t.Errorf("全档通过不应宣称实测上限, got %q", r.Detail)
+	// E2E TPS = 50 / 1.1s ≈ 45.45，与解码口径分开记录
+	if got := metricFloat64(t, throughput, "tps_e2e_mean"); got < 45 || got > 46 {
+		t.Errorf("tps_e2e_mean = %f, want ≈45.45", got)
 	}
 }
 
-// 中途失败时才能给出实测上限。
-func TestContextProbePartialWording(t *testing.T) {
-	p := &fakeProvider{chatFn: func(req *params.Request) (*params.Result, error) {
-		if len(req.Messages[0].Content) > 3000 { // 约 2048 tokens 档开始失败
-			return nil, &provider.HTTPError{StatusCode: 400, Body: "context length exceeded"}
-		}
-		return &params.Result{Content: "OK", FinishReason: "stop"}, nil
+// 伪流式（TTFT 贴着流结束，生成窗口 1ms）：100 tokens/1ms = 10 万 tok/s
+// 的排空样本必须判伪剔除，不得污染 tps_mean。
+func TestMeasureLatencyThroughput_BurstExcluded(t *testing.T) {
+	p := &stubProvider{results: []*params.Result{
+		{TTFTMS: 1000, LatencyMS: 1001, CompletionTokens: 100},
 	}}
-	r := checkContextProbe(t.Context(), p, config.PerformanceConfig{MaxProbeTokens: 8192})
-	if !strings.Contains(r.Detail, "实测上限约") {
-		t.Errorf("中途失败应给出实测上限, got %q", r.Detail)
+	_, throughput := measureLatencyThroughput(context.Background(), p, testConfig(1))
+
+	if got := metricInt(t, throughput, "tps_excluded"); got != 1 {
+		t.Errorf("tps_excluded = %d, want 1（排空样本应判伪）", got)
 	}
-	if strings.Contains(r.Detail, "至少") {
-		t.Errorf("中途失败不应使用'至少'措辞, got %q", r.Detail)
+	if throughput.Status != types.StatusFail {
+		t.Errorf("Status = %v, want Fail（唯一样本被剔除后无有效吞吐样本）", throughput.Status)
+	}
+	// E2E 口径不受影响：100 tokens / 1.001s ≈ 99.9
+	if got := metricFloat64(t, throughput, "tps_e2e_mean"); got < 99 || got > 101 {
+		t.Errorf("tps_e2e_mean = %f, want ≈99.9（E2E 口径不受剔除影响）", got)
+	}
+}
+
+// 超单流物理上限（窗口本身正常）：5000 tok/s > 4096 天花板，判伪。
+func TestMeasureLatencyThroughput_PhysicalCeilingExcluded(t *testing.T) {
+	p := &stubProvider{results: []*params.Result{
+		{TTFTMS: 100, LatencyMS: 2100, CompletionTokens: 10_000}, // 2s 窗口，5000 tok/s
+	}}
+	_, throughput := measureLatencyThroughput(context.Background(), p, testConfig(1))
+
+	if got := metricInt(t, throughput, "tps_excluded"); got != 1 {
+		t.Errorf("tps_excluded = %d, want 1（超物理上限样本应判伪）", got)
+	}
+}
+
+// usage 缺失时按文本构成估算（正文 + 思考内容）。
+func TestEstimateTokens_Fallback(t *testing.T) {
+	resp := &params.Result{Content: "你好世界", ReasoningContent: "思考"} // 共 6 CJK 字符
+	if got := estimateTokens(resp); got != 4 {
+		t.Errorf("estimateTokens = %d, want 4（6 CJK / 1.5）", got)
+	}
+
+	resp = &params.Result{CompletionTokens: 42, Content: "ignored"}
+	if got := estimateTokens(resp); got != 42 {
+		t.Errorf("estimateTokens = %d, want 42（usage 优先）", got)
 	}
 }

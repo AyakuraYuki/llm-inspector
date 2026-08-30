@@ -8,13 +8,13 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/provider"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/stats"
 	"github.com/AyakuraYuki/llm-inspector/cmd/evaluation/internal/types"
 	"github.com/AyakuraYuki/llm-inspector/internal/llm/params"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/tokstats"
 )
 
 const benchPrompt = "请用三句话介绍机器学习的基本概念。"
@@ -41,6 +41,8 @@ func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg conf
 	ttfts := make([]float64, 0, cfg.Runs)
 	totals := make([]float64, 0, cfg.Runs)
 	tpsList := make([]float64, 0, cfg.Runs)
+	tpsE2EList := make([]float64, 0, cfg.Runs)
+	tpsExcluded := 0
 	errorsCount := 0
 
 	for i := 0; i < cfg.Runs; i++ {
@@ -58,12 +60,22 @@ func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg conf
 		}
 		ttfts = append(ttfts, ttft)
 		totals = append(totals, resp.LatencyMS)
-		genSec := (resp.LatencyMS - ttft) / 1000
-		if genSec <= 0 {
-			genSec = resp.LatencyMS / 1000
+
+		toks := estimateTokens(resp)
+		// E2E TPS：用户感知速度，分母为全程时延，所有成功样本都入样
+		if resp.LatencyMS > 0 {
+			tpsE2EList = append(tpsE2EList, float64(toks)/(resp.LatencyMS/1000))
 		}
-		if genSec > 0 {
-			tpsList = append(tpsList, float64(estimateTokens(resp))/genSec)
+		// 解码 TPS：分母为生成窗口，须经有效性校验——生成窗口双门槛剔除
+		// 「响应缓冲后一次性到达」的排空样本（genSec 萎缩到毫秒级时 TPS 可
+		// 虚高到十万 tok/s 量级），单流物理天花板兜住任何漏网形态；
+		// 判伪样本只从解码口径剔除，不再像旧行为那样偷换成 E2E 口径入样
+		genWindow := time.Duration((resp.LatencyMS - ttft) * float64(time.Millisecond))
+		e2e := time.Duration(resp.LatencyMS * float64(time.Millisecond))
+		if tokstats.ValidStreamTPS(toks, genWindow, e2e) {
+			tpsList = append(tpsList, float64(toks)/genWindow.Seconds())
+		} else {
+			tpsExcluded++
 		}
 	}
 	durationMS := float64(time.Since(start).Microseconds()) / 1000
@@ -98,20 +110,28 @@ func measureLatencyThroughput(ctx context.Context, p provider.Provider, cfg conf
 	throughput := types.CheckResult{
 		Name: "throughput", Weight: 2,
 		Metrics: map[string]any{
-			"tps_mean":    stats.Mean(tpsList),
-			"tps_min":     minSlice(tpsList),
-			"slo_min_tps": cfg.SLO.MinTokensPerSec,
+			"tps_mean":     stats.Mean(tpsList),
+			"tps_min":      minSlice(tpsList),
+			"tps_e2e_mean": stats.Mean(tpsE2EList),
+			"tps_excluded": tpsExcluded,
+			"slo_min_tps":  cfg.SLO.MinTokensPerSec,
 		},
 	}
 	if len(tpsList) == 0 {
 		throughput.Status = types.StatusFail
 		throughput.Score = 0
 		throughput.Detail = "无有效吞吐样本"
+		if tpsExcluded > 0 {
+			throughput.Detail = fmt.Sprintf("无有效吞吐样本（%d 条样本未通过速率有效性校验：一次性到达/超单流物理上限）", tpsExcluded)
+		}
 	} else {
 		mean := stats.Mean(tpsList)
 		throughput.Score = min(1, mean/cfg.SLO.MinTokensPerSec)
 		throughput.Status = statusOfThreshold(throughput.Score, 0.99)
-		throughput.Detail = fmt.Sprintf("单流吞吐均值 %.1f tokens/s（SLO %.1f）", mean, cfg.SLO.MinTokensPerSec)
+		throughput.Detail = fmt.Sprintf("单流解码吞吐均值 %.1f tokens/s（SLO %.1f）", mean, cfg.SLO.MinTokensPerSec)
+		if tpsExcluded > 0 {
+			throughput.Detail += fmt.Sprintf("，%d 条样本未通过速率有效性校验已剔除", tpsExcluded)
+		}
 	}
 	return latency, throughput
 }
@@ -172,10 +192,10 @@ func checkConcurrency(ctx context.Context, p provider.Provider, cfg config.Perfo
 				tokSum += tokens[i]
 			}
 		}
-		lv := level{concurrency: c}
-		lv.errRate = float64(errs) / float64(total)
-		lv.tps = tokSum / wallSec
-		lv.p99 = stats.Percentile(okLat, 99)
+		lv := level{concurrency: c,
+			errRate: float64(errs) / float64(total),
+			tps:     tokSum / wallSec,
+			p99:     stats.Percentile(okLat, 99)}
 		levels = append(levels, lv)
 	}
 
@@ -272,16 +292,13 @@ func buildFiller(n int) string {
 	return strings.Repeat(unit, repeats)
 }
 
-// estimateTokens 优先使用 usage；缺失时按 1.5 字符/token 粗估（中文输出）。
+// estimateTokens 优先使用 usage；缺失时按文本构成估算
+// （ASCII 4 字符/token、CJK 1.5 字符/token 加权），正文与思考内容都计入。
 func estimateTokens(resp *params.Result) int64 {
 	if resp.CompletionTokens > 0 {
 		return resp.CompletionTokens
 	}
-	n := int64(float64(utf8.RuneCountInString(resp.Content)) / 1.5)
-	if n < 1 && resp.Content != "" {
-		n = 1
-	}
-	return n
+	return tokstats.EstimateTokens(resp.Content + resp.ReasoningContent)
 }
 
 func statusOfThreshold(score, threshold float64) types.Status {

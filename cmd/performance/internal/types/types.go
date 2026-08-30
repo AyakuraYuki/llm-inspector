@@ -64,6 +64,7 @@ type RequestMetrics struct {
 	TotalLatency      time.Duration // 端到端总时延
 	InputTokens       int64         // 输入 token 数（图片生成为 0，无 usage 上报时为 0）
 	OutputTokens      int64         // 输出 token 数（图片生成为 0）
+	OutputEstimated   bool          // OutputTokens 来自文本估算（provider 未上报 usage），可信度低于精确上报
 	CachedInputTokens int64         // 命中缓存的输入 token 数（provider 未上报缓存字段时为 0）
 	CacheReported     bool          // provider 是否上报了缓存命中字段（区分「未上报」与「上报了但命中为 0」）
 	Success           bool
@@ -166,7 +167,8 @@ type AggregatedMetrics struct {
 	TPOT             PercentileStats // Time Per Output Token（gen_window / output_tokens）
 	TpsPr            FloatStats      // per-request tokens/s 分位数
 	TpmPr            FloatStats      // per-request tokens/min 分位数
-	GenSpeedExcluded int             // 因生成窗口过窄（响应一次性到达，测不出真实解码速度）被 TPOT/TPS/TPM 剔除的成功样本数
+	GenSpeedExcluded int             // 未通过有效性校验（生成窗口过窄或超出单流物理天花板，测不出真实解码速度）被 TPOT/TPS/TPM 剔除的成功样本数
+	EstimatedOutputs int             // OutputTokens 来自文本估算（无 usage 上报）的成功样本数；占比高时速率分位数可信度下降
 	IOR              FloatStats      // per-request 输出/输入 token 比（output_tokens / input_tokens）分位数
 	CacheHitPr       FloatStats      // per-request 缓存命中率（cached_input_tokens / input_tokens * 100）分位数，仅上报了缓存字段的请求入样
 

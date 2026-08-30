@@ -55,8 +55,7 @@ func Test_aime26(t *testing.T) {
 }
 
 func Test_MMLUProConfig_questions(t *testing.T) {
-	conf := MMLUProConfig{}
-	conf.Enabled = true
+	conf := MMLUProConfig{Enabled: true}
 	questions, err := conf.allQuestions()
 	assert.NoError(t, err)
 	assert.Len(t, questions, 12032)

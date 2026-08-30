@@ -239,7 +239,10 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 			notes = append(notes, fmt.Sprintf("样本量少(N=%d)，P99 仅供参考", agg.TpsPr.N))
 		}
 		if agg.GenSpeedExcluded > 0 {
-			notes = append(notes, fmt.Sprintf("剔除 %d 条生成窗口过窄的样本（响应一次性到达，测不出真实解码速度）", agg.GenSpeedExcluded))
+			notes = append(notes, fmt.Sprintf("剔除 %d 条未通过速率有效性校验的样本（一次性到达或超出单流物理上限，测不出真实解码速度）", agg.GenSpeedExcluded))
+		}
+		if agg.EstimatedOutputs > 0 {
+			notes = append(notes, fmt.Sprintf("%d/%d 条成功样本的 token 数为文本估算（无 usage 上报），速率分位数可信度下降", agg.EstimatedOutputs, agg.Success))
 		}
 		note := strings.Join(notes, "；")
 		xlSetRow(f, sh, row, []any{

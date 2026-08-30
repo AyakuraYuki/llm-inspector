@@ -27,11 +27,15 @@ type BenchmarkResult struct {
 	TTFT              time.Duration
 	TotalTime         time.Duration
 	TokensUsed        int                                   // 生成的 token 数
+	TokensEstimated   bool                                  // TokensUsed 来自文本估算（网关未上报 usage），可信度低于精确上报
 	PromptTokens      int                                   // 输入 token 数（usage 上报；网关不支持 include_usage 时为 0）
 	CachedTokens      int                                   // 缓存命中的输入 token 数
 	ReasoningTokens   int                                   // 思考 token 数（usage.completion_tokens_details.reasoning_tokens）
-	TPS               float64                               // Tokens Per Second
-	TPM               float64                               // Tokens Per Minute
+	TPSE2E            float64                               // 端到端 Tokens Per Second（tokens / 全程耗时，用户感知速度，含 TTFT 摊薄）
+	TPME2E            float64                               // 端到端 Tokens Per Minute
+	TPSDecode         float64                               // 解码 Tokens Per Second（tokens / 生成窗口），仅 DecodeValid 时有效
+	TPMDecode         float64                               // 解码 Tokens Per Minute，仅 DecodeValid 时有效
+	DecodeValid       bool                                  // 解码速率样本是否通过有效性校验（生成窗口双门槛 + 单流物理天花板）
 	Error             string                                // 错误信息
 	RawRequest        *openai.ChatCompletionRequest         // 原始请求
 	RawResponseHeader http.Header                           // 原始响应头
@@ -51,10 +55,14 @@ type SerializableResult struct {
 	TTFTMs          int64   `json:"ttft_ms"`
 	TotalTimeMs     int64   `json:"total_time_ms"`
 	TokensUsed      int     `json:"tokens_used"`
+	TokensEstimated bool    `json:"tokens_estimated,omitempty"`
 	PromptTokens    int     `json:"prompt_tokens,omitempty"`
 	CachedTokens    int     `json:"cached_tokens,omitempty"`
 	ReasoningTokens int     `json:"reasoning_tokens,omitempty"`
-	TPS             float64 `json:"tps"`
-	TPM             float64 `json:"tpm"`
+	TPSE2E          float64 `json:"tps_e2e"`
+	TPME2E          float64 `json:"tpm_e2e"`
+	TPSDecode       float64 `json:"tps_decode,omitempty"`   // 仅 decode_valid 时有值
+	TPMDecode       float64 `json:"tpm_decode,omitempty"`   // 仅 decode_valid 时有值
+	DecodeValid     bool    `json:"decode_valid,omitempty"` // 解码速率样本是否通过有效性校验
 	Error           string  `json:"error,omitempty"`
 }

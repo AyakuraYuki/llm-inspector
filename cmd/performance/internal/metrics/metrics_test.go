@@ -105,6 +105,42 @@ func TestAggregateMetrics_FractionGateExcluded(t *testing.T) {
 	}
 }
 
+func TestAggregateMetrics_PhysicalCeilingExcluded(t *testing.T) {
+	// 生成窗口本身又宽又正常（10s，占 E2E 91%），双门槛无法识别；
+	// 但 50,000 tok/s 超出单流物理上限（天花板 4096 tok/s），
+	// 只可能是 usage 虚报或计时错乱的假象，必须剔除。
+	agg := AggregateMetrics(mkResult(types.RequestMetrics{
+		TTFT:         1 * time.Second,
+		TotalLatency: 11 * time.Second,
+		OutputTokens: 500_000,
+	}))
+
+	if agg.GenSpeedExcluded != 1 {
+		t.Fatalf("GenSpeedExcluded = %d, want 1（超物理上限样本应被剔除）", agg.GenSpeedExcluded)
+	}
+	if agg.TpsPr.N != 0 {
+		t.Errorf("TpsPr.N = %d, want 0", agg.TpsPr.N)
+	}
+	if agg.TPOT.N != 0 {
+		t.Errorf("TPOT.N = %d, want 0", agg.TPOT.N)
+	}
+}
+
+func TestAggregateMetrics_EstimatedOutputsCounted(t *testing.T) {
+	// usage 缺失时 token 数来自文本估算，需单独计数供报表标注可信度
+	agg := AggregateMetrics(mkResult(
+		types.RequestMetrics{TTFT: time.Second, TotalLatency: 11 * time.Second, OutputTokens: 1000, OutputEstimated: true},
+		types.RequestMetrics{TTFT: time.Second, TotalLatency: 11 * time.Second, OutputTokens: 1000},
+	))
+
+	if agg.EstimatedOutputs != 1 {
+		t.Errorf("EstimatedOutputs = %d, want 1", agg.EstimatedOutputs)
+	}
+	if agg.TpsPr.N != 2 {
+		t.Errorf("TpsPr.N = %d, want 2（估算样本仍应参与分位数）", agg.TpsPr.N)
+	}
+}
+
 func TestAggregateMetrics_SystemThroughputUnaffected(t *testing.T) {
 	// System TPS/TPM 按窗口内完成的总 token ÷ 窗口时长计算，
 	// 与 per-request 剔除无关：退化样本的 token 照常计入。

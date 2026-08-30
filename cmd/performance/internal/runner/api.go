@@ -22,6 +22,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 	"github.com/AyakuraYuki/llm-inspector/internal/errlog"
 	"github.com/AyakuraYuki/llm-inspector/internal/llm/sse"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/tokstats"
 )
 
 // newTransport 构建连接池调优后的 Transport。
@@ -556,11 +557,14 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 		}
 	}
 
-	// 无 usage 时用字符数粗估
+	// 无 usage 时按文本构成粗估（ASCII 4 字符/token、CJK 1.5 字符/token 加权），
+	// 并打估算标记——估算样本的速率分位数可信度低于 usage 精确上报
+	outputEstimated := false
 	if !s.UsageSeen && len(s.TextParts) > 0 {
 		joined := strings.Join(s.TextParts, "")
 		if strings.TrimSpace(joined) != "" {
-			s.CompletionTokens = max(int64(1), int64(len(joined)/4))
+			s.CompletionTokens = tokstats.EstimateTokens(joined)
+			outputEstimated = true
 		}
 	}
 
@@ -569,6 +573,7 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 		TotalLatency:      time.Duration(e2eMs * float64(time.Millisecond)),
 		InputTokens:       s.PromptTokens,
 		OutputTokens:      s.CompletionTokens,
+		OutputEstimated:   outputEstimated,
 		CachedInputTokens: max(int64(0), s.CachedInputTokens),
 		CacheReported:     s.CacheSeen,
 		Success:           true,

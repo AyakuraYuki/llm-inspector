@@ -61,10 +61,17 @@ func printOne(agg types.AggregatedMetrics) {
 		fmt.Printf("  [WARN] %s\n", note)
 	}
 
-	// 生成窗口过窄的样本（响应一次性到达）不参与 TPOT/TPS/TPM 分位数
+	// 未通过有效性校验的样本（生成窗口过窄/一次性到达，或超出单流物理天花板）
+	// 不参与 TPOT/TPS/TPM 分位数
 	if agg.GenSpeedExcluded > 0 {
-		fmt.Printf("  [NOTE] %d 条样本因生成窗口过窄（响应一次性到达）被剔除出 TPOT/TPS 分位数，疑似网关缓冲或压测机读流饥饿\n",
+		fmt.Printf("  [NOTE] %d 条样本未通过速率有效性校验（响应一次性到达或超出单流物理上限）被剔除出 TPOT/TPS 分位数，疑似网关缓冲、压测机读流饥饿或 usage 虚报\n",
 			agg.GenSpeedExcluded)
+	}
+
+	// token 数为文本估算的样本占比过高时，速率分位数可信度下降
+	if agg.EstimatedOutputs > 0 {
+		fmt.Printf("  [NOTE] %d/%d 条成功样本的 token 数为文本估算（provider 未上报 usage），TPS/TPM 分位数可信度下降\n",
+			agg.EstimatedOutputs, agg.Success)
 	}
 
 	// 失败原因分类

@@ -11,6 +11,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/reporter"
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/tokstats"
 	"github.com/AyakuraYuki/llm-inspector/internal/logger"
 	"github.com/AyakuraYuki/llm-inspector/pkg/go-openai"
 )
@@ -57,9 +58,14 @@ func RunBenchmark(client *openai.Client, model string, questions []types.Questio
 					finishReasonStr = fmt.Sprintf(" [finish_reason=%s]", result.FinishReason)
 				}
 
-				logger.Printf("Question %d completed (%d/%d done): TTFT=%dms, Total=%dms, Tokens=%d, TPS=%.2f%s%s",
+				decodeStr := ", DecodeTPS=excluded"
+				if result.DecodeValid {
+					decodeStr = fmt.Sprintf(", DecodeTPS=%.2f", result.TPSDecode)
+				}
+
+				logger.Printf("Question %d completed (%d/%d done): TTFT=%dms, Total=%dms, Tokens=%d, E2ETPS=%.2f%s%s%s",
 					index+1, completed, len(questions), result.TTFT.Milliseconds(),
-					result.TotalTime.Milliseconds(), result.TokensUsed, result.TPS, correctnessStr, finishReasonStr)
+					result.TotalTime.Milliseconds(), result.TokensUsed, result.TPSE2E, decodeStr, correctnessStr, finishReasonStr)
 			} else {
 				logger.Printf("Question %d failed (%d/%d done): %s", index+1, completed, len(questions), result.Error)
 			}
@@ -123,6 +129,7 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 	defer stream.Close()
 
 	var fullResponse strings.Builder
+	var reasoningResponse strings.Builder
 	var rawResponses []openai.ChatCompletionStreamResponse
 	receivedFirstToken := false
 	var finishReason string
@@ -141,17 +148,21 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 		}
 		rawResponses = append(rawResponses, response)
 
-		// 记录首个 token 时间
-		if !receivedFirstToken && len(response.Choices) > 0 && response.Choices[0].Delta.Content != "" {
-			receivedFirstToken = true
-			result.TTFT = time.Since(startTime)
-			logger.Printf("Question %d first token received (TTFT=%dms)", index+1, result.TTFT.Milliseconds())
-		}
-
-		// 收集完整响应
 		if len(response.Choices) > 0 {
-			content := response.Choices[0].Delta.Content
-			fullResponse.WriteString(content)
+			delta := response.Choices[0].Delta
+
+			// 记录首个 token 时间：思考内容（reasoning_content）也是模型正在
+			// 解码的 token，只看正文 Content 会把 TTFT 推迟到思考结束，
+			// 使生成窗口萎缩成正文段、解码 TPS 被虚高数倍
+			if !receivedFirstToken && (delta.Content != "" || delta.ReasoningContent != "") {
+				receivedFirstToken = true
+				result.TTFT = time.Since(startTime)
+				logger.Printf("Question %d first token received (TTFT=%dms)", index+1, result.TTFT.Milliseconds())
+			}
+
+			// 收集完整响应（思考内容单独收集，供无 usage 时的 token 估算与排查）
+			fullResponse.WriteString(delta.Content)
+			reasoningResponse.WriteString(delta.ReasoningContent)
 
 			// 捕获 finish_reason
 			if response.Choices[0].FinishReason != "" {
@@ -168,9 +179,10 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 	}
 
 	result.TotalTime = time.Since(startTime)
-	lastUsage, chunkCount := collectUsage(rawResponses)
+	lastUsage := collectUsage(rawResponses)
 	// 优先采用 usage 上报的精确 completion token 数；
-	// 网关不支持 stream_options.include_usage 时回退到旧行为（chunk 计数）
+	// 网关不支持 stream_options.include_usage 时按文本构成估算
+	// （正文 + 思考内容），并打估算标记
 	if lastUsage != nil {
 		result.TokensUsed = lastUsage.CompletionTokens
 		result.PromptTokens = lastUsage.PromptTokens
@@ -181,16 +193,27 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 			result.ReasoningTokens = lastUsage.CompletionTokensDetails.ReasoningTokens
 		}
 	} else {
-		result.TokensUsed = chunkCount
+		result.TokensUsed = int(tokstats.EstimateTokens(fullResponse.String() + reasoningResponse.String()))
+		result.TokensEstimated = true
 	}
 	result.ModelAnswer = fullResponse.String()
 	result.RawResponse = rawResponses
 	result.RawResponseHeader = stream.Header()
 
-	// 计算 TPS 和 TPM
+	// 端到端 TPS/TPM：用户感知速度，分母含 TTFT，推理模型会被思考时间摊薄
 	if result.TotalTime.Seconds() > 0 {
-		result.TPS = float64(result.TokensUsed) / result.TotalTime.Seconds()
-		result.TPM = result.TPS * 60
+		result.TPSE2E = float64(result.TokensUsed) / result.TotalTime.Seconds()
+		result.TPME2E = result.TPSE2E * 60
+	}
+
+	// 解码 TPS/TPM：分母为生成窗口（E2E − TTFT），须经有效性校验——
+	// 生成窗口双门槛剔除「响应缓冲后一次性到达」的排空样本，
+	// 单流物理天花板兜住任何漏网的虚高形态；未捕获到 TTFT 时窗口无定义，直接判伪
+	genWindow := result.TotalTime - result.TTFT
+	if result.TTFT > 0 && tokstats.ValidStreamTPS(int64(result.TokensUsed), genWindow, result.TotalTime) {
+		result.TPSDecode = float64(result.TokensUsed) / genWindow.Seconds()
+		result.TPMDecode = result.TPSDecode * 60
+		result.DecodeValid = true
 	}
 
 	// 提取答案

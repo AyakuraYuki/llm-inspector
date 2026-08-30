@@ -26,11 +26,15 @@ func OutputResults(results []types.BenchmarkResult, reportDir string) {
 			TTFTMs:          r.TTFT.Milliseconds(),
 			TotalTimeMs:     r.TotalTime.Milliseconds(),
 			TokensUsed:      r.TokensUsed,
+			TokensEstimated: r.TokensEstimated,
 			PromptTokens:    r.PromptTokens,
 			CachedTokens:    r.CachedTokens,
 			ReasoningTokens: r.ReasoningTokens,
-			TPS:             r.TPS,
-			TPM:             r.TPM,
+			TPSE2E:          r.TPSE2E,
+			TPME2E:          r.TPME2E,
+			TPSDecode:       r.TPSDecode,
+			TPMDecode:       r.TPMDecode,
+			DecodeValid:     r.DecodeValid,
 			Error:           r.Error,
 		}
 	}
@@ -156,6 +160,9 @@ func SaveIndividualReports(results []types.BenchmarkResult, reportDir string) {
 		report.WriteString(fmt.Sprintf("TTFT (Time To First Token): %d ms\n", r.TTFT.Milliseconds()))
 		report.WriteString(fmt.Sprintf("Total Time:                 %d ms\n", r.TotalTime.Milliseconds()))
 		report.WriteString(fmt.Sprintf("Tokens Generated:           %d\n", r.TokensUsed))
+		if r.TokensEstimated {
+			report.WriteString("                              ⚠ token 数为文本估算（网关未上报 usage），速率可信度下降\n")
+		}
 		if r.PromptTokens > 0 {
 			report.WriteString(fmt.Sprintf("Prompt Tokens:              %d\n", r.PromptTokens))
 			report.WriteString(fmt.Sprintf("Cached Tokens:              %d\n", r.CachedTokens))
@@ -163,8 +170,14 @@ func SaveIndividualReports(results []types.BenchmarkResult, reportDir string) {
 		if r.ReasoningTokens > 0 {
 			report.WriteString(fmt.Sprintf("Reasoning Tokens:           %d\n", r.ReasoningTokens))
 		}
-		report.WriteString(fmt.Sprintf("TPS (Tokens Per Second):    %.2f\n", r.TPS))
-		report.WriteString(fmt.Sprintf("TPM (Tokens Per Minute):    %.2f\n", r.TPM))
+		report.WriteString(fmt.Sprintf("E2E TPS (用户感知速度):      %.2f\n", r.TPSE2E))
+		report.WriteString(fmt.Sprintf("E2E TPM:                    %.2f\n", r.TPME2E))
+		if r.DecodeValid {
+			report.WriteString(fmt.Sprintf("Decode TPS (解码速度):       %.2f\n", r.TPSDecode))
+			report.WriteString(fmt.Sprintf("Decode TPM:                 %.2f\n", r.TPMDecode))
+		} else {
+			report.WriteString("Decode TPS (解码速度):       excluded（未通过速率有效性校验：一次性到达/超单流物理上限/未捕获 TTFT）\n")
+		}
 
 		// Finish Reason
 		if r.FinishReason != "" {

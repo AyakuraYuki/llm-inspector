@@ -7,19 +7,15 @@ import (
 	"time"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
+	"github.com/AyakuraYuki/llm-inspector/internal/llm/tokstats"
 )
 
-// per-request 生成速率样本的有效性门槛。整条响应被缓冲后一次性到达时
-// （网关伪流式转发、压测机读流饥饿），TTFT 会贴着流结束打点，gen_window
-// 只剩缓冲区排空耗时（µs~ms 级），output_tokens/gen_window 测出的是排空
-// 速度而非模型解码速度，能虚高到千万 tok/s 量级，直接打爆 TPS/TPM 高分位。
-// 这类样本的特征是 gen_window 绝对值极小、或占 E2E 的比例趋近于零，
+// per-request 生成速率样本须经 tokstats.ValidStreamTPS 校验：
+// 生成窗口双门槛（绝对下限 + 占 E2E 比例）剔除「整条响应缓冲后一次性到达」
+// 的排空样本（µs~ms 级窗口测出的是排空速度而非解码速度，能虚高到千万
+// tok/s 量级），单流物理天花板兜住任何漏网的虚高形态。
 // 剔除只作用于 TPOT/TPS/TPM 分位数；系统级 TPS/TPM 按窗口总 token 计算，
 // 时延分位数按 E2E 计算，均不受影响。剔除数记入 GenSpeedExcluded 供报表标注。
-const (
-	minGenWindow     = 50 * time.Millisecond // gen_window 绝对下限
-	minGenWindowFrac = 0.05                  // gen_window 占 E2E 的最小比例（TTFT ≥ 95% E2E 即视为一次性到达）
-)
 
 // AggregateMetrics 将原始请求结果聚合为汇聚指标。
 func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
@@ -89,7 +85,7 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 			// 与 Python 脚本对齐：TPOT = gen_window / output_tokens
 			genWindow := m.TotalLatency - m.TTFT
 			if m.OutputTokens > 0 {
-				if genWindow >= minGenWindow && float64(genWindow) >= float64(m.TotalLatency)*minGenWindowFrac {
+				if tokstats.ValidStreamTPS(m.OutputTokens, genWindow, m.TotalLatency) {
 					tpot := time.Duration(float64(genWindow) / float64(m.OutputTokens))
 					tpots = append(tpots, tpot)
 
@@ -98,6 +94,9 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 				} else {
 					agg.GenSpeedExcluded++
 				}
+			}
+			if m.OutputEstimated {
+				agg.EstimatedOutputs++
 			}
 			// per-request 输入/输出 token 比
 			if m.InputTokens > 0 && m.OutputTokens > 0 {

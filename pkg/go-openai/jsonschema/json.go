@@ -163,7 +163,6 @@ func reflectSchemaObject(t reflect.Type, defs map[string]Definition) (*Definitio
 	properties := make(map[string]Definition)
 	var requiredFields []string
 	for field := range t.Fields() {
-		field := field
 		if !field.IsExported() {
 			continue
 		}

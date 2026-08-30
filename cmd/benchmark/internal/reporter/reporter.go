@@ -21,7 +21,12 @@ func PrintStatistics(results []types.BenchmarkResult) {
 		totalTokens                int64
 		totalPromptTokens          int64
 		totalCacheTokens           int64
-		totalTPS, totalTPM         float64
+		totalTPSE2E, totalTPME2E   float64
+		totalTPSDecode             float64 // 有效解码样本的 TPS 之和（求均值）
+		decodeTokens               int64   // 有效解码样本的 token 总和（求总量比率）
+		decodeWindow               time.Duration
+		decodeValidCount           = 0
+		tokensEstimatedCount       = 0
 		successCount               = 0
 		correctCount               = 0
 		questionsWithAnswer        = 0
@@ -37,8 +42,19 @@ func PrintStatistics(results []types.BenchmarkResult) {
 			totalPromptTokens += int64(r.PromptTokens)
 			totalTokens += int64(r.TokensUsed + r.PromptTokens) // input + output
 			totalCacheTokens += int64(r.CachedTokens)
-			totalTPS += r.TPS
-			totalTPM += r.TPM
+			totalTPSE2E += r.TPSE2E
+			totalTPME2E += r.TPME2E
+			if r.TokensEstimated {
+				tokensEstimatedCount++
+			}
+			// 解码速率只统计通过有效性校验的样本：判伪样本（一次性到达的
+			// 排空速度、超物理上限的虚高值）若进入平均会拉爆整体
+			if r.DecodeValid {
+				decodeValidCount++
+				totalTPSDecode += r.TPSDecode
+				decodeTokens += int64(r.TokensUsed)
+				decodeWindow += r.TotalTime - r.TTFT
+			}
 			successCount++
 
 			// 统计 finish_reason
@@ -99,8 +115,26 @@ func PrintStatistics(results []types.BenchmarkResult) {
 	logger.Printf("Average TTFT: %d ms", totalTTFT.Milliseconds()/int64(successCount))
 	logger.Printf("Average Total Time: %d ms", totalTime.Milliseconds()/int64(successCount))
 	logger.Printf("Average Tokens: %d", totalTokens/int64(successCount))
-	logger.Printf("Average TPS: %.2f", totalTPS/float64(successCount))
-	logger.Printf("Average TPM: %.2f", totalTPM/float64(successCount))
+	logger.Printf("Average E2E TPS: %.2f (tokens/s，用户感知速度，含 TTFT 摊薄)", totalTPSE2E/float64(successCount))
+	logger.Printf("Average E2E TPM: %.2f", totalTPME2E/float64(successCount))
+
+	// 解码速率：headline 用总量比率（Σtokens / Σ生成窗口），比率之比对异常值
+	// 天然钝感；均值易受残留异常样本影响，仅作参考
+	if decodeValidCount > 0 {
+		aggDecodeTPS := float64(decodeTokens) / decodeWindow.Seconds()
+		logger.Printf("Aggregate Decode TPS: %.2f (tokens/s，%d 个有效样本的 Σtokens/Σ生成窗口)",
+			aggDecodeTPS, decodeValidCount)
+		logger.Printf("Aggregate Decode TPM: %.2f", aggDecodeTPS*60)
+		logger.Printf("Average Decode TPS: %.2f", totalTPSDecode/float64(decodeValidCount))
+	}
+	if excluded := successCount - decodeValidCount; excluded > 0 {
+		logger.Printf("Decode TPS excluded: %d/%d 条样本未通过速率有效性校验（一次性到达、超单流物理上限或未捕获 TTFT），已从解码速率剔除",
+			excluded, successCount)
+	}
+	if tokensEstimatedCount > 0 {
+		logger.Printf("Tokens estimated: %d/%d 条样本的 token 数为文本估算（网关未上报 usage），速率可信度下降",
+			tokensEstimatedCount, successCount)
+	}
 	if totalPromptTokens > 0 {
 		logger.Printf("Cache Hit Ratio: %.2f%%", float64(totalCacheTokens)/float64(totalPromptTokens)*100)
 	} else {
