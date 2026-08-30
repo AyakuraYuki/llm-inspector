@@ -8,6 +8,7 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 	"github.com/AyakuraYuki/llm-inspector/internal/llm/tokstats"
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // per-request 生成速率样本须经 tokstats.ValidStreamTPS 校验：
@@ -108,7 +109,7 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 			if m.CacheReported {
 				cacheReported++
 				if m.InputTokens > 0 {
-					cacheHitValues = append(cacheHitValues, float64(m.CachedInputTokens)/float64(m.InputTokens)*100)
+					cacheHitValues = append(cacheHitValues, util.CacheHitRatio(m.CachedInputTokens, m.InputTokens))
 				}
 			}
 		}
@@ -152,7 +153,7 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 	agg.TotalCachedTokens = totalCachedToks
 	agg.CacheReportedCount = cacheReported
 	if totalInputToks > 0 {
-		agg.CacheHitRatio = float64(totalCachedToks) / float64(totalInputToks) * 100
+		agg.CacheHitRatio = util.CacheHitRatio(totalCachedToks, totalInputToks)
 	}
 
 	return agg

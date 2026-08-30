@@ -9,6 +9,7 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/types"
 	"github.com/AyakuraYuki/llm-inspector/internal/logger"
+	"github.com/AyakuraYuki/llm-inspector/internal/util"
 )
 
 // ReportInterval 是心跳监控器输出当前进度的间隔
@@ -136,7 +137,7 @@ func PrintStatistics(results []types.BenchmarkResult) {
 			tokensEstimatedCount, successCount)
 	}
 	if totalPromptTokens > 0 {
-		logger.Printf("Cache Hit Ratio: %.2f%%", float64(totalCacheTokens)/float64(totalPromptTokens)*100)
+		logger.Printf("Cache Hit Ratio: %.2f%%", util.CacheHitRatio(totalCacheTokens, totalPromptTokens))
 	} else {
 		logger.Printf("Cache Hit Ratio: n/a")
 	}
