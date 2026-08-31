@@ -21,14 +21,15 @@ import (
 // AggregateMetrics 将原始请求结果聚合为汇聚指标。
 func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 	agg := types.AggregatedMetrics{
-		Model:       result.Model,
-		Provider:    result.Provider,
-		TokenGroup:  result.TokenGroup,
-		Concurrency: result.Concurrency,
-		Start:       result.Start,
-		Elapsed:     result.Elapsed,
-		Total:       len(result.Metrics),
-		ErrorCounts: make(map[types.ErrorType]int),
+		Model:        result.Model,
+		Provider:     result.Provider,
+		TokenGroup:   result.TokenGroup,
+		Concurrency:  result.Concurrency,
+		Start:        result.Start,
+		Elapsed:      result.Elapsed,
+		Total:        len(result.Metrics),
+		ErrorCounts:  make(map[types.ErrorType]int),
+		StoppedEarly: result.StoppedEarly,
 	}
 
 	// 吞吐统计窗口：正常结束的档位取名义压测时长，提前中止的档位取实际运行时长。

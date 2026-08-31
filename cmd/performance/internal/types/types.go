@@ -87,6 +87,12 @@ type BenchmarkConfig struct {
 	Warmup           bool
 	WarmupDuration   time.Duration
 	CooldownDuration time.Duration
+
+	// 错误率早停与跳档，EarlyStopEnabled 为 false 时以下字段无效
+	EarlyStopEnabled      bool
+	MaxErrorRate          float64 // 档位失败率超过该值判定为不可用，(0,1]
+	MinSamples            int     // 至少凑够这么多请求才评估错误率
+	SkipHigherConcurrency bool    // 判定不可用时是否跳过该模型剩余的更高并发档位
 }
 
 // PickToken 从该模型关联的 token 分组中随机返回一个 token。
@@ -115,14 +121,15 @@ func (c *BenchmarkConfig) BuildPrompt() string {
 
 // BenchmarkResult 保存一个 model×concurrency 组合的原始测试结果
 type BenchmarkResult struct {
-	Model       string
-	Provider    Provider
-	TokenGroup  string
-	Concurrency int
-	Start       time.Time     // 档位开始时刻
-	Window      time.Duration // 名义压测时长（吞吐统计窗口的上限）
-	Elapsed     time.Duration // 实际运行时长（含 deadline 后在途请求的排空期）
-	Metrics     []RequestMetrics
+	Model        string
+	Provider     Provider
+	TokenGroup   string
+	Concurrency  int
+	Start        time.Time     // 档位开始时刻
+	Window       time.Duration // 名义压测时长（吞吐统计窗口的上限）
+	Elapsed      time.Duration // 实际运行时长（含 deadline 后在途请求的排空期）
+	Metrics      []RequestMetrics
+	StoppedEarly bool // 是否因错误率超过 EarlyStop 阈值被提前终止（而非到达 deadline 或用户中止）
 }
 
 // PercentileStats 保存时延类指标的分位数统计
@@ -161,6 +168,7 @@ type AggregatedMetrics struct {
 	Failed        int
 	ErrorCounts   map[ErrorType]int
 	FailedDetails []RequestMetrics // 每条失败请求的原始记录，用于错误明细 sheet
+	StoppedEarly  bool             // 是否因错误率超过 EarlyStop 阈值被提前终止
 
 	// 仅流式端点有效
 	TTFT             PercentileStats // 首 token 时延，仅统计成功请求

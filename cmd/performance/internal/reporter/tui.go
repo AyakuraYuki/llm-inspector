@@ -196,6 +196,14 @@ func (r *TUIReporter) CooldownStart(d time.Duration) {
 	s.deadline = time.Now().Add(d)
 }
 
+func (r *TUIReporter) EarlyStop(model types.ModelSpec, concurrency int, errRate float64) {
+	s := r.State
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.AppendLog(fmt.Sprintf("[早停] %s 并发=%d 错误率 %.1f%% 超过阈值，提前终止本档位并跳过更高并发档位",
+		model.Name, concurrency, errRate*100))
+}
+
 func (r *TUIReporter) BenchmarkEnd(bool) {
 	s := r.State
 	s.mu.Lock()

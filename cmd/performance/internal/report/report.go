@@ -61,6 +61,11 @@ func printOne(agg types.AggregatedMetrics) {
 		fmt.Printf("  [WARN] %s\n", note)
 	}
 
+	// 档位因错误率超过 early_stop 阈值被提前终止，未跑满设定时长
+	if agg.StoppedEarly {
+		fmt.Printf("  [WARN] 本档位因错误率超阈值被提前终止，未跑满设定时长\n")
+	}
+
 	// 未通过有效性校验的样本（生成窗口过窄/一次性到达，或超出单流物理天花板）
 	// 不参与 TPOT/TPS/TPM 分位数
 	if agg.GenSpeedExcluded > 0 {

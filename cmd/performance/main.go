@@ -179,6 +179,15 @@ func printHeader(cfg types.BenchmarkConfig) {
 	}
 	fmt.Printf("Warmup      : %s\n", warmupLabel)
 	fmt.Printf("Cooldown    : %s between levels\n", cfg.CooldownDuration)
+	earlyStopLabel := "disabled"
+	if cfg.EarlyStopEnabled {
+		skip := "not skipping higher concurrency"
+		if cfg.SkipHigherConcurrency {
+			skip = "skip higher concurrency"
+		}
+		earlyStopLabel = fmt.Sprintf("max_error_rate=%.1f%%, min_samples=%d, %s", cfg.MaxErrorRate*100, cfg.MinSamples, skip)
+	}
+	fmt.Printf("Early Stop  : %s\n", earlyStopLabel)
 	fmt.Printf("Models (%d):\n", len(cfg.Models))
 	for _, m := range cfg.Models {
 		fmt.Printf("  - %-32s [%s]  group=%s  (%d keys)\n", m.Name, m.Provider, m.TokenGroup, len(m.Tokens))

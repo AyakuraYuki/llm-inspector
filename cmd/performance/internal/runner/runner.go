@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/metrics"
@@ -51,6 +52,19 @@ loop:
 			agg := metrics.AggregateMetrics(result)
 			results = append(results, agg)
 			rep.LevelEnd(agg)
+
+			if agg.StoppedEarly {
+				errRate := 0.0
+				if agg.Total > 0 {
+					errRate = float64(agg.Failed) / float64(agg.Total)
+				}
+				rep.EarlyStop(model, conc, errRate)
+				if cfg.SkipHigherConcurrency {
+					// 跳过的档位计入进度序号，避免 [seq/total] 卡在半路不动
+					seq += len(cfg.Concurrency) - i - 1
+					break // 跳出并发档位循环，进入下一个模型；不再执行 cooldown
+				}
+			}
 
 			if i < len(cfg.Concurrency)-1 && cfg.CooldownDuration > 0 && ctx.Err() == nil {
 				rep.CooldownStart(cfg.CooldownDuration)
@@ -120,15 +134,31 @@ func rampDuration(concurrency int, total time.Duration) time.Duration {
 	return min(time.Duration(concurrency)*time.Millisecond, maxRampDuration, total/6)
 }
 
+// shouldStopEarly 判断当前档位的累计失败率是否超过早停阈值。
+// 样本数未达 minSamples 时不评估，避免开局几条请求的抖动误判整个档位不可用。
+func shouldStopEarly(total, failed int64, minSamples int, maxErrorRate float64) bool {
+	if total < int64(minSamples) {
+		return false
+	}
+	return float64(failed)/float64(total) > maxErrorRate
+}
+
 // runConcurrent 以指定并发数并发发送请求，持续到 deadline 或 ctx 取消为止。
+// 若 cfg.EarlyStopEnabled 且档位内失败率超过 cfg.MaxErrorRate，会提前取消 levelCtx
+// 结束本档位（不影响其他档位或外层 ctx），并在返回结果中标记 StoppedEarly。
 func runConcurrent(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, concurrency int, rep reporter.Reporter) types.BenchmarkResult {
 	start := time.Now()
 	deadline := start.Add(cfg.Duration)
 	ramp := rampDuration(concurrency, cfg.Duration)
 
+	levelCtx, cancelLevel := context.WithCancel(ctx)
+	defer cancelLevel()
+
 	var (
-		mu             sync.Mutex
-		requestMetrics []types.RequestMetrics
+		mu                sync.Mutex
+		requestMetrics    []types.RequestMetrics
+		totalCnt, failCnt atomic.Int64
+		stoppedEarly      atomic.Bool
 	)
 
 	var wg sync.WaitGroup
@@ -137,17 +167,17 @@ func runConcurrent(ctx context.Context, cfg types.BenchmarkConfig, model types.M
 			// 错峰启动：第 i 个 worker 延迟 ramp*i/concurrency 后发出首个请求
 			if delay := ramp * time.Duration(i) / time.Duration(concurrency); delay > 0 {
 				select {
-				case <-ctx.Done():
+				case <-levelCtx.Done():
 					return
 				case <-time.After(delay):
 				}
 			}
-			for time.Now().Before(deadline) && ctx.Err() == nil {
+			for time.Now().Before(deadline) && levelCtx.Err() == nil {
 				reqStart := time.Now()
 				var m types.RequestMetrics
 
 				if fn, ok := doSSERequests[model.Provider]; ok {
-					m = fn(ctx, cfg, model)
+					m = fn(levelCtx, cfg, model)
 				} else {
 					m = types.RequestMetrics{
 						Success: false,
@@ -157,7 +187,7 @@ func runConcurrent(ctx context.Context, cfg types.BenchmarkConfig, model types.M
 				m.Timestamp = reqStart
 
 				// 中止导致的在途请求失败不计入结果，避免污染指标
-				if ctx.Err() != nil && !m.Success {
+				if levelCtx.Err() != nil && !m.Success {
 					return
 				}
 
@@ -166,13 +196,25 @@ func runConcurrent(ctx context.Context, cfg types.BenchmarkConfig, model types.M
 				mu.Unlock()
 				rep.RequestDone(m)
 
+				if cfg.EarlyStopEnabled {
+					tot := totalCnt.Add(1)
+					f := failCnt.Load()
+					if !m.Success {
+						f = failCnt.Add(1)
+					}
+					if shouldStopEarly(tot, f, cfg.MinSamples, cfg.MaxErrorRate) {
+						stoppedEarly.Store(true)
+						cancelLevel()
+					}
+				}
+
 				// deadline 已过就直接退出：此时的请求间隔等待毫无意义，
 				// 徒增 Elapsed（排空期被多算约一个 cooldownPerRequest）
 				if !time.Now().Before(deadline) {
 					return
 				}
 				select {
-				case <-ctx.Done():
+				case <-levelCtx.Done():
 					return
 				case <-time.After(cooldownPerRequest):
 				}
@@ -183,13 +225,14 @@ func runConcurrent(ctx context.Context, cfg types.BenchmarkConfig, model types.M
 	wg.Wait()
 
 	return types.BenchmarkResult{
-		Model:       model.Name,
-		Provider:    model.Provider,
-		TokenGroup:  model.TokenGroup,
-		Concurrency: concurrency,
-		Start:       start,
-		Window:      cfg.Duration,
-		Elapsed:     time.Since(start),
-		Metrics:     requestMetrics,
+		Model:        model.Name,
+		Provider:     model.Provider,
+		TokenGroup:   model.TokenGroup,
+		Concurrency:  concurrency,
+		Start:        start,
+		Window:       cfg.Duration,
+		Elapsed:      time.Since(start),
+		Metrics:      requestMetrics,
+		StoppedEarly: stoppedEarly.Load(),
 	}
 }

@@ -28,6 +28,14 @@ output: ""       # Excel 输出路径（留空则自动生成时间戳文件名�
 no_excel: false  # 跳过 Excel 导出，仅打印终端报告
 no_tui: false    # 禁用 TUI，使用纯文本控制台输出（stdout 非终端时自动禁用）
 
+# 错误率早停与跳档：某个并发档位失败率过高时提前结束该档位，并跳过该模型剩余
+# 更高的并发档位，避免在明显顶不住的档位上继续空跑。默认关闭，不影响现有行为。
+#early_stop:
+#  enabled: true                 # 总开关
+#  max_error_rate: 0.5           # 档位失败率超过该值判定为不可用，(0,1]，默认 0.5
+#  min_samples: 20               # 至少凑够这么多请求才评估错误率，避免开局抖动误判，默认 20
+#  skip_higher_concurrency: true # 判定不可用时是否跳过该模型剩余的更高并发档位，默认 true
+
 # 待测模型列表（必填，至少一个）
 # token_group 决定该模型使用哪个 token 池；同一模型可以重复配置，分别测试不同渠道分组。
 # 警告：如果配置了 token_group，缺少相应组的 tokens 时不会使用兜底的 default 分组。

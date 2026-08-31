@@ -37,6 +37,9 @@ const (
 
 	defaultPromptText  = "Explain in plain English what API latency and throughput mean for a developer integrating LLM APIs. Write about 120 words. Do not use bullet points."
 	defaultImagePrompt = "A single red circle on white background, minimal flat design."
+
+	defaultMaxErrorRate = 0.5
+	defaultMinSamples   = 20
 )
 
 var defaultConcurrency = []int{10, 20, 30, 40, 50, 75, 100, 120, 150}
@@ -57,6 +60,15 @@ type Config struct {
 	Models         []ModelConfig       `yaml:"models"`
 	Tokens         []string            `yaml:"tokens"`
 	TokenGroups    map[string][]string `yaml:"token_groups"`
+	EarlyStop      EarlyStopConfig     `yaml:"early_stop"`
+}
+
+// EarlyStopConfig 描述基于错误率的档位早停与跳档策略，默认关闭，不影响现有配置。
+type EarlyStopConfig struct {
+	Enabled               bool    `yaml:"enabled"`                 // 总开关，默认 false
+	MaxErrorRate          float64 `yaml:"max_error_rate"`          // 档位失败率超过该值判定为不可用，(0,1]，默认 0.5
+	MinSamples            int     `yaml:"min_samples"`             // 至少凑够这么多请求才评估错误率，避免开局抖动误判，默认 20
+	SkipHigherConcurrency *bool   `yaml:"skip_higher_concurrency"` // 判定不可用时是否跳过该模型剩余的更高并发档位，默认 true
 }
 
 // PromptConfig 描述文本端点的 prompt 生成方式。
@@ -130,6 +142,18 @@ func (c *Config) applyDefaults() {
 		d := defaultCooldown
 		c.Cooldown = &d
 	}
+	if c.EarlyStop.Enabled {
+		if c.EarlyStop.MaxErrorRate <= 0 {
+			c.EarlyStop.MaxErrorRate = defaultMaxErrorRate
+		}
+		if c.EarlyStop.MinSamples <= 0 {
+			c.EarlyStop.MinSamples = defaultMinSamples
+		}
+		if c.EarlyStop.SkipHigherConcurrency == nil {
+			enabled := true
+			c.EarlyStop.SkipHigherConcurrency = &enabled
+		}
+	}
 }
 
 // validate 校验必填项与取值合法性。默认值已在 applyDefaults 中填充，
@@ -175,6 +199,15 @@ func (c *Config) validate() error {
 		}
 	}
 
+	if c.EarlyStop.Enabled {
+		if c.EarlyStop.MaxErrorRate <= 0 || c.EarlyStop.MaxErrorRate > 1 {
+			return fmt.Errorf("early_stop.max_error_rate 必须在 (0, 1] 区间内，发现非法值：%v", c.EarlyStop.MaxErrorRate)
+		}
+		if c.EarlyStop.MinSamples <= 0 {
+			return fmt.Errorf("early_stop.min_samples 必须为正整数，发现非法值：%d", c.EarlyStop.MinSamples)
+		}
+	}
+
 	return nil
 }
 
@@ -198,18 +231,22 @@ func (c *Config) ToBenchmark() types.BenchmarkConfig {
 	warmup := c.Warmup != nil && *c.Warmup
 
 	return types.BenchmarkConfig{
-		BaseURL:          c.BaseURL,
-		Models:           models,
-		Concurrency:      append([]int(nil), c.Concurrency...),
-		Duration:         c.Duration,
-		Prompt:           c.Prompt.Text,
-		ImagePrompt:      c.ImagePrompt,
-		DynamicPrompt:    c.Prompt.Mode == PromptModeDynamic,
-		PromptTokens:     c.Prompt.Tokens,
-		CodexPrompt:      c.Prompt.Mode == PromptModeCodex,
-		Warmup:           warmup,
-		WarmupDuration:   c.WarmupDuration,
-		CooldownDuration: *c.Cooldown, // applyDefaults 保证非 nil
+		BaseURL:               c.BaseURL,
+		Models:                models,
+		Concurrency:           append([]int(nil), c.Concurrency...),
+		Duration:              c.Duration,
+		Prompt:                c.Prompt.Text,
+		ImagePrompt:           c.ImagePrompt,
+		DynamicPrompt:         c.Prompt.Mode == PromptModeDynamic,
+		PromptTokens:          c.Prompt.Tokens,
+		CodexPrompt:           c.Prompt.Mode == PromptModeCodex,
+		Warmup:                warmup,
+		WarmupDuration:        c.WarmupDuration,
+		CooldownDuration:      *c.Cooldown, // applyDefaults 保证非 nil
+		EarlyStopEnabled:      c.EarlyStop.Enabled,
+		MaxErrorRate:          c.EarlyStop.MaxErrorRate,
+		MinSamples:            c.EarlyStop.MinSamples,
+		SkipHigherConcurrency: c.EarlyStop.Enabled && c.EarlyStop.SkipHigherConcurrency != nil && *c.EarlyStop.SkipHigherConcurrency,
 	}
 }
 

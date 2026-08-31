@@ -110,6 +110,7 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 		{"并发档位", fmt.Sprintf("%v", cfg.Concurrency)},
 		{"模型数量", len(cfg.Models)},
 		{"排除模型", excludedModel},
+		{"错误率早停", earlyStopSummary(cfg)},
 	}
 	for _, m := range cfg.Models {
 		rows = append(rows, []any{
@@ -172,6 +173,18 @@ func groupOrder(cfg types.BenchmarkConfig) []tokenGroupSummary {
 		summaries = append(summaries, *byName[name])
 	}
 	return summaries
+}
+
+// earlyStopSummary 渲染总览 sheet 里的错误率早停配置摘要。
+func earlyStopSummary(cfg types.BenchmarkConfig) string {
+	if !cfg.EarlyStopEnabled {
+		return "未启用"
+	}
+	skip := "不跳过更高并发档位"
+	if cfg.SkipHigherConcurrency {
+		skip = "跳过更高并发档位"
+	}
+	return fmt.Sprintf("启用（阈值 %.1f%%，最少样本 %d，%s）", cfg.MaxErrorRate*100, cfg.MinSamples, skip)
 }
 
 func writeTTFTSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
@@ -338,6 +351,13 @@ func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 		if !agg.Start.IsZero() {
 			startStr = agg.Start.Format("2006-01-02 15:04:05")
 		}
+		note := throughputBiasNote(agg)
+		if agg.StoppedEarly {
+			if note != "" {
+				note += "；"
+			}
+			note += "本档位因错误率超阈值被提前终止"
+		}
 		xlSetRow(f, sh, row, []any{
 			agg.Model,
 			string(agg.Provider),
@@ -352,7 +372,7 @@ func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 			round1(successPct),
 			agg.Success,
 			agg.Failed,
-			throughputBiasNote(agg),
+			note,
 		}, 0)
 		row++
 	}
@@ -413,7 +433,7 @@ func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
 
 func writeErrorSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "错误分析"
-	headers := []any{"模型 ID", "Provider", "Token Group", "并发数", "总请求数", "失败总数", "成功率(%)"}
+	headers := []any{"模型 ID", "Provider", "Token Group", "并发数", "总请求数", "失败总数", "成功率(%)", "是否提前终止"}
 	for _, et := range types.ErrorTypeOrder {
 		headers = append(headers, string(et))
 	}
@@ -438,6 +458,7 @@ func writeErrorSheet(f *excelize.File, results []types.AggregatedMetrics, hdrSty
 			agg.Total,
 			agg.Failed,
 			round1(successPct),
+			yesNo(agg.StoppedEarly),
 		}
 		for _, et := range types.ErrorTypeOrder {
 			values = append(values, agg.ErrorCounts[et])
@@ -445,6 +466,14 @@ func writeErrorSheet(f *excelize.File, results []types.AggregatedMetrics, hdrSty
 		xlSetRow(f, sh, row, values, 0)
 		row++
 	}
+}
+
+// yesNo 把布尔值渲染成中文"是"/"否"。
+func yesNo(b bool) string {
+	if b {
+		return "是"
+	}
+	return "否"
 }
 
 // writeErrorDetailSheet 把每条失败请求的原始记录按发生时间排成一行一条的错误日志。

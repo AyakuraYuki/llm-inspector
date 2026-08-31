@@ -93,6 +93,11 @@ func (r *ConsoleReporter) CooldownStart(d time.Duration) {
 	fmt.Printf("      [冷却] 等待 %s 后进入下一并发档位...\n\n", d)
 }
 
+func (r *ConsoleReporter) EarlyStop(model types.ModelSpec, concurrency int, errRate float64) {
+	fmt.Printf("      [早停] %s 并发=%d 错误率 %.1f%% 超过阈值，提前终止本档位并跳过更高并发档位\n",
+		model.Name, concurrency, errRate*100)
+}
+
 func (r *ConsoleReporter) BenchmarkEnd(aborted bool) {
 	if aborted {
 		fmt.Println("\n[中止] 收到中断信号，压测提前结束，以下为已完成部分的结果。")

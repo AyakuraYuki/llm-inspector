@@ -22,6 +22,7 @@ type Reporter interface {
 	LevelStart(seq, total int, model types.ModelSpec, concurrency int, deadline time.Time)
 	RequestDone(m types.RequestMetrics)
 	LevelEnd(agg types.AggregatedMetrics)
+	EarlyStop(model types.ModelSpec, concurrency int, errRate float64)
 	CooldownStart(d time.Duration)
 	BenchmarkEnd(aborted bool)
 }
