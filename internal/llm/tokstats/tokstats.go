@@ -14,8 +14,8 @@ import (
 // 速度而非模型解码速度，能虚高到千万 tok/s 量级，直接打爆 TPS/TPM 高分位。
 // 这类样本的特征是 gen_window 绝对值极小、或占 E2E 的比例趋近于零。
 const (
-	MinGenWindow     = 50 * time.Millisecond // gen_window 绝对下限
-	MinGenWindowFrac = 0.05                  // gen_window 占 E2E 的最小比例（TTFT ≥ 95% E2E 即视为一次性到达）
+	MinGenWindow     = 2 * time.Millisecond // gen_window 绝对下限
+	MinGenWindowFrac = 0.05                 // gen_window 占 E2E 的最小比例（TTFT ≥ 95% E2E 即视为一次性到达）
 )
 
 // MaxPlausibleStreamTPS 是单流解码速度的物理天花板（tok/s）。
