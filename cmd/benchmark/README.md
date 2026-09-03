@@ -27,40 +27,42 @@
 pip install -U "huggingface_hub[cli]"
 ```
 
-然后在 `cmd/benchmark` 目录下执行：
+然后在 **仓库根目录**下执行（`benchmark` 与 `evaluation`、`performance` 共用同一个根 `Makefile`）：
 
 ```bash
 make setup
 ```
 
-`make setup` 会下载三个数据集到 `internal/dataset/hf/` 对应目录：
+`make setup` 会下载三个数据集到 `cmd/benchmark/internal/dataset/hf/` 对应目录：
 
-| 数据集    | huggingface repo     | 落地路径                                  |
-|-----------|----------------------|-------------------------------------------|
-| AIME 2025 | `math-ai/aime25`     | `internal/dataset/hf/math-ai/aime25/`     |
-| AIME 2026 | `math-ai/aime26`     | `internal/dataset/hf/math-ai/aime26/`     |
-| MMLU-Pro  | `TIGER-Lab/MMLU-Pro` | `internal/dataset/hf/TIGER-Lab/MMLU-Pro/` |
+| 数据集    | huggingface repo     | 落地路径                                                |
+|-----------|----------------------|---------------------------------------------------------|
+| AIME 2025 | `math-ai/aime25`     | `cmd/benchmark/internal/dataset/hf/math-ai/aime25/`     |
+| AIME 2026 | `math-ai/aime26`     | `cmd/benchmark/internal/dataset/hf/math-ai/aime26/`     |
+| MMLU-Pro  | `TIGER-Lab/MMLU-Pro` | `cmd/benchmark/internal/dataset/hf/TIGER-Lab/MMLU-Pro/` |
 
 数据集是 `go:embed` 的输入， **没有下载完成的话编译会直接失败**。
 
 ### 2. 编译
 
+`benchmark` 没有自己独立的 Makefile，跟 `evaluation`、`performance` 共用仓库根目录下的同一份 `Makefile`，所以下面的命令都要在 **仓库根目录**执行：
+
 ```bash
-make build
+make build-benchmark
 ```
 
-产物落在 `build/` 目录：
+产物落在 `build/benchmark/` 目录：
 
-- `build/benchmark-<GOOS>_<GOARCH>`：可执行文件
-- `build/config.yml`：从 `configs/config.example.yml` 复制的配置模板
+- `build/benchmark/benchmark-<GOOS>_<GOARCH>`：可执行文件
+- `build/benchmark/config.yml`：从 `cmd/benchmark/configs/config.example.yml` 复制的配置模板
 
 默认交叉编译目标是 `darwin/amd64`，可以通过变量覆盖：
 
 ```bash
-make build GOOS=linux GOARCH=arm64
+make build-benchmark GOOS=linux GOARCH=arm64
 ```
 
-清理产物和 build cache：
+`make build`（不带后缀）会把 `benchmark`、`evaluation`、`performance` 三个工具一起编译。清理产物和 build cache：
 
 ```bash
 make clean
@@ -71,12 +73,13 @@ make clean
 改好配置后带 `-config` 启动，配置文件是必填参数：
 
 ```bash
-./build/benchmark-darwin_amd64 -config ./build/config.yml
+./build/benchmark/benchmark-darwin_amd64 -config ./build/benchmark/config.yml
 ```
 
-也可以不编译直接跑：
+也可以不编译直接跑（在 `cmd/benchmark` 目录下）：
 
 ```bash
+cd cmd/benchmark
 go run . -config ./configs/config.example.yml
 ```
 
@@ -372,7 +375,7 @@ AIME 题目原始来源为 Mathematical Association of America (MAA)，答案表
 
 ### 编译报错 `pattern hf: cannot embed directory hf: contains no embeddable files`
 
-数据集没下载。仓库里 `internal/dataset/hf/` 只有一个 `.gitkeep` 占位，而 `go:embed` 会跳过点开头的文件，所以此时目录对 embed 来说是空的。先在 `cmd/benchmark` 目录执行 `make setup`。
+数据集没下载。仓库里 `cmd/benchmark/internal/dataset/hf/` 只有一个 `.gitkeep` 占位，而 `go:embed` 会跳过点开头的文件，所以此时目录对 embed 来说是空的。先在 **仓库根目录**执行 `make setup`。
 
 如果连 `hf/` 目录本身都不存在，报错会是 `pattern hf: no matching files found`，处理方式相同。
 
