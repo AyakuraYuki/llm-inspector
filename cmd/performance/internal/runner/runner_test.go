@@ -20,9 +20,9 @@ func TestShouldStopEarly(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := shouldStopEarly(c.total, c.failed, c.minSamples, c.maxErrorRate)
+			got := ShouldStopEarly(c.total, c.failed, c.minSamples, c.maxErrorRate)
 			if got != c.want {
-				t.Errorf("shouldStopEarly(%d, %d, %d, %v) = %v, want %v",
+				t.Errorf("ShouldStopEarly(%d, %d, %d, %v) = %v, want %v",
 					c.total, c.failed, c.minSamples, c.maxErrorRate, got, c.want)
 			}
 		})

@@ -16,6 +16,12 @@ var excludedModel = ""
 
 func SetExcludedModel(model string) { excludedModel = model }
 
+// overviewExtra 是总览 sheet 在标准行之后追加的 K/V 行，
+// 由 performance-cluster 用来写入节点数量与各节点并发分片等集群信息。
+var overviewExtra [][2]string
+
+func SetOverviewExtra(rows [][2]string) { overviewExtra = rows }
+
 // ExportExcel 将基准测试结果导出为 xlsx 文件，结构仿照 build_metrics_report.py。
 func ExportExcel(cfg types.BenchmarkConfig, results []types.AggregatedMetrics, runAt time.Time, outPath string) error {
 	f := excelize.NewFile()
@@ -128,6 +134,9 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 			fmt.Sprintf("  分组 %s", g.name),
 			fmt.Sprintf("%d 个 key，模型：%s", g.keys, strings.Join(g.models, "、")),
 		})
+	}
+	for _, kv := range overviewExtra {
+		rows = append(rows, []any{kv[0], kv[1]})
 	}
 	rows = append(rows, []any{"指标说明", "见下"})
 	rows = append(rows, []any{"- TTFT", "首 token 时延"})

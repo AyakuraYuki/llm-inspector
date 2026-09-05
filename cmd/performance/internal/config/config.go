@@ -40,6 +40,9 @@ const (
 
 	defaultMaxErrorRate = 0.5
 	defaultMinSamples   = 20
+
+	defaultPollInterval = time.Second
+	defaultAgentTimeout = 10 * time.Second
 )
 
 var defaultConcurrency = []int{10, 20, 30, 40, 50, 75, 100, 120, 150}
@@ -61,6 +64,16 @@ type Config struct {
 	Tokens         []string            `yaml:"tokens"`
 	TokenGroups    map[string][]string `yaml:"token_groups"`
 	EarlyStop      EarlyStopConfig     `yaml:"early_stop"`
+	Cluster        *ClusterConfig      `yaml:"cluster"` // 仅 performance-cluster run 使用，单机版忽略
+}
+
+// ClusterConfig 描述分布式压测的 coordinator 侧参数（agent 列表与调度节奏）。
+// 单机 performance 加载时该段合法但不使用。
+type ClusterConfig struct {
+	Agents       []string      `yaml:"agents"`        // agent 守护进程地址列表（host:port），必填
+	AuthToken    string        `yaml:"auth_token"`    // 可选，与 agent -token 一致时通过 X-Cluster-Token 鉴权
+	PollInterval time.Duration `yaml:"poll_interval"` // 进度轮询间隔，默认 1s
+	AgentTimeout time.Duration `yaml:"agent_timeout"` // 连续无响应判定失联的窗口，默认 10s
 }
 
 // EarlyStopConfig 描述基于错误率的档位早停与跳档策略，默认关闭，不影响现有配置。
@@ -154,6 +167,14 @@ func (c *Config) applyDefaults() {
 			c.EarlyStop.SkipHigherConcurrency = &enabled
 		}
 	}
+	if c.Cluster != nil {
+		if c.Cluster.PollInterval <= 0 {
+			c.Cluster.PollInterval = defaultPollInterval
+		}
+		if c.Cluster.AgentTimeout <= 0 {
+			c.Cluster.AgentTimeout = defaultAgentTimeout
+		}
+	}
 }
 
 // validate 校验必填项与取值合法性。默认值已在 applyDefaults 中填充，
@@ -208,6 +229,32 @@ func (c *Config) validate() error {
 		}
 	}
 
+	if c.Cluster != nil {
+		if err := c.Cluster.validate(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validate 校验 cluster 段：agents 非空、逐项非空且不重复。
+func (c *ClusterConfig) validate() error {
+	if len(c.Agents) == 0 {
+		return fmt.Errorf("cluster.agents 为必填项，至少配置一个 agent 地址")
+	}
+	seen := make(map[string]struct{}, len(c.Agents))
+	for i, addr := range c.Agents {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			return fmt.Errorf("cluster.agents[%d] 不能为空", i)
+		}
+		if _, dup := seen[addr]; dup {
+			return fmt.Errorf("cluster.agents[%d] 重复：%s", i, addr)
+		}
+		seen[addr] = struct{}{}
+		c.Agents[i] = addr
+	}
 	return nil
 }
 

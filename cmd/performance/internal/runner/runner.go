@@ -26,7 +26,7 @@ const (
 // RunBenchmark 遍历 models × concurrency 组合，顺序运行并返回所有聚合结果。
 // ctx 取消时提前结束，返回已完成部分的结果。
 func RunBenchmark(ctx context.Context, cfg types.BenchmarkConfig, rep reporter.Reporter) ([]types.AggregatedMetrics, error) {
-	configureSharedClient(slices.Max(cfg.Concurrency))
+	ConfigureClient(slices.Max(cfg.Concurrency))
 
 	if err := preflightCheck(ctx, cfg, rep); err != nil {
 		return nil, err
@@ -48,7 +48,7 @@ loop:
 			seq++
 			rep.LevelStart(seq, total, model, conc, time.Now().Add(cfg.Duration))
 
-			result := runConcurrent(ctx, cfg, model, conc, rep)
+			result := RunLevel(ctx, cfg, model, conc, RampDuration(conc, cfg.Duration), rep)
 			agg := metrics.AggregateMetrics(result)
 			results = append(results, agg)
 			rep.LevelEnd(agg)
@@ -89,14 +89,7 @@ func preflightCheck(ctx context.Context, cfg types.BenchmarkConfig, rep reporter
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		reqCtx, cancel := context.WithTimeout(ctx, preflightTimeout)
-		var m types.RequestMetrics
-		if fn, ok := doSSERequests[model.Provider]; ok {
-			m = fn(reqCtx, cfg, model)
-		} else {
-			m = types.RequestMetrics{Success: false, Error: "unknown provider: " + string(model.Provider)}
-		}
-		cancel()
+		m := PreflightModel(ctx, cfg, model)
 		rep.PreflightResult(model, m)
 		if !m.Success {
 			allOK = false
@@ -107,6 +100,17 @@ func preflightCheck(ctx context.Context, cfg types.BenchmarkConfig, rep reporter
 		return errors.New("部分模型连通性验证失败，请检查上游渠道配置后重试")
 	}
 	return nil
+}
+
+// PreflightModel 对单个模型发送一次完整的流式预检请求，返回请求指标。
+// 超时预算 preflightTimeout，覆盖思考型模型的长思考阶段。
+func PreflightModel(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec) types.RequestMetrics {
+	reqCtx, cancel := context.WithTimeout(ctx, preflightTimeout)
+	defer cancel()
+	if fn, ok := doSSERequests[model.Provider]; ok {
+		return fn(reqCtx, cfg, model)
+	}
+	return types.RequestMetrics{Success: false, Error: "unknown provider: " + string(model.Provider)}
 }
 
 // warmupModel 在 model 的正式档位开始前做短暂预热，让连接池和运行时热身，丢弃结果。
@@ -122,34 +126,35 @@ func warmupModel(ctx context.Context, cfg types.BenchmarkConfig, model types.Mod
 	warmupConc := cfg.Concurrency[0]
 	rep.WarmupStart(warmupConc, cfg.WarmupDuration)
 	rep.WarmupModel(idx+1, len(cfg.Models), model, time.Now().Add(cfg.WarmupDuration))
-	runConcurrent(ctx, warmupCfg, model, warmupConc, rep)
+	RunLevel(ctx, warmupCfg, model, warmupConc, RampDuration(warmupConc, warmupCfg.Duration), rep)
 	rep.WarmupEnd()
 }
 
-// rampDuration 计算档位启动的错峰窗口：按约 1ms/worker 随并发数增长，
+// RampDuration 计算档位启动的错峰窗口：按约 1ms/worker 随并发数增长，
 // 上限 maxRampDuration 且不超过压测时长的 1/6。一次性启动数万协程会让
 // TLS 握手全部挤在档位开头，本地排队时间计入首批请求的 TTFT/时延，
 // 污染整个窗口的 P95/P99；错峰启动把建连压力摊开。
-func rampDuration(concurrency int, total time.Duration) time.Duration {
+func RampDuration(concurrency int, total time.Duration) time.Duration {
 	return min(time.Duration(concurrency)*time.Millisecond, maxRampDuration, total/6)
 }
 
-// shouldStopEarly 判断当前档位的累计失败率是否超过早停阈值。
+// ShouldStopEarly 判断当前档位的累计失败率是否超过早停阈值。
 // 样本数未达 minSamples 时不评估，避免开局几条请求的抖动误判整个档位不可用。
-func shouldStopEarly(total, failed int64, minSamples int, maxErrorRate float64) bool {
+func ShouldStopEarly(total, failed int64, minSamples int, maxErrorRate float64) bool {
 	if total < int64(minSamples) {
 		return false
 	}
 	return float64(failed)/float64(total) > maxErrorRate
 }
 
-// runConcurrent 以指定并发数并发发送请求，持续到 deadline 或 ctx 取消为止。
+// RunLevel 以指定并发数并发发送请求，持续到 deadline 或 ctx 取消为止。
+// ramp 是首批请求的错峰启动窗口（单机路径由 RampDuration 按本档并发计算；
+// 分布式路径由 coordinator 按全局并发统一算好后下发，各节点共用同一窗口）。
 // 若 cfg.EarlyStopEnabled 且档位内失败率超过 cfg.MaxErrorRate，会提前取消 levelCtx
 // 结束本档位（不影响其他档位或外层 ctx），并在返回结果中标记 StoppedEarly。
-func runConcurrent(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, concurrency int, rep reporter.Reporter) types.BenchmarkResult {
+func RunLevel(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, concurrency int, ramp time.Duration, rep reporter.Reporter) types.BenchmarkResult {
 	start := time.Now()
 	deadline := start.Add(cfg.Duration)
-	ramp := rampDuration(concurrency, cfg.Duration)
 
 	levelCtx, cancelLevel := context.WithCancel(ctx)
 	defer cancelLevel()
@@ -202,7 +207,7 @@ func runConcurrent(ctx context.Context, cfg types.BenchmarkConfig, model types.M
 					if !m.Success {
 						f = failCnt.Add(1)
 					}
-					if shouldStopEarly(tot, f, cfg.MinSamples, cfg.MaxErrorRate) {
+					if ShouldStopEarly(tot, f, cfg.MinSamples, cfg.MaxErrorRate) {
 						stoppedEarly.Store(true)
 						cancelLevel()
 					}

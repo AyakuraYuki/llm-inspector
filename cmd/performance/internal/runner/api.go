@@ -49,12 +49,14 @@ func newTransport(maxConcurrency int) *http.Transport {
 
 // sharedClient 复用连接池；超时由 context 控制。
 // 初始仅按小容量建池，preflight/正式压测开始前会由
-// configureSharedClient 按本次实际最大并发重建。
+// ConfigureClient 按本次实际最大并发重建。
 var sharedClient = &http.Client{Transport: newTransport(16)}
 
-// configureSharedClient 按本次压测将要用到的最大并发数重建连接池。
-// 应在解析完 -concurrency 参数、preflightCheck/正式压测开始之前调用一次。
-func configureSharedClient(maxConcurrency int) {
+// ConfigureClient 按本次压测将要用到的最大并发数重建连接池。
+// 应在解析完 -concurrency 参数、preflightCheck/正式压测开始之前调用一次；
+// 分布式 agent 场景按本机最大分片并发在 session 建立时调用一次，
+// 不得在任务运行中调用（会替换在途请求的 Transport 并丢弃已建连接池）。
+func ConfigureClient(maxConcurrency int) {
 	sharedClient.Transport = newTransport(maxConcurrency)
 }
 

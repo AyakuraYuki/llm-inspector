@@ -4,7 +4,7 @@ GOARCH ?= amd64
 
 LDFLAGS  := -s -w
 SUFFIX   := $(GOOS)_$(GOARCH)
-CMDS     := benchmark evaluation performance
+CMDS     := benchmark evaluation performance performance-cluster
 
 # HuggingFace 数据集下载目录，benchmark 通过 //go:embed hf 打包
 HF_DIR   := cmd/benchmark/internal/dataset/hf
@@ -33,6 +33,12 @@ build-performance:
 	@mkdir -p $(DIST)/performance
 	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build -ldflags "$(LDFLAGS)" -o $(DIST)/performance/performance-$(SUFFIX) ./cmd/performance
 	@cp cmd/performance/configs/config.example.yaml $(DIST)/performance/config.yaml
+
+## build-performance-cluster: 构建 performance-cluster（agent 与 coordinator 同一二进制）
+build-performance-cluster:
+	@mkdir -p $(DIST)/performance-cluster
+	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build -ldflags "$(LDFLAGS)" -o $(DIST)/performance-cluster/performance-cluster-$(SUFFIX) ./cmd/performance/cluster
+	@cp cmd/performance/cluster/configs/config.example.yaml $(DIST)/performance-cluster/config.yaml
 
 ## setup:
 ##     1. 安装 staticcheck
