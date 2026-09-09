@@ -15,7 +15,7 @@ import (
 const (
 	defaultBaseURL     = "https://api.openai.com"
 	defaultModel       = "gpt-image-2"
-	defaultPrompt      = "A single red circle on white background, minimal flat design."
+	defaultPrompt      = "A cute fluffy kitten playing with a ball of yarn, soft lighting, adorable, high detail."
 	defaultConcurrency = 2
 	defaultTimeout     = 5 * time.Minute
 )

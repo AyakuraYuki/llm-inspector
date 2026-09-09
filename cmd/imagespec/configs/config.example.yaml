@@ -15,7 +15,7 @@ api_key: ${OPENAI_API_KEY} # 也可直接填 sk-...；留空则读取环境变�
 model: gpt-image-2
 
 # 所有用例共用的生图提示词（个别用例会覆盖，如超长 prompt 用例）
-# prompt: "A single red circle on white background, minimal flat design."
+# prompt: "A cute fluffy kitten playing with a ball of yarn, soft lighting, adorable, high detail."
 
 concurrency: 2 # 并发执行的用例数，注意目标供应商的限流
 timeout: 5m    # 单个用例的请求超时（含 3840x2160 大图用例，不建议低于 5m）

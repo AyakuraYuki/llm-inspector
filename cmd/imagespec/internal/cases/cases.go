@@ -226,8 +226,8 @@ func Build(model string) []Case {
 	)
 
 	// ---- prompt ----
-	// 23 字符 × 1392 = 32016 字符，恰好超过 GPT image 模型 32000 字符上限。
-	longPrompt := strings.Repeat("Describe a red circle. ", 1392)
+	// 24 字符 × 1392 = 33408 字符，超过 GPT image 模型 32000 字符上限。
+	longPrompt := strings.Repeat("Describe a cute kitten. ", 1392)
 	cs = append(cs,
 		bad("prompt-too-long", "prompt", "超过 GPT image 模型 32000 字符上限", p{"prompt": longPrompt, "size": "1024x1024"}),
 	)
