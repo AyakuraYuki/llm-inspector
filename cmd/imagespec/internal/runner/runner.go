@@ -1,5 +1,7 @@
 // Package runner 逐用例向 /v1/images/generations 发起请求，并根据用例预期
-// 与实际响应（HTTP 状态、图片数据的真实尺寸/格式/张数）给出判定。
+// 与实际响应（HTTP 状态、图片数据的真实尺寸/格式/张数）给出判定；同时从同一
+// 次请求中顺带导出速度指标（见 SpeedMetrics）。这些指标都是单次采样，不做
+// 百分位统计——真正的负载/压测统计交给 performance 工具。
 package runner
 
 import (
@@ -21,6 +23,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/imagespec/internal/cases"
 	"github.com/AyakuraYuki/llm-inspector/cmd/imagespec/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/imagespec/internal/imagemeta"
+	"github.com/AyakuraYuki/llm-inspector/internal/logger"
 )
 
 // Verdict 是单个用例的判定结果。
@@ -49,18 +52,35 @@ type ImageInfo struct {
 
 // Result 是单个用例的完整执行结果。
 type Result struct {
-	CaseID          string      `json:"case_id"`
-	Group           string      `json:"group"`
-	Note            string      `json:"note,omitempty"`
-	Expect          string      `json:"expect"`
-	Verdict         Verdict     `json:"verdict"`
-	Detail          string      `json:"detail"`
-	HTTPStatus      int         `json:"http_status,omitempty"`
-	LatencyMS       int64       `json:"latency_ms"`
-	RequestBody     string      `json:"request_body"`
-	ResponseSnippet string      `json:"response_snippet,omitempty"`
-	Images          []ImageInfo `json:"images,omitempty"`
-	SavedFiles      []string    `json:"saved_files,omitempty"`
+	CaseID          string        `json:"case_id"`
+	Group           string        `json:"group"`
+	Note            string        `json:"note,omitempty"`
+	Expect          string        `json:"expect"`
+	Verdict         Verdict       `json:"verdict"`
+	Detail          string        `json:"detail"`
+	HTTPStatus      int           `json:"http_status,omitempty"`
+	LatencyMS       int64         `json:"latency_ms"`
+	RequestBody     string        `json:"request_body"`
+	ResponseSnippet string        `json:"response_snippet,omitempty"`
+	Images          []ImageInfo   `json:"images,omitempty"`
+	SavedFiles      []string      `json:"saved_files,omitempty"`
+	Speed           *SpeedMetrics `json:"speed,omitempty"`
+}
+
+// SpeedMetrics 是单个用例这一次请求的耗时分解，只在确实拿到图片时才填充。
+// 都是单次采样，不是百分位统计；要看统计意义上的分布，应重复采样或改用
+// performance 工具。
+type SpeedMetrics struct {
+	MSPerImage     float64 `json:"ms_per_image"`               // 总耗时 / 实际返回的图片张数，抹平 n 的影响
+	Megapixels     float64 `json:"megapixels,omitempty"`       // 单张图片的像素数（宽*高/1e6），假定同批次图片同尺寸
+	MSPerMegapixel float64 `json:"ms_per_megapixel,omitempty"` // MSPerImage / Megapixels，对应文本生成里 TPS 的角色：按输出规模归一化后的生成速率
+
+	// 以下仅当以 SSE 流式方式发起且实际收到了流式响应时才填充。
+	Streamed             bool    `json:"streamed,omitempty"`
+	TTFPIMS              int64   `json:"ttfpi_ms,omitempty"`                        // 首个 partial_image 事件到达耗时，对应文本生成的 TTFT
+	PartialIntervalsMS   []int64 `json:"partial_intervals_ms,omitempty"`            // 相邻 partial_image 事件之间的耗时，对应文本生成的 TPOT
+	CompletedAfterLastMS int64   `json:"completed_after_last_partial_ms,omitempty"` // 最后一个 partial 到 completed 事件的耗时
+	LikelyBuffered       bool    `json:"likely_buffered,omitempty"`                 // 首个 partial 几乎与整体耗时同时到达，疑似攒完整图后一次性下发的假流式
 }
 
 const (
@@ -94,7 +114,7 @@ func Run(ctx context.Context, cfg *config.Config, cs []cases.Case) []Result {
 				results[i] = r
 				mu.Lock()
 				done++
-				fmt.Printf("[%d/%d] %-12s %-22s %s\n", done, len(cs), r.Verdict, r.CaseID, r.Detail)
+				logger.Printf("[%d/%d] %-12s %-22s %s", done, len(cs), r.Verdict, r.CaseID, r.Detail)
 				mu.Unlock()
 			}
 		}()
@@ -132,6 +152,10 @@ type outcome struct {
 	completedSeen bool     // SSE 是否收到 completed 事件
 	notStreamed   bool     // stream=true 但服务端返回了同步 JSON
 	snippet       string   // 无法结构化解析时的响应片段
+
+	// 以下仅 consumeStream 填充，用于导出 SpeedMetrics 里的流式指标。
+	partialAtMS   []int64 // 每个 partial_image 事件到达时刻（相对请求发出的毫秒数）
+	completedAtMS int64   // completed 事件到达时刻，仅 completedSeen 为 true 时有意义
 }
 
 // errText 返回可读的错误描述，优先取结构化错误信息。
@@ -193,8 +217,9 @@ func runCase(ctx context.Context, client *http.Client, cfg *config.Config, c cas
 	res.HTTPStatus = resp.StatusCode
 
 	var o outcome
-	if c.Stream && resp.StatusCode == http.StatusOK && strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		o = consumeStream(resp.Body)
+	usedStream := c.Stream && resp.StatusCode == http.StatusOK && strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
+	if usedStream {
+		o = consumeStream(t0, resp.Body)
 	} else {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 		o = parseSyncBody(raw)
@@ -213,6 +238,7 @@ func runCase(ctx context.Context, client *http.Client, cfg *config.Config, c cas
 		res.Images = append(res.Images, b.Info)
 	}
 	res.ResponseSnippet = o.errText()
+	res.Speed = computeSpeed(res.LatencyMS, res.Images, &o, usedStream)
 
 	res.Verdict, res.Detail = evaluate(c, resp.StatusCode, &o, res.Images)
 
@@ -227,7 +253,57 @@ func runCase(ctx context.Context, client *http.Client, cfg *config.Config, c cas
 	return res
 }
 
-// evaluate 根据用例预期与实际响应给出判定与说明。
+// computeSpeed 从耗时、实际生成的图片信息、以及流式事件时间戳中导出速度指标。
+// 未拿到任何图片时返回 nil（没有可归一化的产出，算不出有意义的速率）。
+func computeSpeed(latencyMS int64, imgs []ImageInfo, o *outcome, streamed bool) *SpeedMetrics {
+	if len(imgs) == 0 {
+		return nil
+	}
+
+	sm := &SpeedMetrics{MSPerImage: float64(latencyMS) / float64(len(imgs))}
+
+	var pixelSum int64
+	validDims := 0
+	for _, im := range imgs {
+		if im.Width > 0 && im.Height > 0 {
+			pixelSum += int64(im.Width) * int64(im.Height)
+			validDims++
+		}
+	}
+	if validDims > 0 {
+		sm.Megapixels = float64(pixelSum) / float64(validDims) / 1e6
+		if sm.Megapixels > 0 {
+			sm.MSPerMegapixel = sm.MSPerImage / sm.Megapixels
+		}
+	}
+
+	if streamed {
+		sm.Streamed = true
+		applyStreamTiming(sm, o, latencyMS)
+	}
+	return sm
+}
+
+// applyStreamTiming 从 partial/completed 事件的到达时刻推导 TTFPI、partial
+// 间隔，并用「首个 partial 几乎与总耗时同时到达」这一启发式标记疑似假流式
+// （即服务端攒完整张图后才一次性下发，partial 事件不是真正的渐进式产出）。
+func applyStreamTiming(sm *SpeedMetrics, o *outcome, latencyMS int64) {
+	if len(o.partialAtMS) == 0 {
+		return
+	}
+	sm.TTFPIMS = o.partialAtMS[0]
+	for i := 1; i < len(o.partialAtMS); i++ {
+		sm.PartialIntervalsMS = append(sm.PartialIntervalsMS, o.partialAtMS[i]-o.partialAtMS[i-1])
+	}
+	last := o.partialAtMS[len(o.partialAtMS)-1]
+	if o.completedSeen {
+		sm.CompletedAfterLastMS = o.completedAtMS - last
+	}
+	if gap := latencyMS - sm.TTFPIMS; latencyMS > 0 && (gap < 50 || float64(gap)/float64(latencyMS) < 0.05) {
+		sm.LikelyBuffered = true
+	}
+}
+
 func evaluate(c cases.Case, status int, o *outcome, imgs []ImageInfo) (Verdict, string) {
 	switch c.Expect {
 	case cases.ExpectSuccess:
@@ -371,9 +447,10 @@ func parseSyncBody(raw []byte) outcome {
 	return o
 }
 
-// consumeStream 消费 SSE 流，收集 partial/completed/error 事件。
-// 只认 completed 事件中的图片（partial 是中间态，不参与尺寸/格式校验）。
-func consumeStream(r io.Reader) outcome {
+// consumeStream 消费 SSE 流，收集 partial/completed/error 事件及其到达时刻
+// （相对 t0，用于 SpeedMetrics 的 TTFPI/partial 间隔）。只认 completed 事件
+// 中的图片（partial 是中间态，不参与尺寸/格式校验）。
+func consumeStream(t0 time.Time, r io.Reader) outcome {
 	var o outcome
 	sc := bufio.NewScanner(r)
 	// 4K PNG 的 base64 会以单行 data: 出现，可达数十 MB
@@ -404,8 +481,10 @@ func consumeStream(r io.Reader) outcome {
 		switch {
 		case strings.HasSuffix(ev.Type, "partial_image"):
 			o.partialCount++
+			o.partialAtMS = append(o.partialAtMS, time.Since(t0).Milliseconds())
 		case strings.HasSuffix(ev.Type, "completed"):
 			o.completedSeen = true
+			o.completedAtMS = time.Since(t0).Milliseconds()
 			if ev.B64 != "" {
 				o.b64s = append(o.b64s, ev.B64)
 			}

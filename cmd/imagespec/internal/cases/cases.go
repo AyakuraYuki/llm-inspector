@@ -1,4 +1,5 @@
-// Package cases 内置 gpt-image-2 的参数合规性测试用例集。
+// Package cases 内置 GPT image 模型（gpt-image-2 及 gpt-image-2.5 系列）的
+// 参数合规性测试用例集。
 // 用例口径完全依据 docs/create_image-openai-api-spec.md（OpenAI 官方接口文档）：
 //   - ExpectSuccess：官方允许的参数，供应商必须成功生成图片，且返回的图片
 //     尺寸/格式/张数要与请求一致；
@@ -6,6 +7,10 @@
 //     返回图片即判 FAIL（例如 4096x4096 超分生成）；
 //   - ExpectObserve（probe）：官方口径未明确的参数组合，只记录实际行为，
 //     不判定通过与否，默认不运行（include_probe: true 开启）。
+//
+// 少数用例的预期结果因模型而异（目前只有 quality=xhigh/max），由 Build 按
+// 传入的被测模型名分族决定，其余用例的口径在 gpt-image-2 与 gpt-image-2.5
+// 系列之间是一致的。
 package cases
 
 import (
@@ -80,8 +85,16 @@ func sizeBad(id, size, note string) Case {
 	return Case{ID: id, Group: "size-invalid", Expect: ExpectReject, Note: note, Params: p{"size": size}}
 }
 
-// Build 返回全量用例，顺序即报告展示顺序。
-func Build() []Case {
+// IsGPTImage25 判断被测模型是否属于官方文档中支持 quality=xhigh/max 的
+// gpt-image-2.5 系列（gpt-image-2.5-sunburst / gpt-image-2.5-flare，含各自
+// 的 2026-09-08 快照）。按前缀匹配以自然覆盖未来新增的日期快照。
+func IsGPTImage25(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(m, "gpt-image-2.5-sunburst") || strings.HasPrefix(m, "gpt-image-2.5-flare")
+}
+
+// Build 按被测模型返回全量用例，顺序即报告展示顺序。
+func Build(model string) []Case {
 	var cs []Case
 
 	// ---- size：官方允许的尺寸 ----
@@ -116,8 +129,19 @@ func Build() []Case {
 		ok("quality-medium", "quality", "GPT image 模型支持", p{"quality": "medium"}),
 		ok("quality-high", "quality", "GPT image 模型支持", p{"quality": "high"}),
 		ok("quality-auto", "quality", "默认值", p{"quality": "auto"}),
-		bad("quality-xhigh", "quality-invalid", "仅 gpt-image-2.5 系列支持", p{"quality": "xhigh"}),
-		bad("quality-max", "quality-invalid", "仅 gpt-image-2.5 系列支持", p{"quality": "max"}),
+	)
+	if IsGPTImage25(model) {
+		cs = append(cs,
+			ok("quality-xhigh", "quality", "gpt-image-2.5-sunburst/flare 系列专属质量档", p{"quality": "xhigh"}),
+			ok("quality-max", "quality", "gpt-image-2.5-sunburst/flare 系列专属质量档", p{"quality": "max"}),
+		)
+	} else {
+		cs = append(cs,
+			bad("quality-xhigh", "quality-invalid", "仅 gpt-image-2.5-sunburst/flare 系列支持", p{"quality": "xhigh"}),
+			bad("quality-max", "quality-invalid", "仅 gpt-image-2.5-sunburst/flare 系列支持", p{"quality": "max"}),
+		)
+	}
+	cs = append(cs,
 		bad("quality-hd", "quality-invalid", "仅 dall-e-3 支持", p{"quality": "hd"}),
 		bad("quality-standard", "quality-invalid", "仅 dall-e-2/3 支持", p{"quality": "standard"}),
 		bad("quality-garbage", "quality-invalid", "非法枚举值", p{"quality": "ultra"}),

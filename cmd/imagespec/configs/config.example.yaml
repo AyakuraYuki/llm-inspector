@@ -1,10 +1,17 @@
-# imagespec：按 OpenAI 官方接口口径测试 gpt-image-2 的请求参数正确性。
+# imagespec：按 OpenAI 官方接口口径测试 GPT image 模型的请求参数正确性。
 # 合法参数应当成功生成图片（并校验实际分辨率/格式/张数），
 # 非法参数应当被拒绝（HTTP 400/413/422）；返回图片即判 FAIL（如 4096x4096 超分）。
 # 存在 FAIL 用例时进程以退出码 1 结束。
 
 base_url: https://api.openai.com
 api_key: ${OPENAI_API_KEY} # 也可直接填 sk-...；留空则读取环境变量 OPENAI_API_KEY
+
+# 被测模型。支持 gpt-image-2（含 gpt-image-2-2026-04-21 快照）与
+# gpt-image-2.5-sunburst / gpt-image-2.5-flare（含各自 2026-09-08 快照）。
+# quality=xhigh/max 这两档的预期结果会按这里填的模型名自动切换：
+#   - gpt-image-2.5-sunburst / gpt-image-2.5-flare（含快照）：预期成功
+#   - 其他（如 gpt-image-2）：预期拒绝
+# 其余用例（size / background / output_format 等）两个系列口径一致，无需切换。
 model: gpt-image-2
 
 # 所有用例共用的生图提示词（个别用例会覆盖，如超长 prompt 用例）

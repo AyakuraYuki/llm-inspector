@@ -9,12 +9,12 @@ load/stress testing.
 
 Each tool lives in its own directory under `cmd/` as an independent command, sharing one repo-wide Go module. See each module's own README for full usage details.
 
-| Module        | Path                                 | Description                                                                                                                                                                                                |
-|---------------|--------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `benchmark`   | [`cmd/benchmark`](cmd/benchmark)     | OpenAI-compatible benchmark tool that runs built-in problem sets (AIME 2025/2026, MMLU-Pro) plus custom questions against a model, measuring TTFT/TPS/TPM and verifying answers extracted from `\boxed{}`. |
-| `evaluation`  | [`cmd/evaluation`](cmd/evaluation)   | Six-layer (L1-L6) LLM availability and capability evaluator. Supports OpenAI-compatible, Anthropic Messages API, and Gemini `generateContent` API targets; produces a pass/fail verdict suitable for CI.   |
-| `performance` | [`cmd/performance`](cmd/performance) | Concurrent load-testing tool for OpenAI / Anthropic / Gemini / Responses / image-generation endpoints, with a terminal UI, error-rate early-stop, cache-hit-ratio tracking, and Excel report export.       |
-| `imagespec`   | [`cmd/imagespec`](cmd/imagespec)     | Parameter-conformance tester for `gpt-image-2` against the official OpenAI image API spec: valid parameters must generate (with actual size/format verified), invalid ones must be rejected — catches providers that allow off-spec requests such as 4096x4096 upscaling. |
+| Module        | Path                                 | Description                                                                                                                                                                                                                                                                                                                    |
+|---------------|--------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `benchmark`   | [`cmd/benchmark`](cmd/benchmark)     | OpenAI-compatible benchmark tool that runs built-in problem sets (AIME 2025/2026, MMLU-Pro) plus custom questions against a model, measuring TTFT/TPS/TPM and verifying answers extracted from `\boxed{}`.                                                                                                                     |
+| `evaluation`  | [`cmd/evaluation`](cmd/evaluation)   | Six-layer (L1-L6) LLM availability and capability evaluator. Supports OpenAI-compatible, Anthropic Messages API, and Gemini `generateContent` API targets; produces a pass/fail verdict suitable for CI.                                                                                                                       |
+| `performance` | [`cmd/performance`](cmd/performance) | Concurrent load-testing tool for OpenAI / Anthropic / Gemini / Responses / image-generation endpoints, with a terminal UI, error-rate early-stop, cache-hit-ratio tracking, and Excel report export.                                                                                                                           |
+| `imagespec`   | [`cmd/imagespec`](cmd/imagespec)     | Parameter-conformance tester for GPT image models (`gpt-image-2`, `gpt-image-2.5-sunburst`/`flare`) against the official OpenAI image API spec: valid parameters must generate (with actual size/format verified), invalid ones must be rejected — catches providers that allow off-spec requests such as 4096x4096 upscaling. |
 
 ## Repository layout
 
@@ -24,7 +24,7 @@ llm-inspector/
 │   ├── benchmark/     # AIME/MMLU-Pro benchmark tool
 │   ├── evaluation/    # 6-layer availability & capability evaluator
 │   ├── performance/   # Load-testing tool with TUI + Excel export
-│   └── imagespec/     # gpt-image-2 parameter-conformance tester
+│   └── imagespec/     # GPT image parameter-conformance tester
 ├── go.mod / go.sum    # single repo-wide Go module
 ├── Makefile           # shared build/setup/test targets for all three tools
 ├── LICENSE
@@ -64,8 +64,8 @@ cp cmd/evaluation/configs/config.example.yml eval.yml   # edit target.base_url /
 cp cmd/performance/configs/config.example.yaml config.yaml   # edit models / token_groups / base_url / concurrency
 ./build/performance/performance-darwin_amd64 -config config.yaml
 
-# imagespec: test gpt-image-2 parameter conformance
-cp cmd/imagespec/configs/config.example.yaml imagespec.yaml   # edit base_url / api_key
+# imagespec: test GPT image model parameter conformance
+cp cmd/imagespec/configs/config.example.yaml imagespec.yaml   # edit base_url / api_key / model
 ./build/imagespec/imagespec-darwin_amd64 -config imagespec.yaml
 ```
 
