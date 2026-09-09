@@ -4,7 +4,7 @@ GOARCH ?= amd64
 
 LDFLAGS  := -s -w
 SUFFIX   := $(GOOS)_$(GOARCH)
-CMDS     := benchmark evaluation performance performance-cluster
+CMDS     := benchmark evaluation performance performance-cluster imagespec
 
 # HuggingFace 数据集下载目录，benchmark 通过 //go:embed hf 打包
 HF_DIR   := cmd/benchmark/internal/dataset/hf
@@ -39,6 +39,12 @@ build-performance-cluster:
 	@mkdir -p $(DIST)/performance-cluster
 	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build -ldflags "$(LDFLAGS)" -o $(DIST)/performance-cluster/performance-cluster-$(SUFFIX) ./cmd/performance/cluster
 	@cp cmd/performance/cluster/configs/config.example.yaml $(DIST)/performance-cluster/config.yaml
+
+## build-imagespec: 构建 imagespec
+build-imagespec:
+	@mkdir -p $(DIST)/imagespec
+	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build -ldflags "$(LDFLAGS)" -o $(DIST)/imagespec/imagespec-$(SUFFIX) ./cmd/imagespec
+	@cp cmd/imagespec/configs/config.example.yaml $(DIST)/imagespec/config.yaml
 
 ## setup:
 ##     1. 安装 staticcheck

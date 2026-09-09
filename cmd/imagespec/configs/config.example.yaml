@@ -1,0 +1,26 @@
+# imagespec：按 OpenAI 官方接口口径测试 gpt-image-2 的请求参数正确性。
+# 合法参数应当成功生成图片（并校验实际分辨率/格式/张数），
+# 非法参数应当被拒绝（HTTP 400/413/422）；返回图片即判 FAIL（如 4096x4096 超分）。
+# 存在 FAIL 用例时进程以退出码 1 结束。
+
+base_url: https://api.openai.com
+api_key: ${OPENAI_API_KEY} # 也可直接填 sk-...；留空则读取环境变量 OPENAI_API_KEY
+model: gpt-image-2
+
+# 所有用例共用的生图提示词（个别用例会覆盖，如超长 prompt 用例）
+# prompt: "A single red circle on white background, minimal flat design."
+
+concurrency: 2 # 并发执行的用例数，注意目标供应商的限流
+timeout: 5m    # 单个用例的请求超时（含 3840x2160 大图用例，不建议低于 5m）
+
+# 是否运行 probe 组用例：官方口径未明确的参数组合（如 png + output_compression），
+# 只记录实际行为（INFO），不参与 PASS/FAIL 判定。
+include_probe: false
+
+# 用例筛选：填用例 id 或分组名（用 -list 查看全部）。only 为白名单，skip 为黑名单。
+# 例如只测尺寸限制：only: [size, size-invalid]
+only: []
+skip: []
+
+save_images: "" # 非空时把返回的图片保存到该目录（含“期望拒绝但生成成功”的证据图）
+output: ""      # JSON 报告输出路径，留空则为 imagespec-<时间戳>.json
