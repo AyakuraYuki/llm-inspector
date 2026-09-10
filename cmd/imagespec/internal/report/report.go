@@ -37,8 +37,9 @@ func PrintCaseList(cs []cases.Case) {
 	fmt.Printf("\n共 %d 个用例\n", len(cs))
 }
 
-// Print 按用例顺序输出分组明细与汇总，经 logger 同时落盘到运行日志（.txt）。
-func Print(results []runner.Result) {
+// Print 按用例顺序输出分组明细与汇总（含整个测试过程的总耗时 elapsed），
+// 经 logger 同时落盘到运行日志（.txt）。
+func Print(results []runner.Result, elapsed time.Duration) {
 	logger.Printf("")
 	logger.Printf("================================ 测试报告 ================================")
 	group := ""
@@ -69,6 +70,7 @@ func Print(results []runner.Result) {
 		len(results),
 		counts[runner.VerdictPass], counts[runner.VerdictFail],
 		counts[runner.VerdictInconclusive], counts[runner.VerdictInfo])
+	logger.Printf("总耗时: %s", elapsed.Round(10*time.Millisecond))
 	if len(fails) > 0 {
 		logger.Printf("FAIL 用例: %s", strings.Join(fails, ", "))
 	}
@@ -135,8 +137,10 @@ type jsonReport struct {
 	Results    []runner.Result `json:"results"`
 }
 
-// WriteJSON 把完整结果（含请求体、响应片段、图片元信息）写入 path。
-func WriteJSON(path string, cfg *config.Config, startAt time.Time, results []runner.Result) error {
+// WriteJSON 把完整结果（含请求体、响应片段、图片元信息）写入 path。elapsed
+// 是整个测试过程的总耗时，与控制台/日志里打印的总耗时保持同一次测量，避免
+// 因为报告输出/JSON 序列化耗时导致两处数字出现细微差异。
+func WriteJSON(path string, cfg *config.Config, startAt time.Time, elapsed time.Duration, results []runner.Result) error {
 	summary := map[string]int{}
 	for _, r := range results {
 		summary[string(r.Verdict)]++
@@ -145,7 +149,7 @@ func WriteJSON(path string, cfg *config.Config, startAt time.Time, results []run
 		BaseURL:    cfg.BaseURL,
 		Model:      cfg.Model,
 		StartedAt:  startAt,
-		DurationMS: time.Since(startAt).Milliseconds(),
+		DurationMS: elapsed.Milliseconds(),
 		Summary:    summary,
 		Results:    results,
 	}, "", "  ")

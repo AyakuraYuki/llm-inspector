@@ -72,14 +72,15 @@ func main() {
 	defer stop()
 
 	results := runner.Run(ctx, cfg, cs)
+	elapsed := time.Since(startAt)
 
 	if ctx.Err() != nil {
 		logger.Printf("[中止] 测试被用户中断，以下为已执行部分的结果。")
 	}
-	report.Print(results)
+	report.Print(results, elapsed)
 	report.PrintSpeed(results)
 
-	if err := report.WriteJSON(outPath, cfg, startAt, results); err != nil {
+	if err := report.WriteJSON(outPath, cfg, startAt, elapsed, results); err != nil {
 		logger.Printf("JSON 报告写入失败: %v", err)
 	} else {
 		logger.Printf("JSON 报告已保存: %s", outPath)
