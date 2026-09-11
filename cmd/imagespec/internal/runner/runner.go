@@ -113,7 +113,7 @@ func Run(ctx context.Context, cfg *config.Config, cs []cases.Case) []Result {
 				results[i] = r
 				mu.Lock()
 				done++
-				logger.Printf("[%d/%d] %-12s %-22s %s", done, len(cs), r.Verdict, r.CaseID, r.Detail)
+				logger.Printf("[%2d/%2d] %-12s %-22s %s", done, len(cs), r.Verdict, r.CaseID, r.Detail)
 				mu.Unlock()
 			}
 		})
