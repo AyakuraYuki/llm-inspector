@@ -7,7 +7,7 @@ CMDS     := benchmark evaluation performance performance-cluster imagespec
 
 # GOOS -> 发布用 OS 名
 ifeq ($(GOOS),darwin)
-  RELEASE_OS := macOS
+  RELEASE_OS := macos
 else ifeq ($(GOOS),linux)
   RELEASE_OS := linux
 else ifeq ($(GOOS),windows)
