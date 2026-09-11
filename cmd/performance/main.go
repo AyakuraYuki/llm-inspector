@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -22,14 +21,11 @@ import (
 
 const (
 	defaultConfigPath = "config.yaml"
-	excludedModel     = "gpt-image-2"
 )
 
 func main() {
 	configPath := flag.String("config", defaultConfigPath, "YAML 配置文件路径")
 	flag.Parse()
-
-	report.SetExcludedModel(excludedModel)
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -42,10 +38,6 @@ func main() {
 	// 过滤排除名单
 	var active []types.ModelSpec
 	for _, m := range bench.Models {
-		if strings.Contains(strings.ToLower(m.Name), excludedModel) {
-			fmt.Printf("[skip] 已排除模型: %s\n", m.Name)
-			continue
-		}
 		active = append(active, m)
 	}
 	if len(active) == 0 {
