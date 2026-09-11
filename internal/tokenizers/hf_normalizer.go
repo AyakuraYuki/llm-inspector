@@ -140,11 +140,11 @@ func newReplaceNormalizer(p patternSpec, content string) (normalizer, error) {
 	if p.Regex != nil {
 		re, err := compilePattern(*p.Regex)
 		if err != nil {
-			return nil, fmt.Errorf("Replace normalizer: %w", err)
+			return nil, fmt.Errorf("replace normalizer: %w", err)
 		}
 		return &replaceNormalizer{re: re, content: content}, nil
 	}
-	return nil, fmt.Errorf("Replace normalizer 缺少 pattern")
+	return nil, fmt.Errorf("replace normalizer 缺少 pattern")
 }
 
 func (n *replaceNormalizer) normalize(s string) string {

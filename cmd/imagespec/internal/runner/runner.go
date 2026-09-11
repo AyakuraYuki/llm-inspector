@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -105,10 +106,8 @@ func Run(ctx context.Context, cfg *config.Config, cs []cases.Case) []Result {
 		done int
 	)
 	idxCh := make(chan int)
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			for i := range idxCh {
 				r := runCase(ctx, client, cfg, cs[i])
 				results[i] = r
@@ -117,7 +116,7 @@ func Run(ctx context.Context, cfg *config.Config, cs []cases.Case) []Result {
 				logger.Printf("[%d/%d] %-12s %-22s %s", done, len(cs), r.Verdict, r.CaseID, r.Detail)
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 
 feed:
@@ -174,9 +173,7 @@ type imgBlob struct {
 
 func runCase(ctx context.Context, client *http.Client, cfg *config.Config, c cases.Case) Result {
 	payload := map[string]any{"model": cfg.Model, "prompt": cfg.Prompt}
-	for k, v := range c.Params {
-		payload[k] = v
-	}
+	maps.Copy(payload, c.Params)
 	body, _ := json.Marshal(payload)
 
 	res := Result{

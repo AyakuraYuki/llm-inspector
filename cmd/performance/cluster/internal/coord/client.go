@@ -74,7 +74,7 @@ func (c *Client) TaskCancel(ctx context.Context, taskID string) error {
 func (c *Client) TaskResult(ctx context.Context, taskID string) (types.BenchmarkResult, error) {
 	var result types.BenchmarkResult
 	var err error
-	for attempt := 0; attempt < resultFetchRetries; attempt++ {
+	for attempt := range resultFetchRetries {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():

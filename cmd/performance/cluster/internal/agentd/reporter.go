@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"maps"
 	"sync"
 	"time"
 
@@ -66,8 +67,6 @@ func (s *errSamples) snapshot() map[types.ErrorType]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make(map[types.ErrorType]string, len(s.byType))
-	for k, v := range s.byType {
-		out[k] = v
-	}
+	maps.Copy(out, s.byType)
 	return out
 }

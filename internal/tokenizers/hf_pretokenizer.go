@@ -157,14 +157,14 @@ func newSplitPreTokenizer(p patternSpec, behavior string, invert bool) (preToken
 	case p.String != nil:
 		return &literalSplitPreTokenizer{sep: *p.String, behavior: behavior, invert: invert}, nil
 	default:
-		return nil, fmt.Errorf("Split pre_tokenizer 缺少 pattern")
+		return nil, fmt.Errorf("split pre_tokenizer 缺少 pattern")
 	}
 }
 
 func newSplitPattern(expr, behavior string, invert bool) (preTokenizer, error) {
 	re, err := compilePattern(expr)
 	if err != nil {
-		return nil, fmt.Errorf("Split pre_tokenizer: %w", err)
+		return nil, fmt.Errorf("split pre_tokenizer: %w", err)
 	}
 	if behavior == "" {
 		behavior = behaviorIsolated
