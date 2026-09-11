@@ -77,6 +77,21 @@ func main() {
 
 	report.PrintReport(results)
 
+	if cfg.JSONOutput != "" {
+		if err := report.ExportJSON(bench, results, startAt, cfg.JSONOutput); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "JSON 导出失败: %v\n", err)
+		} else {
+			fmt.Printf("JSON 已保存: %s\n", cfg.JSONOutput)
+		}
+	}
+	if cfg.CSVOutput != "" {
+		if err := report.ExportCSV(results, cfg.CSVOutput); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "CSV 导出失败: %v\n", err)
+		} else {
+			fmt.Printf("CSV 已保存: %s\n", cfg.CSVOutput)
+		}
+	}
+
 	if cfg.NoExcel {
 		return // 跳过导出excel报告的流程
 	}
@@ -173,6 +188,11 @@ func printHeader(cfg types.BenchmarkConfig) {
 	fmt.Printf("Tokens      : model-scoped token groups\n")
 	fmt.Printf("Duration    : %s per concurrency level\n", cfg.Duration)
 	fmt.Printf("Concurrency : %v\n", cfg.Concurrency)
+	if cfg.OpenLoop {
+		fmt.Printf("Load Mode   : open-loop（目标 RPS：%v，泊松到达）\n", cfg.RequestRate)
+	} else {
+		fmt.Printf("Load Mode   : closed-loop（默认；高负载下尾延迟可能被低估，见 README「Coordinated Omission」）\n")
+	}
 	warmupLabel := "disabled"
 	if cfg.Warmup {
 		warmupLabel = cfg.WarmupDuration.String()

@@ -34,7 +34,7 @@ prompt:
   tokens: 2000
 
 # 图片生成端点的测试 prompt
-image_prompt: "A single red circle on white background, minimal flat design."
+image_prompt: "A cute fluffy kitten playing with a ball of yarn, soft lighting, adorable, high detail."
 
 warmup: true          # 正式测试前是否执行预热阶段（各 agent 按首个正式档位的分片并发预热）
 warmup_duration: 10s  # 预热阶段持续时长
@@ -43,6 +43,40 @@ cooldown: 5s          # 每个并发档位之间的冷却等待时间
 output: ""       # Excel 输出路径（留空则自动生成时间戳文件名，如 bench-cluster-20260618T150405.xlsx）
 no_excel: false  # 跳过 Excel 导出，仅打印终端报告
 no_tui: false    # 禁用 TUI，使用纯文本控制台输出（stdout 非终端时自动禁用）
+
+#json_output: "bench-cluster.json"  # 结构化 JSON 报告路径，留空不导出，供 CI 基线比对/画趋势图
+#csv_output: "bench-cluster.csv"    # 逐档位 CSV 汇总路径，留空不导出
+
+# 压测时"怎么发请求"，两种方式二选一，语义和单机版完全一致（这里再简单说一遍）：
+#   closed（默认，不填就是这个）：像打电话问客服——问一句，等它答完了，才问下一句。
+#     如果被测的服务已经很忙、答得慢，压测这边也会跟着被动地放慢发请求的速度，
+#     测出来的结果会显得比真实情况更"扛得住"。
+#   open：像按固定节奏发短信——不管上一条有没有收到回复，都按设定的"每秒发几条"
+#     持续发新请求，能真实模拟"线上有这么多用户涌进来"的场景。
+# 怎么选：只想看"并发数越高、响应会慢多少"，用默认的 closed 就够了；已经知道线上
+# 大概有多少 QPS、想验证这个流量下扛不扛得住，就要用 open。
+#
+# request_rate 只有在 load_mode: open 时才需要填，是【全局】目标 RPS（所有 agent 加起来
+# 要达到的总速率），coordinator 会按 agent 数量自动等分下发，不用自己手动拆分。
+# 它要和上面的 concurrency 按顺序一一配对（两个列表长度必须相同）：
+#   request_rate 这一档的数字 = 全部 agent 合计要维持的"每秒发送请求数"
+#   concurrency  这一档的数字 = 全部 agent 合计"同时还没收到回复"的请求数上限
+#     （同样会按 agent 数量切分到各机器，避免任何一台机器被没完没了攒出去的请求撑爆）
+#
+# 举例：假设要测「全局 QPS 从 50 逐步加到 800」这 5 档，并且任何时候全局最多允许 2000
+# 个请求同时在等结果，那么要把最上面的 concurrency（第 22 行）也改成 5 个数字：
+#   concurrency:  [2000, 2000, 2000, 2000, 2000]
+#   request_rate: [50,   100,  200,  400,  800]
+#load_mode: "open"
+#request_rate: [50, 100, 200, 400, 800]
+
+# SLO 达标率（goodput），与单机版语义一致，三项阈值都可选：
+#slo:
+#  ttft_ms: 800
+#  tpot_ms: 50
+#  e2e_ms: 10000
+
+#show_histogram: true  # 终端/Excel 额外输出 E2E/TTFT 延迟分布直方图，默认 false 不影响现有报表
 
 # 错误率早停与跳档：分布式模式下由 coordinator 汇总【所有节点】的累计错误率统一判定，
 # 触发后广播取消该档位的全部分片。默认关闭，不影响现有行为。

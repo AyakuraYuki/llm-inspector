@@ -143,6 +143,21 @@ func runMain(args []string) {
 
 	report.PrintReport(results)
 
+	if cfg.JSONOutput != "" {
+		if err := report.ExportJSON(bench, results, startAt, cfg.JSONOutput); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "JSON 导出失败: %v\n", err)
+		} else {
+			fmt.Printf("JSON 已保存: %s\n", cfg.JSONOutput)
+		}
+	}
+	if cfg.CSVOutput != "" {
+		if err := report.ExportCSV(results, cfg.CSVOutput); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "CSV 导出失败: %v\n", err)
+		} else {
+			fmt.Printf("CSV 已保存: %s\n", cfg.CSVOutput)
+		}
+	}
+
 	if !cfg.NoExcel {
 		outPath := cfg.Output
 		if outPath == "" {
@@ -259,6 +274,11 @@ func printHeader(bench types.BenchmarkConfig, cluster *config.ClusterConfig) {
 	fmt.Printf("Tokens      : model-scoped token groups\n")
 	fmt.Printf("Duration    : %s per concurrency level\n", bench.Duration)
 	fmt.Printf("Concurrency : %v (global, split across agents)\n", bench.Concurrency)
+	if bench.OpenLoop {
+		fmt.Printf("Load Mode   : open-loop（全局目标 RPS：%v，泊松到达，按 agent 数等分下发）\n", bench.RequestRate)
+	} else {
+		fmt.Printf("Load Mode   : closed-loop（默认；高负载下尾延迟可能被低估，见 README「Coordinated Omission」）\n")
+	}
 	warmupLabel := "disabled"
 	if bench.Warmup {
 		warmupLabel = bench.WarmupDuration.String()

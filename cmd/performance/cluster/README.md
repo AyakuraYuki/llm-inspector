@@ -65,6 +65,8 @@ concurrency: [1000, 2000, 3000, 4000, 5000]  # 5000 ÷ 4 节点 = 每台 1250
 
 TUI/纯文本控制台、终端汇总报告、Excel 导出（默认 `bench-cluster-<时间戳>.xlsx`）均与单机版相同；Excel 总览 sheet 额外包含节点数与各节点最大并发分片。
 
+`load_mode: open`（[open-loop 目标 RPS 模式](../README.md#负载模式closed-loop-与-open-loop)）与单机版语义一致：`request_rate` 是**全局**目标 RPS，coordinator 按节点数**等分**后随任务下发给各 agent（除不尽时有 <1 个 agent 份的浮点误差，量级可忽略）；`concurrency` 此时是全局在途请求数上限，切分方式与 closed-loop 相同。`slo`（goodput）、`show_histogram`、`json_output`/`csv_output` 同样与单机版完全一致，直接写在同一份配置里即可。
+
 ## 运行流程
 
 1. **探活**：逐台 `ping`，校验协议版本一致且空闲，任一不可达即中止

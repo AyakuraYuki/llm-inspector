@@ -3,6 +3,8 @@ package runner
 import (
 	"context"
 	"errors"
+	"math"
+	"math/rand/v2"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -46,10 +48,11 @@ loop:
 				break loop
 			}
 			seq++
+			rate := levelTargetRate(cfg, i)
 			rep.LevelStart(seq, total, model, conc, time.Now().Add(cfg.Duration))
 
-			result := RunLevel(ctx, cfg, model, conc, RampDuration(conc, cfg.Duration), rep)
-			agg := metrics.AggregateMetrics(result)
+			result := RunLevel(ctx, cfg, model, conc, rate, RampDuration(conc, cfg.Duration), rep)
+			agg := metrics.AggregateMetrics(result, cfg.SLO, cfg.ShowHistogram)
 			results = append(results, agg)
 			rep.LevelEnd(agg)
 
@@ -78,6 +81,15 @@ loop:
 
 	rep.BenchmarkEnd(ctx.Err() != nil)
 	return results, nil
+}
+
+// levelTargetRate 返回第 i 档的目标 RPS：closed-loop（cfg.OpenLoop 为 false）恒为 0，
+// open-loop 时取 cfg.RequestRate[i]（config.validate 已保证与 Concurrency 等长）。
+func levelTargetRate(cfg types.BenchmarkConfig, i int) float64 {
+	if !cfg.OpenLoop || i >= len(cfg.RequestRate) {
+		return 0
+	}
+	return cfg.RequestRate[i]
 }
 
 // preflightCheck 对每个模型发送一次请求，任何失败均返回错误终止压测。
@@ -120,13 +132,15 @@ func PreflightModel(ctx context.Context, cfg types.BenchmarkConfig, model types.
 // 排在后面的模型要等前面模型跑完全部档位才轮到自己，若提前预热，
 // 上游侧的热身效果（模型驻留、扩容）在正式压测时早已衰减，
 // 冷启动开销仍会落进该模型首档的测量窗口。
+// open-loop 时预热档的目标 RPS 取首档的 RequestRate[0]，与正式档位口径一致。
 func warmupModel(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, idx int, rep reporter.Reporter) {
 	warmupCfg := cfg
 	warmupCfg.Duration = cfg.WarmupDuration
 	warmupConc := cfg.Concurrency[0]
+	rate := levelTargetRate(cfg, 0)
 	rep.WarmupStart(warmupConc, cfg.WarmupDuration)
 	rep.WarmupModel(idx+1, len(cfg.Models), model, time.Now().Add(cfg.WarmupDuration))
-	RunLevel(ctx, warmupCfg, model, warmupConc, RampDuration(warmupConc, warmupCfg.Duration), rep)
+	RunLevel(ctx, warmupCfg, model, warmupConc, rate, RampDuration(warmupConc, warmupCfg.Duration), rep)
 	rep.WarmupEnd()
 }
 
@@ -147,25 +161,96 @@ func ShouldStopEarly(total, failed int64, minSamples int, maxErrorRate float64) 
 	return float64(failed)/float64(total) > maxErrorRate
 }
 
-// RunLevel 以指定并发数并发发送请求，持续到 deadline 或 ctx 取消为止。
-// ramp 是首批请求的错峰启动窗口（单机路径由 RampDuration 按本档并发计算；
-// 分布式路径由 coordinator 按全局并发统一算好后下发，各节点共用同一窗口）。
+// levelState 保存一个档位运行期间的共享状态：累计样本、早停计数器。
+// closed-loop 和 open-loop 两种分发方式共用同一份记账逻辑，
+// 避免早停判定、样本落地这两段逻辑写两遍、行为分叉。
+type levelState struct {
+	mu             sync.Mutex
+	requestMetrics []types.RequestMetrics
+	totalCnt       atomic.Int64
+	failCnt        atomic.Int64
+	stoppedEarly   atomic.Bool
+}
+
+// record 落地一条请求结果并做早停判定；levelCtx.Err() != nil 且请求失败时
+// （中止导致的在途请求失败）直接丢弃，避免污染结果。
+func (s *levelState) record(cfg types.BenchmarkConfig, rep reporter.Reporter, m types.RequestMetrics, levelCtx context.Context, cancelLevel context.CancelFunc) {
+	if levelCtx.Err() != nil && !m.Success {
+		return
+	}
+
+	s.mu.Lock()
+	s.requestMetrics = append(s.requestMetrics, m)
+	s.mu.Unlock()
+	rep.RequestDone(m)
+
+	if cfg.EarlyStopEnabled {
+		tot := s.totalCnt.Add(1)
+		f := s.failCnt.Load()
+		if !m.Success {
+			f = s.failCnt.Add(1)
+		}
+		if ShouldStopEarly(tot, f, cfg.MinSamples, cfg.MaxErrorRate) {
+			s.stoppedEarly.Store(true)
+			cancelLevel()
+		}
+	}
+}
+
+// RunLevel 以指定并发数持续发送请求，直到 deadline 或 ctx 取消为止。
+// targetRate 为 0 时走 closed-loop（现有行为：每个 worker 等响应才发下一个）；
+// targetRate > 0 时走 open-loop（按泊松过程到达发送请求，不等响应），
+// concurrency 此时改为“同时在途请求数上限”，防止过载时本地无限堆积协程/连接。
+// ramp 是首批请求的错峰启动窗口，仅 closed-loop 使用（单机路径由 RampDuration
+// 按本档并发计算；分布式路径由 coordinator 按全局并发统一算好后下发，各节点
+// 共用同一窗口）；open-loop 的到达时刻本身已被泊松过程随机打散，无需额外错峰。
 // 若 cfg.EarlyStopEnabled 且档位内失败率超过 cfg.MaxErrorRate，会提前取消 levelCtx
 // 结束本档位（不影响其他档位或外层 ctx），并在返回结果中标记 StoppedEarly。
-func RunLevel(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, concurrency int, ramp time.Duration, rep reporter.Reporter) types.BenchmarkResult {
+func RunLevel(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, concurrency int, targetRate float64, ramp time.Duration, rep reporter.Reporter) types.BenchmarkResult {
 	start := time.Now()
 	deadline := start.Add(cfg.Duration)
 
 	levelCtx, cancelLevel := context.WithCancel(ctx)
 	defer cancelLevel()
 
-	var (
-		mu                sync.Mutex
-		requestMetrics    []types.RequestMetrics
-		totalCnt, failCnt atomic.Int64
-		stoppedEarly      atomic.Bool
-	)
+	state := &levelState{}
 
+	if targetRate > 0 {
+		runLevelOpenLoop(levelCtx, cfg, model, concurrency, targetRate, deadline, rep, state, cancelLevel)
+	} else {
+		runLevelClosedLoop(levelCtx, cfg, model, concurrency, ramp, deadline, rep, state, cancelLevel)
+	}
+
+	return types.BenchmarkResult{
+		Model:        model.Name,
+		Provider:     model.Provider,
+		TokenGroup:   model.TokenGroup,
+		Concurrency:  concurrency,
+		TargetRate:   targetRate,
+		Start:        start,
+		Window:       cfg.Duration,
+		Elapsed:      time.Since(start),
+		Metrics:      state.requestMetrics,
+		StoppedEarly: state.stoppedEarly.Load(),
+	}
+}
+
+// dispatchOne 发起一次请求并返回带时间戳的指标，未知 provider 时返回失败指标。
+func dispatchOne(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec) types.RequestMetrics {
+	reqStart := time.Now()
+	var m types.RequestMetrics
+	if fn, ok := doSSERequests[model.Provider]; ok {
+		m = fn(ctx, cfg, model)
+	} else {
+		m = types.RequestMetrics{Success: false, Error: "unknown provider: " + string(model.Provider)}
+	}
+	m.Timestamp = reqStart
+	return m
+}
+
+// runLevelClosedLoop 是现有行为：固定 concurrency 个协程，每个协程循环
+// “发请求 → 等响应 → 等 cooldownPerRequest → 发下一个”，直到 deadline 或取消。
+func runLevelClosedLoop(levelCtx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, concurrency int, ramp time.Duration, deadline time.Time, rep reporter.Reporter, state *levelState, cancelLevel context.CancelFunc) {
 	var wg sync.WaitGroup
 	for i := range concurrency {
 		wg.Go(func() {
@@ -178,40 +263,8 @@ func RunLevel(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelS
 				}
 			}
 			for time.Now().Before(deadline) && levelCtx.Err() == nil {
-				reqStart := time.Now()
-				var m types.RequestMetrics
-
-				if fn, ok := doSSERequests[model.Provider]; ok {
-					m = fn(levelCtx, cfg, model)
-				} else {
-					m = types.RequestMetrics{
-						Success: false,
-						Error:   "unknown provider: " + string(model.Provider),
-					}
-				}
-				m.Timestamp = reqStart
-
-				// 中止导致的在途请求失败不计入结果，避免污染指标
-				if levelCtx.Err() != nil && !m.Success {
-					return
-				}
-
-				mu.Lock()
-				requestMetrics = append(requestMetrics, m)
-				mu.Unlock()
-				rep.RequestDone(m)
-
-				if cfg.EarlyStopEnabled {
-					tot := totalCnt.Add(1)
-					f := failCnt.Load()
-					if !m.Success {
-						f = failCnt.Add(1)
-					}
-					if ShouldStopEarly(tot, f, cfg.MinSamples, cfg.MaxErrorRate) {
-						stoppedEarly.Store(true)
-						cancelLevel()
-					}
-				}
+				m := dispatchOne(levelCtx, cfg, model)
+				state.record(cfg, rep, m, levelCtx, cancelLevel)
 
 				// deadline 已过就直接退出：此时的请求间隔等待毫无意义，
 				// 徒增 Elapsed（排空期被多算约一个 cooldownPerRequest）
@@ -226,18 +279,49 @@ func RunLevel(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelS
 			}
 		})
 	}
+	wg.Wait()
+}
+
+// runLevelOpenLoop 按泊松过程生成到达间隔（指数分布，均值 1/targetRate），
+// 到点即发一个请求（不等上一个响应），是避免 Coordinated Omission 的关键：
+// closed-loop 在服务端过载时会因为“等响应才发下一个”自动降速，看起来吞吐/延迟
+// 都还行，但那只是压测客户端自己让路的假象；open-loop 按目标速率持续到达，
+// 才能测出真实流量下的排队延迟和尾延迟。
+// concurrency 用作同时在途请求数上限（channel 信号量）：超过上限时，下一次
+// 到达会阻塞等空位再发出，对应 AIPerf 里 request-rate + max-concurrency 的双控——
+// 既保留“到达按目标速率”的开环语义，又防止过载时协程/连接本地无限堆积。
+func runLevelOpenLoop(levelCtx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, concurrency int, targetRate float64, deadline time.Time, rep reporter.Reporter, state *levelState, cancelLevel context.CancelFunc) {
+	sem := make(chan struct{}, max(concurrency, 1))
+	var wg sync.WaitGroup
+
+	for time.Now().Before(deadline) && levelCtx.Err() == nil {
+		select {
+		case sem <- struct{}{}:
+		case <-levelCtx.Done():
+			wg.Wait()
+			return
+		}
+
+		wg.Go(func() {
+			defer func() { <-sem }()
+			m := dispatchOne(levelCtx, cfg, model)
+			state.record(cfg, rep, m, levelCtx, cancelLevel)
+		})
+
+		if !time.Now().Before(deadline) {
+			break
+		}
+
+		// 逆变换采样：dt = -ln(1-U)/rate，U~Uniform(0,1)，得到均值为
+		// 1/targetRate 的指数分布到达间隔（泊松过程的到达间隔即指数分布）。
+		dt := time.Duration(-math.Log(1-rand.Float64()) / targetRate * float64(time.Second))
+		timer := time.NewTimer(dt)
+		select {
+		case <-levelCtx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
 
 	wg.Wait()
-
-	return types.BenchmarkResult{
-		Model:        model.Name,
-		Provider:     model.Provider,
-		TokenGroup:   model.TokenGroup,
-		Concurrency:  concurrency,
-		Start:        start,
-		Window:       cfg.Duration,
-		Elapsed:      time.Since(start),
-		Metrics:      requestMetrics,
-		StoppedEarly: stoppedEarly.Load(),
-	}
 }

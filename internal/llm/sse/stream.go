@@ -10,23 +10,25 @@ type StreamSummary struct {
 	PromptTokens      int64
 	CompletionTokens  int64
 	CachedInputTokens int64
-	CacheSeen         bool     // 出现过携带缓存命中字段的 usage 事件（区分「provider 未上报缓存字段」与「上报了但命中为 0」）
-	UsageSeen         bool     // 出现过携带 completion token 的 usage 事件
-	TerminalSeen      bool     // 出现过协议终止标记（[DONE]/finish_reason/message_stop 等）
-	UpstreamErr       string   // 流内错误事件的首个错误消息
-	TextParts         []string // 收集的文本片段（usage 缺失时的 token 估算回退）
+	CacheSeen         bool      // 出现过携带缓存命中字段的 usage 事件（区分「provider 未上报缓存字段」与「上报了但命中为 0」）
+	UsageSeen         bool      // 出现过携带 completion token 的 usage 事件
+	TerminalSeen      bool      // 出现过协议终止标记（[DONE]/finish_reason/message_stop 等）
+	UpstreamErr       string    // 流内错误事件的首个错误消息
+	TextParts         []string  // 收集的文本片段（usage 缺失时的 token 估算回退）
+	ITLSamplesMS      []float64 // 逐次输出内容事件之间的间隔（毫秒），按事件粒度近似逐 token 生成间隔
+	lastContentMS     float64   // 上一个输出内容事件的到达时刻，<0 表示尚未出现（TTFT 打点那一刻不产生间隔样本）
 }
 
-// NewStreamSummary 创建初始化的摘要。TTFTMS 初始为 -1（"未捕获到输出内容"），
-// 与 evaluation 的 Result.TTFTMS 惯例一致。
+// NewStreamSummary 创建初始化的摘要。TTFTMS/lastContentMS 初始为 -1
+// （"未捕获到输出内容"），与 evaluation 的 Result.TTFTMS 惯例一致。
 func NewStreamSummary() *StreamSummary {
-	return &StreamSummary{TTFTMS: -1}
+	return &StreamSummary{TTFTMS: -1, lastContentMS: -1}
 }
 
 // ApplySSEEvent 将单个已解析的 SSE 数据事件合并进摘要。
 // nowMS 为事件到达时刻（距请求发起点的毫秒数，由调用方注入）。
 // 处理顺序与原 parseStreamMetrics 的扫描循环一致：
-// 错误 → 终止标记 → 输出内容（TTFT）→ usage。
+// 错误 → 终止标记 → 输出内容（TTFT/ITL）→ usage。
 func ApplySSEEvent(obj map[string]any, nowMS float64, s *StreamSummary) {
 	if msg, found := ErrorInfo(obj); found && s.UpstreamErr == "" {
 		s.UpstreamErr = msg
@@ -34,8 +36,15 @@ func ApplySSEEvent(obj map[string]any, nowMS float64, s *StreamSummary) {
 	if IsTerminal(obj) {
 		s.TerminalSeen = true
 	}
-	if s.TTFTMS < 0 && HasOutputContent(obj) {
-		s.TTFTMS = nowMS
+	if HasOutputContent(obj) {
+		if s.TTFTMS < 0 {
+			s.TTFTMS = nowMS
+		} else if s.lastContentMS >= 0 {
+			// 首个内容事件打 TTFT，不产生间隔样本；此后每次再出现输出内容，
+			// 记一条与上一次内容事件的间隔（按事件粒度近似逐 token 生成间隔）。
+			s.ITLSamplesMS = append(s.ITLSamplesMS, nowMS-s.lastContentMS)
+		}
+		s.lastContentMS = nowMS
 	}
 	p, c, ct, _ := ConsumeUsage(obj, &s.TextParts)
 	if c >= 0 {

@@ -120,7 +120,7 @@ func TestMergeThenAggregateWindowCutoff(t *testing.T) {
 	}
 
 	merged := MergeLevel(t0, window, 10, false, []types.BenchmarkResult{RebaseResult(part, t0)})
-	agg := metrics.AggregateMetrics(merged)
+	agg := metrics.AggregateMetrics(merged, types.SLOThresholds{}, false)
 
 	if agg.Success != 2 {
 		t.Fatalf("Success = %d, want 2", agg.Success)

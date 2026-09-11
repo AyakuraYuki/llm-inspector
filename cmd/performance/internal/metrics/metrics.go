@@ -19,12 +19,15 @@ import (
 // 时延分位数按 E2E 计算，均不受影响。剔除数记入 GenSpeedExcluded 供报表标注。
 
 // AggregateMetrics 将原始请求结果聚合为汇聚指标。
-func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
+// slo 为 goodput 判定阈值（slo.Enabled() 为 false 时不计算 goodput）；
+// showHistogram 为真时额外计算 E2E/TTFT 延迟分布直方图。
+func AggregateMetrics(result types.BenchmarkResult, slo types.SLOThresholds, showHistogram bool) types.AggregatedMetrics {
 	agg := types.AggregatedMetrics{
 		Model:        result.Model,
 		Provider:     result.Provider,
 		TokenGroup:   result.TokenGroup,
 		Concurrency:  result.Concurrency,
+		TargetRate:   result.TargetRate,
 		Start:        result.Start,
 		Elapsed:      result.Elapsed,
 		Total:        len(result.Metrics),
@@ -45,6 +48,7 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 	var (
 		ttfts           []time.Duration
 		tpots           []time.Duration
+		itls            []time.Duration
 		tpsValues       []float64
 		iorValues       []float64
 		cacheHitValues  []float64
@@ -55,11 +59,16 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 		cacheReported   int
 		winSuccess      int
 		winToks         int64
+		goodCount       int
 	)
 
 	isStreaming := result.Provider != types.ProviderOpenAIImage
 
 	for _, m := range result.Metrics {
+		if slo.Enabled() && isGood(m, slo, isStreaming) {
+			goodCount++
+		}
+
 		if !m.Success {
 			agg.Failed++
 			if m.ErrorType != types.ErrorTypeNone {
@@ -93,6 +102,12 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 
 					// per-request TPS = output_tokens / gen_window_seconds
 					tpsValues = append(tpsValues, float64(m.OutputTokens)/genWindow.Seconds())
+
+					// ITL 剔除口径与 TPOT/TPS 保持一致：未通过速率有效性校验的
+					// 请求（一次性到达/超出物理天花板）其内部事件间隔同样不可信。
+					for _, ms := range m.ITLSamplesMS {
+						itls = append(itls, time.Duration(ms*float64(time.Millisecond)))
+					}
 				} else {
 					agg.GenSpeedExcluded++
 				}
@@ -118,6 +133,7 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 
 	agg.TTFT = percentileStats(ttfts)
 	agg.TPOT = percentileStats(tpots)
+	agg.ITL = percentileStats(itls)
 	agg.Latency = percentileStats(latencies)
 
 	// per-request TPS 分位数
@@ -155,6 +171,23 @@ func AggregateMetrics(result types.BenchmarkResult) types.AggregatedMetrics {
 	agg.CacheReportedCount = cacheReported
 	if totalInputToks > 0 {
 		agg.CacheHitRatio = util.CacheHitRatio(totalCachedToks, totalInputToks)
+	}
+
+	// goodput：仅当配置了至少一项 SLO 阈值才计算，否则 SLOConfigured 保持 false，
+	// 报表借此区分「未配置」与「配置了但 0%」。
+	if slo.Enabled() {
+		agg.SLOConfigured = true
+		agg.SLO = slo
+		agg.GoodputCount = goodCount
+		if agg.Total > 0 {
+			agg.GoodputRatio = float64(goodCount) / float64(agg.Total) * 100
+		}
+	}
+
+	// 延迟分布直方图：仅 showHistogram 开启时计算，避免给不需要的用户增加开销。
+	if showHistogram {
+		agg.E2EHistogram = Histogram(latencies, histogramBuckets)
+		agg.TTFTHistogram = Histogram(ttfts, histogramBuckets)
 	}
 
 	return agg
@@ -222,4 +255,82 @@ func floatPercentileStats(values []float64) types.FloatStats {
 		Avg:  total / float64(n),
 		N:    n,
 	}
+}
+
+// isGood 判定单条请求是否满足配置的 SLO 阈值（goodput 判定）。
+// 失败请求必然不达标；成功请求逐项比较已配置（非零）的阈值，未配置的维度不参与判定。
+// TTFT/TPOT 阈值仅在流式端点生效（图片生成端点没有这两个概念）。
+func isGood(m types.RequestMetrics, slo types.SLOThresholds, isStreaming bool) bool {
+	if !m.Success {
+		return false
+	}
+	if slo.E2E > 0 && m.TotalLatency > slo.E2E {
+		return false
+	}
+	if !isStreaming {
+		return true
+	}
+	if slo.TTFT > 0 && m.TTFT > slo.TTFT {
+		return false
+	}
+	if slo.TPOT > 0 {
+		if m.OutputTokens <= 0 {
+			return false // 拿不到 TPOT，保守判定为不达标
+		}
+		genWindow := m.TotalLatency - m.TTFT
+		tpot := time.Duration(float64(genWindow) / float64(m.OutputTokens))
+		if tpot > slo.TPOT {
+			return false
+		}
+	}
+	return true
+}
+
+// histogramBuckets 是延迟分布直方图的默认分桶数。
+const histogramBuckets = 10
+
+// Histogram 把一组时延样本按对数刻度分成 buckets 个桶，返回每桶的
+// [Lo, Hi) 区间与样本数。对数刻度让长尾分布也能在有限桶数下均匀展开，
+// 避免线性分桶时绝大多数样本都挤在第一个桶。样本为空时返回 nil。
+func Histogram(durations []time.Duration, buckets int) []types.HistBucket {
+	n := len(durations)
+	if n == 0 || buckets <= 0 {
+		return nil
+	}
+
+	sorted := make([]time.Duration, n)
+	copy(sorted, durations)
+	slices.Sort(sorted)
+
+	lo, hi := sorted[0], sorted[n-1]
+	if lo <= 0 {
+		lo = time.Microsecond
+	}
+	if hi < lo {
+		hi = lo
+	}
+
+	logLo, logHi := math.Log(float64(lo)), math.Log(float64(hi))
+	result := make([]types.HistBucket, buckets)
+	if logHi <= logLo {
+		// 全部样本落在同一个值（或差异小到对数刻度下不可分辨），单桶兜底。
+		result[0] = types.HistBucket{Lo: lo, Hi: hi, Count: n}
+		return result[:1]
+	}
+
+	step := (logHi - logLo) / float64(buckets)
+	for i := range result {
+		bucketLo := time.Duration(math.Exp(logLo + step*float64(i)))
+		bucketHi := time.Duration(math.Exp(logLo + step*float64(i+1)))
+		if i == buckets-1 {
+			bucketHi = hi
+		}
+		result[i] = types.HistBucket{Lo: bucketLo, Hi: bucketHi}
+	}
+	for _, d := range sorted {
+		idx := int((math.Log(float64(max(d, lo))) - logLo) / step)
+		idx = min(max(idx, 0), buckets-1)
+		result[idx].Count++
+	}
+	return result
 }

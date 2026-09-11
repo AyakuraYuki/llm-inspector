@@ -95,7 +95,8 @@ loop:
 				break loop
 			}
 			seq++
-			agg, stopped, err := runOneLevel(ctx, clients, bench, model, conc, runID, seq, total, pollOpt, rep)
+			rate := levelTargetRate(bench, i)
+			agg, stopped, err := runOneLevel(ctx, clients, bench, model, conc, rate, runID, seq, total, pollOpt, rep)
 			if err != nil {
 				rep.BenchmarkEnd(true)
 				return results, summary, err
@@ -130,21 +131,38 @@ loop:
 	return results, summary, nil
 }
 
+// levelTargetRate 返回第 i 档的全局目标 RPS：closed-loop（bench.OpenLoop 为
+// false）恒为 0，open-loop 时取 bench.RequestRate[i]（config.validate 已保证
+// 与 Concurrency 等长）。与单机版 runner.levelTargetRate 语义一致。
+func levelTargetRate(bench types.BenchmarkConfig, i int) float64 {
+	if !bench.OpenLoop || i >= len(bench.RequestRate) {
+		return 0
+	}
+	return bench.RequestRate[i]
+}
+
 // runOneLevel 执行一个 model×concurrency 档位：切分下发、轮询聚合、结果回收合并。
+// rate 是本档全局目标 RPS（0 为 closed-loop），按 agent 数等分下发给各 agent；
+// 允许存在 <1 个 agent 份的浮点误差（除不尽时），量级可忽略。
 func runOneLevel(ctx context.Context, clients []*Client, bench types.BenchmarkConfig, model types.ModelSpec,
-	conc int, runID string, seq, total int, pollOpt pollOptions, rep reporter.Reporter) (types.AggregatedMetrics, bool, error) {
+	conc int, rate float64, runID string, seq, total int, pollOpt pollOptions, rep reporter.Reporter) (types.AggregatedMetrics, bool, error) {
 
 	shares := Split(conc, len(clients))
+	agentRate := 0.0
+	if rate > 0 {
+		agentRate = rate / float64(len(clients))
+	}
 	ramp := runner.RampDuration(conc, bench.Duration)
 	t0 := time.Now()
 	rep.LevelStart(seq, total, model, conc, t0.Add(bench.Duration))
 
 	tasks, err := dispatchTasks(ctx, clients, shares, proto.TaskStart{
-		RunID: runID,
-		Kind:  proto.TaskLevel,
-		Bench: levelBench(bench, model, bench.Duration),
-		Model: model,
-		Ramp:  ramp,
+		RunID:      runID,
+		Kind:       proto.TaskLevel,
+		Bench:      levelBench(bench, model, bench.Duration),
+		Model:      model,
+		TargetRate: agentRate,
+		Ramp:       ramp,
 	}, fmt.Sprintf("%s-%03d", runID, seq))
 	if err != nil {
 		return types.AggregatedMetrics{}, false, err
@@ -191,7 +209,8 @@ func runOneLevel(ctx context.Context, clients []*Client, bench types.BenchmarkCo
 	merged.Model = model.Name
 	merged.Provider = model.Provider
 	merged.TokenGroup = model.TokenGroup
-	return metrics.AggregateMetrics(merged), stopped, nil
+	merged.TargetRate = rate // 回填全局目标 RPS（而非各 agent 分片），与单机版口径一致
+	return metrics.AggregateMetrics(merged, bench.SLO, bench.ShowHistogram), stopped, nil
 }
 
 // runWarmup 让每个 agent 按首个正式档位的分片并发预热，结果丢弃。
@@ -201,15 +220,21 @@ func runWarmup(ctx context.Context, clients []*Client, bench types.BenchmarkConf
 
 	warmupConc := bench.Concurrency[0]
 	shares := Split(warmupConc, len(clients))
+	rate := levelTargetRate(bench, 0)
+	agentRate := 0.0
+	if rate > 0 {
+		agentRate = rate / float64(len(clients))
+	}
 	rep.WarmupStart(warmupConc, bench.WarmupDuration)
 	rep.WarmupModel(mi+1, len(bench.Models), model, time.Now().Add(bench.WarmupDuration))
 
 	tasks, err := dispatchTasks(ctx, clients, shares, proto.TaskStart{
-		RunID: runID,
-		Kind:  proto.TaskWarmup,
-		Bench: levelBench(bench, model, bench.WarmupDuration),
-		Model: model,
-		Ramp:  runner.RampDuration(warmupConc, bench.WarmupDuration),
+		RunID:      runID,
+		Kind:       proto.TaskWarmup,
+		Bench:      levelBench(bench, model, bench.WarmupDuration),
+		Model:      model,
+		TargetRate: agentRate,
+		Ramp:       runner.RampDuration(warmupConc, bench.WarmupDuration),
 	}, fmt.Sprintf("%s-warmup-%d", runID, mi))
 	if err != nil {
 		return err

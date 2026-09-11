@@ -18,7 +18,7 @@ prompt:
   tokens: 2000
 
 # 图片生成端点的测试 prompt
-image_prompt: "A single red circle on white background, minimal flat design."
+image_prompt: "A cute fluffy kitten playing with a ball of yarn, soft lighting, adorable, high detail."
 
 warmup: true          # 正式测试前是否执行预热阶段（并发=10，时长由 warmup_duration 控制）
 warmup_duration: 10s  # 预热阶段持续时长
@@ -27,6 +27,47 @@ cooldown: 5s          # 每个并发档位之间的冷却等待时间
 output: ""       # Excel 输出路径（留空则自动生成时间戳文件名，如 bench-20260618T150405.xlsx）
 no_excel: false  # 跳过 Excel 导出，仅打印终端报告
 no_tui: false    # 禁用 TUI，使用纯文本控制台输出（stdout 非终端时自动禁用）
+
+#json_output: "bench.json"  # 结构化 JSON 报告路径，留空不导出，供 CI 基线比对/画趋势图
+#csv_output: "bench.csv"    # 逐档位 CSV 汇总路径，留空不导出
+
+# 压测时"怎么发请求"，两种方式二选一：
+#   closed（默认，不填就是这个）：像打电话问客服——问一句，等它答完了，才问下一句。
+#     如果被测的服务已经很忙、答得慢，压测这边也会跟着被动地放慢发请求的速度。
+#     这样测出来的结果会显得比真实情况更"扛得住"，因为服务器忙不过来的那段时间，
+#     其实并没有真的有那么多请求打过去，是压测程序自己主动让路了。
+#   open：像按固定节奏发短信——不管上一条有没有收到回复，都按你设定的"每秒发几条"
+#     持续发新的请求。这样才能真实模拟"线上有这么多用户涌进来"的场景，看服务器
+#     在这个流量下会不会开始排队、响应会不会越等越久。
+#
+# 怎么选：只是想大概看看"并发数越高、响应会慢多少"，用默认的 closed 就够了；
+# 如果已经知道线上大概有多少 QPS（每秒请求数），想验证这个流量下响应速度扛不扛得住，
+# 就要用 open，因为只有 open 才是按真实的"每秒多少个请求"这个节奏在测。
+#load_mode: "open"
+#
+# request_rate 只有在 load_mode: open 时才需要填，并且要和上面的 concurrency
+# 按顺序一一配对（两个列表长度必须相同，第 1 项对应第 1 档，第 2 项对应第 2 档……）：
+#   request_rate 这一档的数字 = 这一档要维持的"每秒发送请求数"，是这次压测真正的目标速率
+#   concurrency  这一档的数字 = 这一档"同时还没收到回复、正在等结果"的请求数上限；
+#     一旦同时等结果的请求达到这个数量，新请求会先排队等一个名额空出来才发送，
+#     避免压测机自己被没完没了攒出去的请求撑爆内存/连接数
+#
+# 举例：假设要测「QPS 从 5 逐步加到 120」这 6 档，并且任何时候最多允许 200 个请求
+# 同时在等结果，那么要把最上面的 concurrency（第 6 行）也改成 6 个数字，和 request_rate
+# 一一对应：
+#   concurrency:  [200, 200, 200, 200, 200, 200]
+#   request_rate: [5,   10,  20,  40,  80,  120]
+#load_mode: "open"
+#request_rate: [5, 10, 20, 40, 80, 120]
+
+# SLO 达标率（goodput）：三项阈值都可选，只填要考察的维度；一个都不填等价于不配置
+# 这一整块。开启后终端/Excel 会额外展示「同时满足全部已配置阈值的请求占比」。
+#slo:
+#  ttft_ms: 800
+#  tpot_ms: 50
+#  e2e_ms: 10000
+
+#show_histogram: true  # 终端/Excel 额外输出 E2E/TTFT 延迟分布直方图，默认 false 不影响现有报表
 
 # 错误率早停与跳档：某个并发档位失败率过高时提前结束该档位，并跳过该模型剩余
 # 更高的并发档位，避免在明显顶不住的档位上继续空跑。默认关闭，不影响现有行为。

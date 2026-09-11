@@ -27,6 +27,18 @@ const (
 	PromptModeCodex PromptMode = "codex"
 )
 
+// LoadMode 定义档位的负载生成方式。
+type LoadMode string
+
+const (
+	// LoadModeClosed 是现有行为：固定协程数的 closed-loop，等响应才发下一个。
+	LoadModeClosed LoadMode = "closed"
+	// LoadModeOpen 按目标 RPS 泊松到达发送请求（不等响应），用于避免
+	// Coordinated Omission——closed-loop 在过载时会自动降速，系统性低估
+	// 真实流量下的排队延迟和尾延迟。
+	LoadModeOpen LoadMode = "open"
+)
+
 // 各字段的默认值，与旧命令行 flag 的默认值保持一致。
 const (
 	defaultBaseURL        = "https://api.openai.com"
@@ -36,7 +48,7 @@ const (
 	defaultPromptTokens   = 2000
 
 	defaultPromptText  = "Explain in plain English what API latency and throughput mean for a developer integrating LLM APIs. Write about 120 words. Do not use bullet points."
-	defaultImagePrompt = "A single red circle on white background, minimal flat design."
+	defaultImagePrompt = "A cute fluffy kitten playing with a ball of yarn, soft lighting, adorable, high detail."
 
 	defaultMaxErrorRate = 0.5
 	defaultMinSamples   = 20
@@ -65,6 +77,27 @@ type Config struct {
 	TokenGroups    map[string][]string `yaml:"token_groups"`
 	EarlyStop      EarlyStopConfig     `yaml:"early_stop"`
 	Cluster        *ClusterConfig      `yaml:"cluster"` // 仅 performance-cluster run 使用，单机版忽略
+
+	// LoadMode/RequestRate 均可选，不配置时等价于现有 closed-loop 行为。
+	LoadMode    LoadMode  `yaml:"load_mode"`
+	RequestRate []float64 `yaml:"request_rate"`
+
+	// SLO 达标率（goodput）判定阈值，留空（nil）不计算 goodput，不影响现有报表。
+	SLO *SLOConfig `yaml:"slo"`
+
+	// 结构化输出路径，留空不导出，不影响现有行为。
+	JSONOutput string `yaml:"json_output"`
+	CSVOutput  string `yaml:"csv_output"`
+
+	// ShowHistogram 为真时在终端/Excel 额外输出延迟分布直方图，默认 false 不影响现有报表。
+	ShowHistogram bool `yaml:"show_histogram"`
+}
+
+// SLOConfig 描述 goodput 判定用的 SLO 阈值（毫秒），三项均可选，0 表示该维度不参与判定。
+type SLOConfig struct {
+	TTFTMs int `yaml:"ttft_ms"`
+	TPOTMs int `yaml:"tpot_ms"`
+	E2EMs  int `yaml:"e2e_ms"`
 }
 
 // ClusterConfig 描述分布式压测的 coordinator 侧参数（agent 列表与调度节奏）。
@@ -175,6 +208,9 @@ func (c *Config) applyDefaults() {
 			c.Cluster.AgentTimeout = defaultAgentTimeout
 		}
 	}
+	if c.LoadMode == "" {
+		c.LoadMode = LoadModeClosed
+	}
 }
 
 // validate 校验必填项与取值合法性。默认值已在 applyDefaults 中填充，
@@ -232,6 +268,32 @@ func (c *Config) validate() error {
 	if c.Cluster != nil {
 		if err := c.Cluster.validate(); err != nil {
 			return err
+		}
+	}
+
+	switch c.LoadMode {
+	case LoadModeClosed, LoadModeOpen:
+	default:
+		return fmt.Errorf("load_mode 非法：%q（合法值：%s、%s）", c.LoadMode, LoadModeClosed, LoadModeOpen)
+	}
+	if c.LoadMode == LoadModeOpen {
+		if len(c.RequestRate) == 0 {
+			return fmt.Errorf("load_mode 为 %s 时 request_rate 为必填项，至少配置一个目标 RPS", LoadModeOpen)
+		}
+		if len(c.RequestRate) != len(c.Concurrency) {
+			return fmt.Errorf("request_rate 长度（%d）必须与 concurrency 长度（%d）一致：open 模式下两者逐档位一一对应",
+				len(c.RequestRate), len(c.Concurrency))
+		}
+		for i, r := range c.RequestRate {
+			if r <= 0 {
+				return fmt.Errorf("request_rate 必须为正数，发现非法值：request_rate[%d]=%v", i, r)
+			}
+		}
+	}
+
+	if c.SLO != nil {
+		if c.SLO.TTFTMs < 0 || c.SLO.TPOTMs < 0 || c.SLO.E2EMs < 0 {
+			return fmt.Errorf("slo.ttft_ms/tpot_ms/e2e_ms 不能为负数")
 		}
 	}
 
@@ -294,6 +356,23 @@ func (c *Config) ToBenchmark() types.BenchmarkConfig {
 		MaxErrorRate:          c.EarlyStop.MaxErrorRate,
 		MinSamples:            c.EarlyStop.MinSamples,
 		SkipHigherConcurrency: c.EarlyStop.Enabled && c.EarlyStop.SkipHigherConcurrency != nil && *c.EarlyStop.SkipHigherConcurrency,
+		OpenLoop:              c.LoadMode == LoadModeOpen,
+		RequestRate:           append([]float64(nil), c.RequestRate...),
+		SLO:                   c.sloThresholds(),
+		ShowHistogram:         c.ShowHistogram,
+	}
+}
+
+// sloThresholds 把 YAML 里的毫秒整数阈值转换为 types.SLOThresholds。
+// c.SLO 为 nil（未配置该块）时返回零值，Enabled() 恒为 false。
+func (c *Config) sloThresholds() types.SLOThresholds {
+	if c.SLO == nil {
+		return types.SLOThresholds{}
+	}
+	return types.SLOThresholds{
+		TTFT: time.Duration(c.SLO.TTFTMs) * time.Millisecond,
+		TPOT: time.Duration(c.SLO.TPOTMs) * time.Millisecond,
+		E2E:  time.Duration(c.SLO.E2EMs) * time.Millisecond,
 	}
 }
 

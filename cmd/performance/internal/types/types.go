@@ -67,6 +67,7 @@ type RequestMetrics struct {
 	OutputEstimated   bool          // OutputTokens 来自文本估算（provider 未上报 usage），可信度低于精确上报
 	CachedInputTokens int64         // 命中缓存的输入 token 数（provider 未上报缓存字段时为 0）
 	CacheReported     bool          // provider 是否上报了缓存命中字段（区分「未上报」与「上报了但命中为 0」）
+	ITLSamplesMS      []float64     // 逐次输出内容事件之间的间隔（毫秒），按 SSE 事件粒度近似逐 token 生成间隔（ITL），仅成功的流式请求非空
 	Success           bool
 	Error             string
 	ErrorType         ErrorType
@@ -93,6 +94,40 @@ type BenchmarkConfig struct {
 	MaxErrorRate          float64 // 档位失败率超过该值判定为不可用，(0,1]
 	MinSamples            int     // 至少凑够这么多请求才评估错误率
 	SkipHigherConcurrency bool    // 判定不可用时是否跳过该模型剩余的更高并发档位
+
+	// open-loop 目标 RPS 模式，OpenLoop 为 false（默认）时以下字段无效，
+	// 行为与现有 closed-loop 完全一致。开启后 RequestRate 与 Concurrency
+	// 一一对应：RequestRate[i] 是该档位的目标 RPS（泊松到达），
+	// Concurrency[i] 变为该档位同时在途请求数上限。
+	OpenLoop    bool
+	RequestRate []float64
+
+	// SLO 达标率（goodput）判定阈值，SLO.Enabled() 为 false 时不计算 goodput。
+	SLO SLOThresholds
+
+	// ShowHistogram 为真时额外计算延迟分布直方图（E2E/TTFT），默认 false 不计算。
+	ShowHistogram bool
+}
+
+// SLOThresholds 定义 goodput 判定用的 SLO 阈值，三项均可选。
+// 零值表示该维度不参与达标判定；Enabled 为 false（全部为零）时整个 goodput
+// 计算被跳过，报表不产生任何新内容。
+type SLOThresholds struct {
+	TTFT time.Duration // 首 token 时延阈值，0 表示不参与判定
+	TPOT time.Duration // 每 token 生成耗时阈值，0 表示不参与判定
+	E2E  time.Duration // 端到端时延阈值，0 表示不参与判定
+}
+
+// Enabled 判断是否至少配置了一项 SLO 阈值。
+func (s SLOThresholds) Enabled() bool {
+	return s.TTFT > 0 || s.TPOT > 0 || s.E2E > 0
+}
+
+// HistBucket 是延迟分布直方图的一个分桶：[Lo, Hi) 区间内的样本数。
+type HistBucket struct {
+	Lo    time.Duration
+	Hi    time.Duration // 最后一个桶 Hi 为该桶下限之上的所有样本（无上界）
+	Count int
 }
 
 // PickToken 从该模型关联的 token 分组中随机返回一个 token。
@@ -125,6 +160,7 @@ type BenchmarkResult struct {
 	Provider     Provider
 	TokenGroup   string
 	Concurrency  int
+	TargetRate   float64       // open-loop 档位的目标 RPS，closed-loop 档位为 0
 	Start        time.Time     // 档位开始时刻
 	Window       time.Duration // 名义压测时长（吞吐统计窗口的上限）
 	Elapsed      time.Duration // 实际运行时长（含 deadline 后在途请求的排空期）
@@ -160,6 +196,7 @@ type AggregatedMetrics struct {
 	Provider      Provider
 	TokenGroup    string
 	Concurrency   int
+	TargetRate    float64       // open-loop 档位的目标 RPS，closed-loop 档位为 0
 	Start         time.Time     // 档位开始时刻，用于报表排查时段性波动
 	Elapsed       time.Duration // 实际运行时长（含 deadline 后在途请求的排空期）
 	Window        time.Duration // 吞吐统计窗口（正常档位为名义压测时长，中止档位为实际运行时长）
@@ -173,9 +210,10 @@ type AggregatedMetrics struct {
 	// 仅流式端点有效
 	TTFT             PercentileStats // 首 token 时延，仅统计成功请求
 	TPOT             PercentileStats // Time Per Output Token（gen_window / output_tokens）
+	ITL              PercentileStats // 逐输出内容事件的间隔（按 SSE 事件粒度近似的逐 token 生成间隔），剔除口径与 TPOT/TPS 一致
 	TpsPr            FloatStats      // per-request tokens/s 分位数
 	TpmPr            FloatStats      // per-request tokens/min 分位数
-	GenSpeedExcluded int             // 未通过有效性校验（生成窗口过窄或超出单流物理天花板，测不出真实解码速度）被 TPOT/TPS/TPM 剔除的成功样本数
+	GenSpeedExcluded int             // 未通过有效性校验（生成窗口过窄或超出单流物理天花板，测不出真实解码速度）被 TPOT/TPS/TPM/ITL 剔除的成功样本数
 	EstimatedOutputs int             // OutputTokens 来自文本估算（无 usage 上报）的成功样本数；占比高时速率分位数可信度下降
 	IOR              FloatStats      // per-request 输出/输入 token 比（output_tokens / input_tokens）分位数
 	CacheHitPr       FloatStats      // per-request 缓存命中率（cached_input_tokens / input_tokens * 100）分位数，仅上报了缓存字段的请求入样
@@ -197,4 +235,14 @@ type AggregatedMetrics struct {
 	TotalCachedTokens  int64
 	CacheReportedCount int     // 上报了缓存命中字段的成功请求数；为 0 时缓存命中率无意义，报表显示 N/A
 	CacheHitRatio      float64 // TotalCachedTokens / TotalInputTokens * 100(%)
+
+	// SLO 达标率（goodput），SLOConfigured 为 false 时以下三项无意义，报表显示 N/A
+	SLOConfigured bool
+	SLO           SLOThresholds // 判定用的阈值原样保留，供报表渲染摘要文案
+	GoodputCount  int
+	GoodputRatio  float64 // GoodputCount / Total * 100(%)
+
+	// 延迟分布直方图，仅 ShowHistogram 开启时计算，否则为空
+	E2EHistogram  []HistBucket
+	TTFTHistogram []HistBucket
 }

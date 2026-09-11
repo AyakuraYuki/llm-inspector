@@ -2,13 +2,17 @@ package report
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 )
 
-const colWidth = 80
+const (
+	colWidth     = 80
+	histBarWidth = 30 // ASCII 直方图条形长度（字符数），按各桶计数占最大计数的比例归一化
+)
 
 func PrintReport(results []types.AggregatedMetrics) {
 	fmt.Printf("\n%s\n", strings.Repeat("=", colWidth))
@@ -30,8 +34,8 @@ func printOne(agg types.AggregatedMetrics) {
 	}
 
 	fmt.Printf("\n%s\n", strings.Repeat("-", colWidth))
-	fmt.Printf("  Model: %s  |  Provider: %s  |  Token Group: %s  |  Concurrency: %d\n",
-		agg.Model, agg.Provider, agg.TokenGroup, agg.Concurrency)
+	fmt.Printf("  Model: %s  |  Provider: %s  |  Token Group: %s  |  Concurrency: %d%s\n",
+		agg.Model, agg.Provider, agg.TokenGroup, agg.Concurrency, targetRateSuffix(agg.TargetRate))
 	fmt.Printf("  Elapsed: %s  |  Window: %s  |  Requests: %d total, %d ok, %d failed (%.1f%% error)\n",
 		formatDuration(agg.Elapsed), formatDuration(agg.Window), agg.Total, agg.Success, agg.Failed, errPct)
 	fmt.Printf("%s\n", strings.Repeat("-", colWidth))
@@ -44,6 +48,7 @@ func printOne(agg types.AggregatedMetrics) {
 	if isStreaming {
 		printRow("TTFT", agg.TTFT)
 		printRow("TPOT", agg.TPOT)
+		printRow("ITL", agg.ITL)
 		printRow("E2E Latency", agg.Latency)
 
 		fmt.Printf("  %s\n", strings.Repeat("-", colWidth-2))
@@ -54,6 +59,19 @@ func printOne(agg types.AggregatedMetrics) {
 
 		fmt.Printf("  %s\n", strings.Repeat("-", colWidth-2))
 		fmt.Printf("  QPS: %.4f req/s  |  QPM: %.2f req/min\n", agg.QPS, agg.QPM)
+	}
+
+	// goodput：仅当本次运行配置了 SLO 阈值才输出，未配置时不产生任何新内容
+	if agg.SLOConfigured {
+		fmt.Printf("  Goodput: %.1f%% (SLO: %s)\n", agg.GoodputRatio, sloSummary(agg, isStreaming))
+	}
+
+	// 延迟分布直方图：仅 show_histogram 开启时才有数据，未开启时两个切片都是 nil
+	if len(agg.E2EHistogram) > 0 {
+		printHistogram("E2E Latency", agg.E2EHistogram)
+	}
+	if isStreaming && len(agg.TTFTHistogram) > 0 {
+		printHistogram("TTFT", agg.TTFTHistogram)
 	}
 
 	// 吞吐口径按"窗口内完成"计数，E2E 时延占窗口比例过高时结果偏低，需醒目提示
@@ -184,4 +202,46 @@ func formatRatio(r float64) string {
 		return "N/A"
 	}
 	return fmt.Sprintf("%.3f", r)
+}
+
+// targetRateSuffix 渲染 open-loop 档位的目标 RPS 后缀；closed-loop（TargetRate<=0）返回空字符串。
+func targetRateSuffix(rate float64) string {
+	if rate <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("  |  Target Rate: %.2f req/s (open-loop)", rate)
+}
+
+// sloSummary 渲染 goodput 判定用的 SLO 阈值摘要，只展示已配置（非零）的维度。
+func sloSummary(agg types.AggregatedMetrics, isStreaming bool) string {
+	var parts []string
+	if isStreaming && agg.SLO.TTFT > 0 {
+		parts = append(parts, fmt.Sprintf("TTFT<=%s", formatDuration(agg.SLO.TTFT)))
+	}
+	if isStreaming && agg.SLO.TPOT > 0 {
+		parts = append(parts, fmt.Sprintf("TPOT<=%s", formatDuration(agg.SLO.TPOT)))
+	}
+	if agg.SLO.E2E > 0 {
+		parts = append(parts, fmt.Sprintf("E2E<=%s", formatDuration(agg.SLO.E2E)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// printHistogram 打印一组分桶的 ASCII 条形图，条形长度按各桶计数占最大计数的
+// 比例归一化到 histBarWidth。全零计数（理论上不会发生，metrics.Histogram
+// 保证至少一个桶非空）时不打印。
+func printHistogram(title string, buckets []types.HistBucket) {
+	maxCount := 0
+	for _, b := range buckets {
+		maxCount = max(maxCount, b.Count)
+	}
+	if maxCount == 0 {
+		return
+	}
+	fmt.Printf("  %s 分布:\n", title)
+	for _, b := range buckets {
+		barLen := int(math.Round(float64(b.Count) / float64(maxCount) * histBarWidth))
+		bar := strings.Repeat("█", barLen) + strings.Repeat("░", histBarWidth-barLen)
+		fmt.Printf("    %10s - %-10s | %s %d\n", formatDuration(b.Lo), formatDuration(b.Hi), bar, b.Count)
+	}
 }

@@ -67,12 +67,22 @@ func ExportExcel(cfg types.BenchmarkConfig, results []types.AggregatedMetrics, r
 	_, _ = f.NewSheet("错误明细")
 	writeErrorDetailSheet(f, results, hdrStyle)
 
-	// 数据 sheet 统一冻结表头并开启自动筛选：模型数 × 分组 × 并发档位会让行数
-	// 迅速膨胀，没有这两项就只能在几百行里靠肉眼定位某个分组的结果。
-	for _, sh := range []string{
+	// ── Sheet 8: 延迟分布（可选）───────────────────────────────────────────
+	// 仅当至少一个档位携带直方图数据（即运行时开启了 show_histogram）才新增，
+	// 关闭时 sheet 总数、既有 7 个 sheet 的内容和顺序都不变。
+	sheets := []string{
 		"TTFT延迟", "生成速度(TPS·token)", "QPS压测(TPS·req)",
 		"输入输出Token比", "错误分析", "错误明细",
-	} {
+	}
+	if hasHistogramData(results) {
+		_, _ = f.NewSheet("延迟分布")
+		writeHistogramSheet(f, results, hdrStyle)
+		sheets = append(sheets, "延迟分布")
+	}
+
+	// 数据 sheet 统一冻结表头并开启自动筛选：模型数 × 分组 × 并发档位会让行数
+	// 迅速膨胀，没有这两项就只能在几百行里靠肉眼定位某个分组的结果。
+	for _, sh := range sheets {
 		freezeHeaderWithFilter(f, sh)
 	}
 
@@ -114,9 +124,11 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 		{"接口地址", cfg.BaseURL},
 		{"时长 / 并发档位", cfg.Duration.String()},
 		{"并发档位", fmt.Sprintf("%v", cfg.Concurrency)},
+		{"负载模式", loadModeSummary(cfg)},
 		{"模型数量", len(cfg.Models)},
 		{"排除模型", excludedModel},
 		{"错误率早停", earlyStopSummary(cfg)},
+		{"SLO / Goodput", sloConfigSummary(cfg)},
 	}
 	for _, m := range cfg.Models {
 		rows = append(rows, []any{
@@ -141,6 +153,7 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 	rows = append(rows, []any{"指标说明", "见下"})
 	rows = append(rows, []any{"- TTFT", "首 token 时延"})
 	rows = append(rows, []any{"- TPOT", "每 token 生成耗时（gen_window/tokens）"})
+	rows = append(rows, []any{"- ITL", "逐输出内容事件之间的间隔（近似逐 token 生成间隔），按 SSE 事件粒度采样：多数 provider 一个事件对应一个或几个 token，并非逐 token 精确值；剔除口径同 TPOT/TPS"})
 	rows = append(rows, []any{"- TPS", "per-request tokens/s（P50/P95/P99/P99.5/P99.9；生成窗口 <100ms 或 <5%×E2E 的样本视为一次性到达，不入样，剔除数见备注列）"})
 	rows = append(rows, []any{"- TPM", "per-request tokens/min（P50/P95/P99/P99.5/P99.9；入样口径同 TPS）"})
 	rows = append(rows, []any{"- System TPS", "吞吐窗口内完成的总 tokens/窗口时长（窗口外完成的长尾请求不计入）"})
@@ -148,6 +161,7 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 	rows = append(rows, []any{"- QPM（又称RPM）", "系统级 req/min"})
 	rows = append(rows, []any{"- I/O Ratio", "输出/输入 token 比（output_tokens/input_tokens，per-request 分位数及 System 总量比）"})
 	rows = append(rows, []any{"- Cache Hit Rate", "缓存命中率（cached_input_tokens/input_tokens*100%，input_tokens 为全量输入口径：Anthropic 已补入 cache_read/cache_creation；per-request 分位数及 System 总量比，仅上报了缓存字段的 provider 有效，未上报时显示 N/A）"})
+	rows = append(rows, []any{"- Goodput", "满足全部已配置 SLO 阈值（TTFT/TPOT/E2E）的请求占总请求数的比例；未配置 slo 时显示 N/A"})
 
 	for i, row := range rows {
 		xlSetCell(f, sh, 1, i+3, row[0])
@@ -196,6 +210,72 @@ func earlyStopSummary(cfg types.BenchmarkConfig) string {
 	return fmt.Sprintf("启用（阈值 %.1f%%，最少样本 %d，%s）", cfg.MaxErrorRate*100, cfg.MinSamples, skip)
 }
 
+// loadModeSummary 渲染总览 sheet 里的负载模式摘要。
+func loadModeSummary(cfg types.BenchmarkConfig) string {
+	if !cfg.OpenLoop {
+		return "closed-loop（默认）"
+	}
+	return fmt.Sprintf("open-loop（目标 RPS：%v，泊松到达）", cfg.RequestRate)
+}
+
+// sloConfigSummary 渲染总览 sheet 里的 SLO/Goodput 配置摘要。
+func sloConfigSummary(cfg types.BenchmarkConfig) string {
+	if !cfg.SLO.Enabled() {
+		return "未配置"
+	}
+	var parts []string
+	if cfg.SLO.TTFT > 0 {
+		parts = append(parts, fmt.Sprintf("TTFT<=%s", cfg.SLO.TTFT))
+	}
+	if cfg.SLO.TPOT > 0 {
+		parts = append(parts, fmt.Sprintf("TPOT<=%s", cfg.SLO.TPOT))
+	}
+	if cfg.SLO.E2E > 0 {
+		parts = append(parts, fmt.Sprintf("E2E<=%s", cfg.SLO.E2E))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// hasHistogramData 判断本次结果里是否至少有一个档位携带直方图数据。
+func hasHistogramData(results []types.AggregatedMetrics) bool {
+	for _, agg := range results {
+		if len(agg.E2EHistogram) > 0 || len(agg.TTFTHistogram) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// writeHistogramSheet 把每个档位的 E2E/TTFT 延迟分布直方图拆成一行一个分桶。
+func writeHistogramSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
+	const sh = "延迟分布"
+	headers := []any{"模型 ID", "Provider", "Token Group", "并发数", "指标", "区间下限(ms)", "区间上限(ms)", "样本数"}
+	xlSetRow(f, sh, 1, headers, hdrStyle)
+	_ = f.SetColWidth(sh, "A", "A", 30)
+	_ = f.SetColWidth(sh, "B", "B", 14)
+	_ = f.SetColWidth(sh, "C", "C", 18)
+	_ = f.SetColWidth(sh, "D", "D", 10)
+	_ = f.SetColWidth(sh, "E", "E", 12)
+	_ = f.SetColWidth(sh, "F", "H", 14)
+
+	row := 2
+	writeBuckets := func(agg types.AggregatedMetrics, metric string, buckets []types.HistBucket) {
+		for _, b := range buckets {
+			xlSetRow(f, sh, row, []any{
+				agg.Model, string(agg.Provider), agg.TokenGroup, agg.Concurrency, metric,
+				durMs(b.Lo), durMs(b.Hi), b.Count,
+			}, 0)
+			row++
+		}
+	}
+	for _, agg := range results {
+		writeBuckets(agg, "E2E Latency", agg.E2EHistogram)
+		if agg.Provider != types.ProviderOpenAIImage {
+			writeBuckets(agg, "TTFT", agg.TTFTHistogram)
+		}
+	}
+}
+
 func writeTTFTSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "TTFT延迟"
 	headers := []any{
@@ -238,6 +318,7 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 		"样本数(N)",
 		"tokens/s P50", "tokens/s P95", "tokens/s P99", "tokens/s P99.5", "tokens/s P99.9", "tokens/s Avg",
 		"TPOT P50(ms)", "TPOT P95(ms)", "TPOT P99(ms)", "TPOT P99.5(ms)", "TPOT P99.9(ms)", "TPOT Avg(ms)",
+		"ITL P50(ms)", "ITL P95(ms)", "ITL P99(ms)", "ITL P99.5(ms)", "ITL P99.9(ms)", "ITL Avg(ms)", "ITL 样本数(N)",
 		"TPM P50", "TPM P95", "TPM P99", "TPM P99.5", "TPM P99.9", "TPM Avg",
 		"System TPS(tok/s)",
 		"System TPM(tok/min)",
@@ -248,8 +329,10 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 	_ = f.SetColWidth(sh, "B", "B", 14)
 	_ = f.SetColWidth(sh, "C", "C", 18)
 	_ = f.SetColWidth(sh, "D", "E", 10)
-	_ = f.SetColWidth(sh, "F", "S", 14)
-	_ = f.SetColWidth(sh, "T", "T", 40)
+	secondLastCol := xlCell(len(headers)-1, 1)
+	lastCol := xlCell(len(headers), 1)
+	_ = f.SetColWidth(sh, "F", secondLastCol[:len(secondLastCol)-1], 14)
+	_ = f.SetColWidth(sh, lastCol[:len(lastCol)-1], lastCol[:len(lastCol)-1], 40)
 
 	row := 2
 	for _, agg := range results {
@@ -261,7 +344,7 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 			notes = append(notes, fmt.Sprintf("样本量少(N=%d)，P99 仅供参考", agg.TpsPr.N))
 		}
 		if agg.GenSpeedExcluded > 0 {
-			notes = append(notes, fmt.Sprintf("剔除 %d 条未通过速率有效性校验的样本（一次性到达或超出单流物理上限，测不出真实解码速度）", agg.GenSpeedExcluded))
+			notes = append(notes, fmt.Sprintf("剔除 %d 条未通过速率有效性校验的样本（一次性到达或超出单流物理上限，测不出真实解码速度），ITL 剔除口径同 TPOT/TPS", agg.GenSpeedExcluded))
 		}
 		if agg.EstimatedOutputs > 0 {
 			notes = append(notes, fmt.Sprintf("%d/%d 条成功样本的 token 数为文本估算（无 usage 上报），速率分位数可信度下降", agg.EstimatedOutputs, agg.Success))
@@ -275,6 +358,7 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 			agg.TpsPr.N,
 			fVal(agg.TpsPr.P50), fVal(agg.TpsPr.P95), fVal(agg.TpsPr.P99), fVal(agg.TpsPr.P995), fVal(agg.TpsPr.P999), fVal(agg.TpsPr.Avg),
 			durMs(agg.TPOT.P50), durMs(agg.TPOT.P95), durMs(agg.TPOT.P99), durMs(agg.TPOT.P995), durMs(agg.TPOT.P999), durMs(agg.TPOT.Avg),
+			durMs(agg.ITL.P50), durMs(agg.ITL.P95), durMs(agg.ITL.P99), durMs(agg.ITL.P995), durMs(agg.ITL.P999), durMs(agg.ITL.Avg), agg.ITL.N,
 			fVal(agg.TpmPr.P50), fVal(agg.TpmPr.P95), fVal(agg.TpmPr.P99), fVal(agg.TpmPr.P995), fVal(agg.TpmPr.P999), fVal(agg.TpmPr.Avg),
 			fVal(agg.TPS),
 			fVal(agg.TPM),
@@ -332,9 +416,9 @@ func writeIORSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "QPS压测(TPS·req)"
 	headers := []any{
-		"模型 ID", "Provider", "Token Group", "类型", "并发数", "开始时间",
+		"模型 ID", "Provider", "Token Group", "类型", "并发数", "目标RPS(open-loop)", "开始时间",
 		"实际时长(s)", "吞吐窗口(s)", "QPS(req/s)", "QPM(req/min)", "成功率(%)",
-		"成功请求数", "失败请求数", "备注",
+		"成功请求数", "失败请求数", "Goodput(%)", "SLO 阈值", "备注",
 	}
 	xlSetRow(f, sh, 1, headers, hdrStyle)
 	_ = f.SetColWidth(sh, "A", "A", 30)
@@ -342,9 +426,11 @@ func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 	_ = f.SetColWidth(sh, "C", "C", 18)
 	_ = f.SetColWidth(sh, "D", "D", 14)
 	_ = f.SetColWidth(sh, "E", "E", 10)
-	_ = f.SetColWidth(sh, "F", "F", 22)
-	_ = f.SetColWidth(sh, "G", "M", 12)
-	_ = f.SetColWidth(sh, "N", "N", 55)
+	_ = f.SetColWidth(sh, "F", "F", 18)
+	_ = f.SetColWidth(sh, "G", "G", 22)
+	_ = f.SetColWidth(sh, "H", "O", 12)
+	_ = f.SetColWidth(sh, "P", "P", 30)
+	_ = f.SetColWidth(sh, "Q", "Q", 55)
 
 	row := 2
 	for _, agg := range results {
@@ -367,12 +453,22 @@ func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 			}
 			note += "本档位因错误率超阈值被提前终止"
 		}
+		targetRate := "N/A"
+		if agg.TargetRate > 0 {
+			targetRate = fmt.Sprintf("%.2f", agg.TargetRate)
+		}
+		goodput, sloText := "N/A", "N/A"
+		if agg.SLOConfigured {
+			goodput = fmt.Sprintf("%.1f", agg.GoodputRatio)
+			sloText = sloSummary(agg, agg.Provider != types.ProviderOpenAIImage)
+		}
 		xlSetRow(f, sh, row, []any{
 			agg.Model,
 			string(agg.Provider),
 			agg.TokenGroup,
 			category,
 			agg.Concurrency,
+			targetRate,
 			startStr,
 			round2(agg.Elapsed.Seconds()),
 			round2(agg.Window.Seconds()),
@@ -381,6 +477,8 @@ func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 			round1(successPct),
 			agg.Success,
 			agg.Failed,
+			goodput,
+			sloText,
 			note,
 		}, 0)
 		row++

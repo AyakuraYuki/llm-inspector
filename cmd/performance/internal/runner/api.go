@@ -578,6 +578,7 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 		OutputEstimated:   outputEstimated,
 		CachedInputTokens: max(int64(0), s.CachedInputTokens),
 		CacheReported:     s.CacheSeen,
+		ITLSamplesMS:      s.ITLSamplesMS,
 		Success:           true,
 	}
 }

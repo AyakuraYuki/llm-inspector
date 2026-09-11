@@ -95,7 +95,8 @@ type TaskStart struct {
 	//（早停判定统一由 coordinator 汇总全局错误率后广播 cancel）。
 	Bench       types.BenchmarkConfig
 	Model       types.ModelSpec // 含 token
-	Concurrency int             // 本机分片并发数
+	Concurrency int             // 本机分片并发数（open-loop 时为本机在途请求数上限分片）
+	TargetRate  float64         // 本机分片目标 RPS，closed-loop（Bench.OpenLoop 为 false）恒为 0
 	Ramp        time.Duration   // coordinator 按全局并发统一计算的错峰窗口
 }
 
