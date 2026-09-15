@@ -1,121 +1,39 @@
-# performance-cluster 多机分布式压测配置文件
+# performance-cluster 多机分布式压测配置
 # 用法：performance-cluster run -config config.yaml
 #
-# 在单机 performance 配置的基础上新增 cluster 段；
-# 其余字段语义一致，唯一区别是 concurrency 档位为【全局总并发】，
-# coordinator 按节点数切分后下发到各 agent。
+# 在单机 performance 配置的基础上新增 cluster 段，其余字段语义一致；唯一区别是
+# concurrency / request_rate / requests_per_level 都是【全局】取值，coordinator 按 agent 数
+# 切分后下发。全文按「集群 → 被测对象 → 负载 → 请求内容 → 测量卫生 → 输出」分六段，
+# 注释掉的项都是可选项，默认值写在各自说明里；未知字段会直接报错。
 
-# 分布式集群配置（performance-cluster run 的必填段，单机 performance 忽略）
+# ============================================================
+# 0. 集群
+# ============================================================
+
 cluster:
-  # agent 守护进程地址列表（host:port），必填且不可重复。
-  # 各节点先执行：performance-cluster agent -listen :7070
+  # agent 守护进程地址（host:port），必填且不可重复。各节点先执行：
+  #   performance-cluster agent -listen :7070
   agents:
     - "10.0.0.1:7070"
     - "10.0.0.2:7070"
     - "10.0.0.3:7070"
-  auth_token: ""      # 可选的共享密钥，与 agent 的 -token 参数一致；留空不鉴权
+  auth_token: ""      # 可选共享密钥，与 agent 的 -token 一致；留空不鉴权
   poll_interval: 1s   # coordinator 进度轮询间隔，默认 1s
   agent_timeout: 10s  # agent 连续无响应超过该窗口判定失联并中止压测，默认 10s
 
-base_url: "https://api.openai.com"          # API 服务地址
-duration: 60s                               # 每个并发档位的测试时长（time.Duration，如 60s、2m、1m30s）
-concurrency: [1000, 2000, 3000, 4000, 5000] # 并发档位列表（全局总并发），逐档运行；按节点数切分，如 5000÷4 节点=每台 1250
+# 版本约束：协议当前为 v3，coordinator 与各节点 agent 必须是同一次构建的二进制，
+# 否则探活阶段就会因协议版本不匹配中止。
+# 安全提示：token 随任务通过内网 HTTP 明文下发到各 agent，请确保集群运行在可信内网。
 
-# 文本端点的 prompt 配置
-prompt:
-  # 生成方式，三选一：
-  #   text    —— 使用下方 text 的固定文本
-  #   dynamic —— 每次请求现场拼装约 tokens 个 token 的随机长文本，用于长上下文压测
-  #   codex   —— 类 Codex 系统提示词 + 随机简短提问，模拟高相似度请求场景
-  mode: "text"
-  # mode=text 时使用的固定 prompt
-  text: "Explain in plain English what API latency and throughput mean for a developer integrating LLM APIs. Write about 120 words. Do not use bullet points."
-  # mode=dynamic 时生成文本的目标近似 token 数
-  tokens: 2000
+# ============================================================
+# 1. 被测服务与模型
+# ============================================================
 
-# 图片生成端点的测试 prompt
-image_prompt: "A cute fluffy kitten playing with a ball of yarn, soft lighting, adorable, high detail."
+base_url: "https://api.openai.com"   # API 服务地址
 
-warmup: true          # 正式测试前是否执行预热阶段（各 agent 按首个正式档位的分片并发预热）
-warmup_duration: 10s  # 预热阶段持续时长
-cooldown: 5s          # 每个并发档位之间的冷却等待时间
-
-# prompt.tokens_min/tokens_max、prompt.mode: dataset、tokenizer、requests_per_level、
-# open_loop_unbounded、warmup_per_level 语义与单机版一致（见 ../../configs/config.example.yaml），
-# 分布式下的落点：
-#   tokenizer.path    —— 只下发路径，每台 agent 必须预置同一份词表目录；预检时校验 SHA-256 指纹
-#   dataset           —— coordinator 读文件后把全部行内联下发，agent 无需预置
-#   requests_per_level —— 全局请求数按拿到并发份额的 agent 等分，全局恰好发出配置的数量
-#tokenizer:
-#  path: "configs/tokenizers/kimi-k3"
-#requests_per_level: [2000]
-#warmup_per_level: true
-
-# think_time / max_output_tokens 语义与单机版完全一致，随任务下发给各 agent，
-# 全集群统一取值：
-#   think_time       —— closed-loop 下每个 worker 两次请求之间的等待，默认 300ms；
-#                       与 evalscope 对拍吞吐数字时显式设为 0s（完成即发）
-#   max_output_tokens —— 各协议输出长度上限的统一取值，默认 8192
-# 注意：协议当前为 v3（v2 起新增这两项，v3 新增上面那一组），coordinator 与各节点 agent
-# 必须是同一次构建的二进制，否则探活阶段就会因协议版本不匹配中止（这正是版本校验要拦的情况）。
-#think_time: 0s
-#max_output_tokens: 8192
-
-output: ""       # Excel 输出路径（留空则自动生成时间戳文件名，如 bench-cluster-20260618T150405.xlsx）
-no_excel: false  # 跳过 Excel 导出，仅打印终端报告
-no_tui: false    # 禁用 TUI，使用纯文本控制台输出（stdout 非终端时自动禁用）
-
-#json_output: "bench-cluster.json"  # 结构化 JSON 报告路径，留空不导出，供 CI 基线比对/画趋势图
-#csv_output: "bench-cluster.csv"    # 逐档位 CSV 汇总路径，留空不导出
-
-# sample_output：原始样本 JSONL 导出路径（一行一条请求），留空不导出。
-# 分布式模式下由 coordinator 写出【全节点合并后】的样本——各 agent 的样本已归一到
-# 统一时间轴再池化，因此文件格式与单机版完全相同，不是每台一份各自的时间轴。
-#sample_output: "bench-cluster-samples.jsonl"
-
-# 压测时"怎么发请求"，两种方式二选一，语义和单机版完全一致（这里再简单说一遍）：
-#   closed（默认，不填就是这个）：像打电话问客服——问一句，等它答完了，才问下一句。
-#     如果被测的服务已经很忙、答得慢，压测这边也会跟着被动地放慢发请求的速度，
-#     测出来的结果会显得比真实情况更"扛得住"。
-#   open：像按固定节奏发短信——不管上一条有没有收到回复，都按设定的"每秒发几条"
-#     持续发新请求，能真实模拟"线上有这么多用户涌进来"的场景。
-# 怎么选：只想看"并发数越高、响应会慢多少"，用默认的 closed 就够了；已经知道线上
-# 大概有多少 QPS、想验证这个流量下扛不扛得住，就要用 open。
-#
-# request_rate 只有在 load_mode: open 时才需要填，是【全局】目标 RPS（所有 agent 加起来
-# 要达到的总速率），coordinator 会按 agent 数量自动等分下发，不用自己手动拆分。
-# 它要和上面的 concurrency 按顺序一一配对（两个列表长度必须相同）：
-#   request_rate 这一档的数字 = 全部 agent 合计要维持的"每秒发送请求数"
-#   concurrency  这一档的数字 = 全部 agent 合计"同时还没收到回复"的请求数上限
-#     （同样会按 agent 数量切分到各机器，避免任何一台机器被没完没了攒出去的请求撑爆）
-#
-# 举例：假设要测「全局 QPS 从 50 逐步加到 800」这 5 档，并且任何时候全局最多允许 2000
-# 个请求同时在等结果，那么要把最上面的 concurrency（第 22 行）也改成 5 个数字：
-#   concurrency:  [2000, 2000, 2000, 2000, 2000]
-#   request_rate: [50,   100,  200,  400,  800]
-#load_mode: "open"
-#request_rate: [50, 100, 200, 400, 800]
-
-# SLO 达标率（goodput），与单机版语义一致，三项阈值都可选：
-#slo:
-#  ttft_ms: 800
-#  tpot_ms: 50
-#  e2e_ms: 10000
-
-#show_histogram: true  # 终端/Excel 额外输出 E2E/TTFT 延迟分布直方图，默认 false 不影响现有报表
-
-# 错误率早停与跳档：分布式模式下由 coordinator 汇总【所有节点】的累计错误率统一判定，
-# 触发后广播取消该档位的全部分片。默认关闭，不影响现有行为。
-#early_stop:
-#  enabled: true                 # 总开关
-#  max_error_rate: 0.5           # 档位失败率超过该值判定为不可用，(0,1]，默认 0.5
-#  min_samples: 20               # 至少凑够这么多请求（全局累计）才评估错误率，默认 20
-#  skip_higher_concurrency: true # 判定不可用时是否跳过该模型剩余的更高并发档位，默认 true
-
-# 待测模型列表（必填，至少一个）
-# token_group 决定该模型使用哪个 token 池；同一模型可以重复配置，分别测试不同渠道分组。
-# 警告：如果配置了 token_group，缺少相应组的 tokens 时不会使用兜底的 default 分组。
-# 注意：token 随任务通过内网 HTTP 明文下发到各 agent，请确保集群运行在可信内网。
+# 待测模型（必填，至少一个）。同一模型可重复出现，用不同 token_group 分别测不同渠道。
+# token_group 决定该模型从哪个 token 池取 Bearer token；未填时用 default 组（即下方 tokens）。
+# 注意：填了 token_group 但该组不存在或为空时直接报错，不会回退到 default 组。
 models:
   - name: "gpt-5.6-sol"
     provider: "openai"
@@ -124,8 +42,8 @@ models:
     provider: "anthropic"
     token_group: "anthropic-channel"
 
-# 命名 token 分组。每个分组对应 NewAPI 中一组渠道关联的 Bearer token。
-# 同一分组内的多个 token 仍会在每次请求时随机选取（各 agent 独立随机，整体近似均匀）。
+# 命名 token 分组，每组对应 NewAPI 里一组渠道的 Bearer token；
+# 同组多个 token 逐请求随机选取（各 agent 独立随机，整体近似均匀）。
 token_groups:
   openai-channel:
     - "sk-openai-abcdef0123456789"
@@ -133,6 +51,126 @@ token_groups:
     - "sk-anthropic-abcdef0123456789"
     - "sk-anthropic-fedcba9876543210"
 
-# 兼容旧配置：未填写 models[].token_group 的模型使用 default 分组。
+# default 组（兼容旧配置）：给没写 token_group 的模型用，可与 token_groups 并存。
 #tokens:
 #  - "sk-default-abcdef0123456789"
+
+# ============================================================
+# 2. 负载：档位与发送方式（全部为全局取值）
+# ============================================================
+
+duration: 60s                               # 每个档位的测试时长（如 60s、2m、1m30s）
+concurrency: [1000, 2000, 3000, 4000, 5000] # 全局总并发档位，逐档运行；按 agent 数切分，如 5000 ÷ 4 台 = 每台 1250
+
+# load_mode：请求怎么发，二选一，语义与单机版一致。
+#   closed（默认）—— 每个 worker 等上一个响应回来才发下一个。服务变慢时压测端跟着降速，
+#                    结果偏乐观，适合粗看「并发越高慢多少」。
+#   open          —— 按 request_rate 的目标 RPS 泊松到达，不等响应。已知线上 QPS、
+#                    想验证该流量下扛不扛得住时用它。
+#load_mode: "open"
+#
+# request_rate：仅 open 模式，必填，是【全局】目标 RPS，coordinator 按 agent 数等分下发，
+# 不用手动拆分。与 concurrency 等长、逐档配对：
+#   request_rate[i] = 第 i 档全部 agent 合计要维持的每秒请求数
+#   concurrency[i]  = 第 i 档全部 agent 合计的在途请求数上限（同样切分到各机器）
+#   例：全局 QPS 从 50 加到 800 共 5 档，任一时刻全局最多 2000 个在途请求：
+#     concurrency:  [2000, 2000, 2000, 2000, 2000]
+#     request_rate: [50,   100,  200,  400,  800]
+#request_rate: [50, 100, 200, 400, 800]
+#
+# open_loop_unbounded：仅 open 模式。true 时各 agent 都不设在途上限、到点即发（严格开环），
+# 服务端跟不上时在途请求会在每台压测机侧无限堆积，开之前先估算各机的承受力。
+#open_loop_unbounded: true
+
+# think_time：仅 closed 模式，同一 worker「收到响应」到「发下一个请求」的停顿，默认 300ms，
+# 全集群统一取值。与 evalscope 对拍吞吐时显式 0s（完成即发）；改动后新旧报告的 QPS/TPS
+# 不能直接比较。
+#think_time: 0s
+
+# requests_per_level：每档【全局】请求数上限。按拿到并发份额的 agent 等分，全局恰好发出
+# 配置的数量；「发满」与「到达 duration」先到者结束。写一项作用于全部档位，或与 concurrency
+# 等长逐档对应；留空为纯时长制（默认）。
+#requests_per_level: [2000]
+
+# ============================================================
+# 3. 请求内容
+# ============================================================
+
+prompt:
+  # mode 四选一：
+  #   text    —— 固定使用下方 text
+  #   dynamic —— 每次请求现场拼装目标长度的随机长文本（长上下文压测），
+  #              长度由 tokens 或 tokens_min/tokens_max 决定
+  #   codex   —— 类 Codex 系统提示词 + 随机简短提问，模拟高相似度请求
+  #   dataset —— 从 dataset_path 随机取一个非空行；coordinator 读文件后把全部行内联下发，
+  #              agent 无需预置文件
+  mode: "text"
+  text: "Explain in plain English what API latency and throughput mean for a developer integrating LLM APIs. Write about 120 words. Do not use bullet points."
+
+  # dynamic 的目标 token 数。配了下方 tokenizer 时精确收敛到该值，
+  # 否则按「4 字符 ≈ 1 token」近似（不同词表误差可达 ±30%）
+  tokens: 2000
+  # dynamic 改为在 [tokens_min, tokens_max] 内逐请求均匀采样（覆盖 tokens），
+  # 两项须同时配置且 min <= max。
+  #tokens_min: 500
+  #tokens_max: 4000
+
+  # dataset 模式必填：纯文本文件（coordinator 本机路径），每个非空行一条 prompt
+  #dataset_path: "prompts.txt"
+
+# tokenizer：本地分词器（可选），语义与单机版一致（精确收敛 dynamic 长度、usage 缺失时
+# 本地计数、usage 对拍）。分布式下只下发 path 与词表的 SHA-256 指纹：每台 agent 必须在
+# 同一路径预置同一份词表目录，预检阶段校验指纹，不一致直接中止。
+# 词表必须与被测模型一致：仓库预置 deepseek-v4 / kimi-k3；Claude/Gemini 词表不公开。
+#tokenizer:
+#  path: "configs/tokenizers/kimi-k3"
+#  usage_drift_pct: 10   # 默认 10；显式 0 关闭对拍
+
+# 图片生成端点的 prompt
+image_prompt: "A cute fluffy kitten playing with a ball of yarn, soft lighting, adorable, high detail."
+
+# max_output_tokens：各协议输出长度上限的统一取值，默认 8192，全集群统一。
+#max_output_tokens: 8192
+
+# ============================================================
+# 4. 测量卫生：预热、冷却、早停
+# ============================================================
+
+warmup: true          # 正式档位前先预热（各 agent 按即将开始档位的分片并发/速率预热），结果丢弃
+warmup_duration: 10s  # 每次预热时长
+# warmup_per_level：默认只在每个模型的首档前预热一次；true 时每个档位前都预热，
+# 代价是总耗时多「档位数 × warmup_duration」。
+#warmup_per_level: true
+
+cooldown: 5s          # 档位之间的冷却等待；0s 表示不等待
+
+# early_stop：由 coordinator 汇总【所有节点】的累计错误率统一判定，触发后广播取消该档位
+# 的全部分片，并跳过该模型剩余更高档位。默认关闭。
+#early_stop:
+#  enabled: true
+#  max_error_rate: 0.5           # 失败率超过该值判定不可用，(0,1]，默认 0.5
+#  min_samples: 20               # 至少凑够这么多请求（全局累计）才评估，默认 20
+#  skip_higher_concurrency: true # 判定不可用后是否跳过该模型剩余更高档位，默认 true
+
+# ============================================================
+# 5. 指标与输出（均在 coordinator 侧产出）
+# ============================================================
+
+# slo：goodput 判定阈值（毫秒），只填要考察的维度，语义与单机版一致。
+#slo:
+#  ttft_ms: 800
+#  tpot_ms: 50
+#  e2e_ms: 10000
+
+#show_histogram: true  # 终端/Excel 额外输出 E2E/TTFT 延迟分布直方图
+
+output: ""       # Excel 输出路径，留空自动生成时间戳文件名（如 bench-cluster-20260618T150405.xlsx）
+no_excel: false  # 跳过 Excel，仅打印终端报告
+no_tui: false    # 禁用 TUI，改用纯文本输出（stdout 非终端时自动禁用）
+
+#json_output: "bench-cluster.json"  # 结构化 JSON 报告，供 CI 基线比对/画趋势图
+#csv_output: "bench-cluster.csv"    # 逐档位 CSV 汇总
+
+# sample_output：原始样本 JSONL（一行一条请求）。coordinator 写出【全节点合并后】的样本：
+# 各 agent 的样本已归一到统一时间轴再池化，文件格式与单机版完全相同。
+#sample_output: "bench-cluster-samples.jsonl"

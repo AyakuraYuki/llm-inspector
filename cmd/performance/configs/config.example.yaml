@@ -1,141 +1,18 @@
-# performance 压测工具配置文件
+# performance 单机压测配置
 # 用法：performance -config config.yaml
-
-base_url: "https://api.openai.com"                    # API 服务地址
-duration: 60s                                         # 每个并发档位的测试时长（time.Duration，如 60s、2m、1m30s）
-concurrency: [10, 20, 30, 40, 50, 75, 100, 120, 150]  # 并发档位列表，逐档运行
-
-# 文本端点的 prompt 配置
-prompt:
-  # 生成方式，四选一：
-  #   text    —— 使用下方 text 的固定文本
-  #   dynamic —— 每次请求现场拼装目标长度的随机长文本，用于长上下文压测
-  #   codex   —— 类 Codex 系统提示词 + 随机简短提问，模拟高相似度请求场景
-  #   dataset —— 从 dataset_path 文件随机取一个非空行作为 prompt（evalscope 的 line_by_line）
-  mode: "text"
-  # mode=text 时使用的固定 prompt
-  text: "Explain in plain English what API latency and throughput mean for a developer integrating LLM APIs. Write about 120 words. Do not use bullet points."
-  # mode=dynamic 时生成文本的目标 token 数（单点）。配了下面的 tokenizer 就精确收敛到这个数，
-  # 否则按「4 字符 ≈ 1 token」近似（不同模型词表下误差可达 ±30%）
-  tokens: 2000
-  # mode=dynamic 时改为在 [tokens_min, tokens_max] 内逐请求均匀采样（覆盖 tokens）：
-  # 真实流量的输入长度是分布不是单点。两项须同时配置且 min <= max。
-  #tokens_min: 500
-  #tokens_max: 4000
-  # mode=dataset 时必填：纯文本文件，每个非空行一条 prompt
-  #dataset_path: "prompts.txt"
-
-# tokenizer：本地分词器（可选）。path 指向 configs/tokenizers/<name> 目录（HF tokenizer.json
-# 或 tiktoken 格式，纯 Go 加载）。启用后：
-#   1. dynamic 模式按分词器精确收敛输入长度（对标 evalscope --tokenizer-path）
-#   2. provider 未上报 usage 时用它对可见文本计数，比字符估算准得多
-#   3. usage 对拍：服务端 completion_tokens 与本地计数偏差超过 usage_drift_pct（%）的请求打标，
-#      能抓出网关/上游 usage 统计不符的问题；思考型请求自动跳过（思考 token 不在可见文本里）
-# 词表必须与被测模型一致：仓库预置 deepseek-v4 / kimi-k3，GPT 系可自补 o200k_base；
-# Claude/Gemini 词表不公开，对这两家配了也拿不到准确数字。目录不可加载时配置阶段直接报错。
-#tokenizer:
-#  path: "configs/tokenizers/kimi-k3"
-#  usage_drift_pct: 10   # 默认 10；显式 0 关闭对拍
-
-# 图片生成端点的测试 prompt
-image_prompt: "A cute fluffy kitten playing with a ball of yarn, soft lighting, adorable, high detail."
-
-warmup: true          # 正式测试前是否执行预热阶段（并发=即将开始档位的并发数，时长由 warmup_duration 控制）
-warmup_duration: 10s  # 预热阶段持续时长
-# warmup_per_level：true 时每个并发档位前都预热（默认只在每个模型首档前预热一次），并发/速率取本档的。
-# 档位切换同样有冷启动批效应，首档预热挡不住；代价是总耗时多「档位数 × warmup_duration」。
-#warmup_per_level: true
-cooldown: 5s          # 每个并发档位之间的冷却等待时间
-
-# requests_per_level：每档请求数上限（对标 evalscope --number）。档位在「发满」与「到达 duration」
-# 两者先到者结束，在途请求照常等完。写一项作用于全部档位，或与 concurrency 等长逐档对应。
-# 留空为纯时长制（默认）。请求数制下吞吐分母是实际用时（含最后一批排空），与 evalscope 口径一致。
-#requests_per_level: [500]
-
-# think_time：closed-loop 下同一个 worker「收到上一个响应」到「发出下一个请求」之间的
-# 等待，用来模拟真人看完回答再提问的停顿。默认 300ms。
-#   - 想模拟真实用户节奏 → 保持默认（或按场景调大）
-#   - 想和 evalscope 等工具对拍吞吐数字 → 显式设为 0s，对齐它「完成即发」的语义
-# 注意：同样的 concurrency 下，think_time 越大实际负载越低，QPS/TPS 会更保守，
-# 所以改动它之后，新旧两次压测的吞吐数字不能直接比较。
-# open-loop（load_mode: open）不使用该项——发送节奏由 request_rate 决定。
-#think_time: 0s
-
-# max_output_tokens：各协议输出长度上限的统一取值（openai/anthropic 的 max_tokens、
-# gemini 的 maxOutputTokens、responses 的 max_output_tokens），默认 8192。
-# 压测要控制输出长度，否则 E2E/TPOT/TPS 会混入「模型这次想写多长」的自然波动，
-# 分位数失真、跨协议也不好比，所以默认是固定值而非不限。
-#max_output_tokens: 8192
-
-output: ""       # Excel 输出路径（留空则自动生成时间戳文件名，如 bench-20260618T150405.xlsx）
-no_excel: false  # 跳过 Excel 导出，仅打印终端报告
-no_tui: false    # 禁用 TUI，使用纯文本控制台输出（stdout 非终端时自动禁用）
-
-#json_output: "bench.json"  # 结构化 JSON 报告路径，留空不导出，供 CI 基线比对/画趋势图
-#csv_output: "bench.csv"    # 逐档位 CSV 汇总路径，留空不导出
-
-# sample_output：原始样本 JSONL 导出路径（一行一条请求，含失败请求），留空不导出。
-# 报表里的分位数是聚合结果，一旦想换口径重算（换分位算法、按时段切窗口、剔除某类样本）
-# 没有原始样本就只能重跑一遍压测，而压测环境往往不可复现。
-# 体积提示：每条成功样本都带 ITL 数组（逐输出事件的间隔），长输出高并发的档位
-# 单档可达几十 MB，按需开启。
-#sample_output: "bench-samples.jsonl"
-
-# 压测时"怎么发请求"，两种方式二选一：
-#   closed（默认，不填就是这个）：像打电话问客服——问一句，等它答完了，才问下一句。
-#     如果被测的服务已经很忙、答得慢，压测这边也会跟着被动地放慢发请求的速度。
-#     这样测出来的结果会显得比真实情况更"扛得住"，因为服务器忙不过来的那段时间，
-#     其实并没有真的有那么多请求打过去，是压测程序自己主动让路了。
-#   open：像按固定节奏发短信——不管上一条有没有收到回复，都按你设定的"每秒发几条"
-#     持续发新的请求。这样才能真实模拟"线上有这么多用户涌进来"的场景，看服务器
-#     在这个流量下会不会开始排队、响应会不会越等越久。
 #
-# 怎么选：只是想大概看看"并发数越高、响应会慢多少"，用默认的 closed 就够了；
-# 如果已经知道线上大概有多少 QPS（每秒请求数），想验证这个流量下响应速度扛不扛得住，
-# 就要用 open，因为只有 open 才是按真实的"每秒多少个请求"这个节奏在测。
-#load_mode: "open"
-#
-# request_rate 只有在 load_mode: open 时才需要填，并且要和上面的 concurrency
-# 按顺序一一配对（两个列表长度必须相同，第 1 项对应第 1 档，第 2 项对应第 2 档……）：
-#   request_rate 这一档的数字 = 这一档要维持的"每秒发送请求数"，是这次压测真正的目标速率
-#   concurrency  这一档的数字 = 这一档"同时还没收到回复、正在等结果"的请求数上限；
-#     一旦同时等结果的请求达到这个数量，新请求会先排队等一个名额空出来才发送，
-#     避免压测机自己被没完没了攒出去的请求撑爆内存/连接数
-#
-# 举例：假设要测「QPS 从 5 逐步加到 120」这 6 档，并且任何时候最多允许 200 个请求
-# 同时在等结果，那么要把最上面的 concurrency（第 6 行）也改成 6 个数字，和 request_rate
-# 一一对应：
-#   concurrency:  [200, 200, 200, 200, 200, 200]
-#   request_rate: [5,   10,  20,  40,  80,  120]
-#load_mode: "open"
-#request_rate: [5, 10, 20, 40, 80, 120]
-#
-# open_loop_unbounded：只在 load_mode: open 下有效。默认 false 时同时在途的请求数到达 concurrency
-# 就先排队等空位（过载时退化成限速闭环，安全但偏乐观）；true 时到点即发、不设在途上限，是严格的
-# 开环（evalscope --open-loop 的语义），找系统饱和点更真实，但服务端跟不上时压测机侧的在途请求会
-# 无限堆积，开之前先估算压测机的协程/连接/内存承受力。
-#open_loop_unbounded: true
+# 全文按「被测对象 → 负载 → 请求内容 → 测量卫生 → 输出」分五段，相互关联的参数放在一起。
+# 注释掉的项都是可选项，默认值写在各自说明里；未知字段会直接报错，方便发现拼写问题。
 
-# SLO 达标率（goodput）：三项阈值都可选，只填要考察的维度；一个都不填等价于不配置
-# 这一整块。开启后终端/Excel 会额外展示「同时满足全部已配置阈值的请求占比」。
-#slo:
-#  ttft_ms: 800
-#  tpot_ms: 50
-#  e2e_ms: 10000
+# ============================================================
+# 1. 被测服务与模型
+# ============================================================
 
-#show_histogram: true  # 终端/Excel 额外输出 E2E/TTFT 延迟分布直方图，默认 false 不影响现有报表
+base_url: "https://api.openai.com"   # API 服务地址
 
-# 错误率早停与跳档：某个并发档位失败率过高时提前结束该档位，并跳过该模型剩余
-# 更高的并发档位，避免在明显顶不住的档位上继续空跑。默认关闭，不影响现有行为。
-#early_stop:
-#  enabled: true                 # 总开关
-#  max_error_rate: 0.5           # 档位失败率超过该值判定为不可用，(0,1]，默认 0.5
-#  min_samples: 20               # 至少凑够这么多请求才评估错误率，避免开局抖动误判，默认 20
-#  skip_higher_concurrency: true # 判定不可用时是否跳过该模型剩余的更高并发档位，默认 true
-
-# 待测模型列表（必填，至少一个）
-# token_group 决定该模型使用哪个 token 池；同一模型可以重复配置，分别测试不同渠道分组。
-# 警告：如果配置了 token_group，缺少相应组的 tokens 时不会使用兜底的 default 分组。
+# 待测模型（必填，至少一个）。同一模型可重复出现，用不同 token_group 分别测不同渠道。
+# token_group 决定该模型从哪个 token 池取 Bearer token；未填时用 default 组（即下方 tokens）。
+# 注意：填了 token_group 但该组不存在或为空时直接报错，不会回退到 default 组。
 models:
   - name: "gpt-5.6-sol"
     provider: "openai"
@@ -144,8 +21,7 @@ models:
     provider: "anthropic"
     token_group: "anthropic-channel"
 
-# 命名 token 分组。每个分组对应 NewAPI 中一组渠道关联的 Bearer token。
-# 同一分组内的多个 token 仍会在每次请求时随机选取。
+# 命名 token 分组，每组对应 NewAPI 里一组渠道的 Bearer token；同组多个 token 逐请求随机选取。
 token_groups:
   openai-channel:
     - "sk-openai-abcdef0123456789"
@@ -153,7 +29,133 @@ token_groups:
     - "sk-anthropic-abcdef0123456789"
     - "sk-anthropic-fedcba9876543210"
 
-# 兼容旧配置：未填写 models[].token_group 的模型使用 default 分组。
-# 使用 token_groups 时可以不配置 tokens，或者配置以作为兜底。
+# default 组（兼容旧配置）：给没写 token_group 的模型用，可与 token_groups 并存。
 #tokens:
 #  - "sk-default-abcdef0123456789"
+
+# ============================================================
+# 2. 负载：档位与发送方式
+# ============================================================
+
+duration: 60s                                         # 每个档位的测试时长（如 60s、2m、1m30s）
+concurrency: [10, 20, 30, 40, 50, 75, 100, 120, 150]  # 并发档位，逐档运行
+
+# load_mode：请求怎么发，二选一。
+#   closed（默认）—— 每个 worker 等上一个响应回来才发下一个。服务变慢时压测端跟着降速，
+#                    结果偏乐观（Coordinated Omission），适合粗看「并发越高慢多少」。
+#   open          —— 按 request_rate 的目标 RPS 泊松到达，不等响应。已知线上 QPS、
+#                    想验证该流量下扛不扛得住时用它。
+#load_mode: "open"
+#
+# request_rate：仅 open 模式，必填，与 concurrency 等长、逐档配对：
+#   request_rate[i] = 第 i 档要维持的每秒请求数，是真正的目标速率
+#   concurrency[i]  = 第 i 档同时在途（未收到响应）的请求数上限，防止压测机被撑爆
+#   例：QPS 从 5 加到 120 共 6 档，任一时刻最多 200 个在途请求，两个列表都改成 6 项：
+#     concurrency:  [200, 200, 200, 200, 200, 200]
+#     request_rate: [5,   10,  20,  40,  80,  120]
+#request_rate: [5, 10, 20, 40, 80, 120]
+#
+# open_loop_unbounded：仅 open 模式。true 时不设在途上限、到点即发（evalscope --open-loop 的
+# 严格开环），找饱和点更真实；但服务端跟不上时在途请求会在压测机侧无限堆积，
+# 开之前先估算压测机的协程/连接/内存承受力。
+#open_loop_unbounded: true
+
+# think_time：仅 closed 模式，同一 worker「收到响应」到「发下一个请求」的停顿，默认 300ms。
+#   模拟真人节奏         → 保持默认或按场景调大
+#   与 evalscope 对拍吞吐 → 显式 0s（完成即发）
+# 同样并发下 think_time 越大实际负载越低，改动后新旧报告的 QPS/TPS 不能直接比较。
+#think_time: 0s
+
+# requests_per_level：每档请求数上限（evalscope --number）。「发满」与「到达 duration」先到者
+# 结束，在途请求照常等完，吞吐分母为实际用时。写一项作用于全部档位，或与 concurrency 等长
+# 逐档对应；留空为纯时长制（默认）。
+#requests_per_level: [500]
+
+# ============================================================
+# 3. 请求内容
+# ============================================================
+
+prompt:
+  # mode 四选一：
+  #   text    —— 固定使用下方 text
+  #   dynamic —— 每次请求现场拼装目标长度的随机长文本（长上下文压测），
+  #              长度由 tokens 或 tokens_min/tokens_max 决定
+  #   codex   —— 类 Codex 系统提示词 + 随机简短提问，模拟高相似度请求
+  #   dataset —— 从 dataset_path 随机取一个非空行（evalscope 的 line_by_line）
+  mode: "text"
+  text: "Explain in plain English what API latency and throughput mean for a developer integrating LLM APIs. Write about 120 words. Do not use bullet points."
+
+  # dynamic 的目标 token 数。配了下方 tokenizer 时精确收敛到该值，
+  # 否则按「4 字符 ≈ 1 token」近似（不同词表误差可达 ±30%）
+  tokens: 2000
+  # dynamic 改为在 [tokens_min, tokens_max] 内逐请求均匀采样（覆盖 tokens）：
+  # 真实流量的输入长度是分布不是单点。两项须同时配置且 min <= max。
+  #tokens_min: 500
+  #tokens_max: 4000
+
+  # dataset 模式必填：纯文本文件，每个非空行一条 prompt
+  #dataset_path: "prompts.txt"
+
+# tokenizer：本地分词器（可选），path 指向 configs/tokenizers/<name> 目录
+# （HF tokenizer.json 或 tiktoken 格式，纯 Go 加载）。启用后：
+#   1. dynamic 模式按词表精确收敛输入长度（对标 evalscope --tokenizer-path）
+#   2. 服务端未上报 usage 时用它对可见文本计数，替代字符估算
+#   3. usage 对拍：completion_tokens 与本地计数偏差超过 usage_drift_pct（%）的请求打标，
+#      能抓出网关/上游 usage 统计不符；思考型请求自动跳过（思考 token 不在可见文本里）
+# 词表必须与被测模型一致：仓库预置 deepseek-v4 / kimi-k3，GPT 系可自补 o200k_base；
+# Claude/Gemini 词表不公开。目录不可加载时配置阶段直接报错。
+#tokenizer:
+#  path: "configs/tokenizers/kimi-k3"
+#  usage_drift_pct: 10   # 默认 10；显式 0 关闭对拍
+
+# 图片生成端点的 prompt
+image_prompt: "A cute fluffy kitten playing with a ball of yarn, soft lighting, adorable, high detail."
+
+# max_output_tokens：各协议输出长度上限的统一取值，默认 8192
+# （openai/anthropic 的 max_tokens、gemini 的 maxOutputTokens、responses 的 max_output_tokens）。
+# 固定上限才能让 E2E/TPOT/TPS 不混入「模型这次想写多长」的自然波动，跨协议也好比。
+#max_output_tokens: 8192
+
+# ============================================================
+# 4. 测量卫生：预热、冷却、早停
+# ============================================================
+
+warmup: true          # 正式档位前先预热（并发/速率取即将开始的档位），结果丢弃
+warmup_duration: 10s  # 每次预热时长
+# warmup_per_level：默认只在每个模型的首档前预热一次；true 时每个档位前都预热，
+# 挡住档位切换的冷启动批效应，代价是总耗时多「档位数 × warmup_duration」。
+#warmup_per_level: true
+
+cooldown: 5s          # 档位之间的冷却等待；0s 表示不等待
+
+# early_stop：某档失败率过高时提前结束该档，并跳过该模型剩余更高档位，默认关闭。
+#early_stop:
+#  enabled: true
+#  max_error_rate: 0.5           # 失败率超过该值判定不可用，(0,1]，默认 0.5
+#  min_samples: 20               # 至少凑够这么多请求才评估，避免开局抖动误判，默认 20
+#  skip_higher_concurrency: true # 判定不可用后是否跳过该模型剩余更高档位，默认 true
+
+# ============================================================
+# 5. 指标与输出
+# ============================================================
+
+# slo：goodput 判定阈值（毫秒），只填要考察的维度。开启后终端/Excel 额外展示
+# 「同时满足全部已配置阈值的请求占比」。
+#slo:
+#  ttft_ms: 800
+#  tpot_ms: 50
+#  e2e_ms: 10000
+
+#show_histogram: true  # 终端/Excel 额外输出 E2E/TTFT 延迟分布直方图
+
+output: ""       # Excel 输出路径，留空自动生成时间戳文件名（如 bench-20260618T150405.xlsx）
+no_excel: false  # 跳过 Excel，仅打印终端报告
+no_tui: false    # 禁用 TUI，改用纯文本输出（stdout 非终端时自动禁用）
+
+#json_output: "bench.json"  # 结构化 JSON 报告，供 CI 基线比对/画趋势图
+#csv_output: "bench.csv"    # 逐档位 CSV 汇总
+
+# sample_output：原始样本 JSONL（一行一条请求，含失败请求）。报表里的分位数是聚合结果，
+# 想换口径重算（换分位算法、按时段切窗口、剔除某类样本）时只有原始样本能免于重跑压测。
+# 每条成功样本带 ITL 数组，长输出高并发的单档可达几十 MB，按需开启。
+#sample_output: "bench-samples.jsonl"
