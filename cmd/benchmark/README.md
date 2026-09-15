@@ -93,19 +93,23 @@ go run . -config ./configs/config.example.yml
 base_url: "https://api.openai.com/v1" # API 服务地址
 api_key: "sk-xxx"                     # Bearer token
 model: "gpt-4"                        # 待测模型名称
-max_tokens: 65536                     # 最大输出 token 数限制
+max_tokens: 65536                     # 输出上限，映射到请求的 max_tokens
+#max_completion_tokens: 65536          # 输出上限，映射到请求的 max_completion_tokens（o 系列等新模型用这个）
 max_workers: 1                        # 并发数
 reasoning_effort: high                # 思考强度，支持 low | medium | high | max（部分模型）
 ```
 
-| 字段               | 必填 | 默认值  | 说明                                                                    |
-|--------------------|------|---------|-------------------------------------------------------------------------|
-| `base_url`         | 是   | -       | OpenAI-Compatible 的 API 地址                                           |
-| `api_key`          | 是   | -       | 鉴权 token                                                              |
-| `model`            | 是   | -       | 待测模型名                                                              |
-| `max_tokens`       | 否   | `65536` | 映射到请求的 `max_completion_tokens`，填 0 或不填时取默认值             |
-| `max_workers`      | 否   | `1`     | 同时在跑的问题数，小于 1 时按 1 处理                                    |
-| `reasoning_effort` | 否   | 空      | 非空时透传给请求的 `reasoning_effort`（会转小写），具体取值参考模型规格 |
+| 字段                    | 必填 | 默认值 | 说明                                                                     |
+|-------------------------|------|--------|--------------------------------------------------------------------------|
+| `base_url`              | 是   | -      | OpenAI-Compatible 的 API 地址                                            |
+| `api_key`               | 是   | -      | 鉴权 token                                                               |
+| `model`                 | 是   | -      | 待测模型名                                                               |
+| `max_tokens`            | 否   | 不传   | 原样映射到请求的 `max_tokens`；不填则请求里不带该字段，由服务端决定上限  |
+| `max_completion_tokens` | 否   | 不传   | 原样映射到请求的 `max_completion_tokens`；o 系列等只认这个字段的模型用它 |
+| `max_workers`           | 否   | `1`    | 同时在跑的问题数，小于 1 时按 1 处理                                     |
+| `reasoning_effort`      | 否   | 空     | 非空时透传给请求的 `reasoning_effort`（会转小写），具体取值参考模型规格  |
+
+`max_tokens` 与 `max_completion_tokens` 各自独立：填哪个就传哪个，两个都填就都传（是否接受由服务端决定），两个都不填就不限制输出长度。旧版本会在 `max_tokens` 缺省时自动补 65536，现在不再有这个默认值。
 
 `dataset` 和 `custom_questions` 至少要有一个能产出问题，否则启动时会以「缺少测试数据集」报错退出。
 
@@ -175,7 +179,7 @@ custom_questions:
 
 ```
 [14:30:25] Loaded 33 questions
-[14:30:25] Config: max_tokens=65536, max_workers=2
+[14:30:25] Config: max_tokens=65536, max_completion_tokens=unset, max_workers=2
 [14:30:25] Model: gpt-4, Base URL: https://api.openai.com/v1
 [14:30:25] Benchmark started
 [14:30:25] Question 1 started
@@ -322,7 +326,7 @@ Finish Reason:              stop
 `finish_reason` 用来区分失败的原因：
 
 - **答案错误但响应正常**：`finish_reason=stop`，模型正常完成推理但给出了错误答案
-- **响应被截断**：`finish_reason=length`，达到了 `max_tokens` 限制，`extracted_answer` 可能为空
+- **响应被截断**：`finish_reason=length`，达到了 `max_tokens` / `max_completion_tokens` 限制（未配置时是服务端自己的上限），`extracted_answer` 可能为空
 - **异常终止**：`finish_reason=null`，响应提前终止（网络问题、API 错误等）
 
 对于请求层面的失败（建流失败、流中断、超时），报告里会把错误归类到 EOF、JSON 截断、超时、建流失败几种情形并给出可能成因。
@@ -403,13 +407,13 @@ AIME 题目原始来源为 Mathematical Association of America (MAA)，答案表
 
 三个工具（benchmark / evaluation / performance）对 OpenAI 兼容协议的参数语义已对齐（见 `internal/llm/params` 包），本工具在映射总表中的位置：
 
-| 统一参数                | benchmark 的实现                                                       | 说明                                                  |
-|-------------------------|------------------------------------------------------------------------|-------------------------------------------------------|
-| 输出上限                | `max_tokens` 配置 → 请求的 `max_completion_tokens`（默认 65536）       | 保留（不映射到 `max_tokens`：o 系列模型不接受该字段） |
-| `reasoning_effort`      | 配置项 `reasoning_effort`（自动转小写）                                | 与 evaluation 的 SDK 直传等价                         |
-| `temperature` / `top_p` | 配置项（范围校验 0–2 / 0–1）                                           | 与 evaluation 对齐                                    |
-| thinking 类厂商参数     | 配置项 `extra_thinking`（JSON 原样注入顶层 `thinking` 字段）           | 等价于 evaluation 的 `ExtraParams["thinking"]`        |
-| 其他厂商参数            | fork 库的 `chat_template_kwargs` / `service_tier` / `verbosity` 等字段 | 等价于 evaluation 的 `ExtraParams` 任意参数透传       |
+| 统一参数                | benchmark 的实现                                                                                     | 说明                                                                 |
+|-------------------------|------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------|
+| 输出上限                | `max_tokens` → 请求 `max_tokens`；`max_completion_tokens` → 请求 `max_completion_tokens`；均无默认值 | 两项独立、按需二选一或并填；o 系列模型只接受 `max_completion_tokens` |
+| `reasoning_effort`      | 配置项 `reasoning_effort`（自动转小写）                                                              | 与 evaluation 的 SDK 直传等价                                        |
+| `temperature` / `top_p` | 配置项（范围校验 0–2 / 0–1）                                                                         | 与 evaluation 对齐                                                   |
+| thinking 类厂商参数     | 配置项 `extra_thinking`（JSON 原样注入顶层 `thinking` 字段）                                         | 等价于 evaluation 的 `ExtraParams["thinking"]`                       |
+| 其他厂商参数            | fork 库的 `chat_template_kwargs` / `service_tier` / `verbosity` 等字段                               | 等价于 evaluation 的 `ExtraParams` 任意参数透传                      |
 
 **token 统计**：请求带 `stream_options.include_usage=true`，`TokensUsed` 采用最终 usage chunk 的 `completion_tokens`；网关不支持该选项时回退到旧行为（内容 chunk 计数）。报告 JSON 同时输出 `prompt_tokens` /
 `cached_tokens` / `reasoning_tokens`。

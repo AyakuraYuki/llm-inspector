@@ -94,8 +94,7 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 
 	// 创建请求
 	req := openai.ChatCompletionRequest{
-		Model:               model,
-		MaxCompletionTokens: benchmarkCfg.MaxTokens,
+		Model: model,
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleUser,
@@ -105,6 +104,12 @@ func benchmarkQuestion(client *openai.Client, model string, q types.Question, in
 		Stream: true,
 		// 请求流结束前附加携带 usage 的最终 chunk，用于精确 token 统计
 		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
+	}
+	if benchmarkCfg.MaxTokens != nil {
+		req.MaxTokens = *benchmarkCfg.MaxTokens
+	}
+	if benchmarkCfg.MaxCompletionTokens != nil {
+		req.MaxCompletionTokens = *benchmarkCfg.MaxCompletionTokens
 	}
 	if benchmarkCfg.ReasoningEffort != "" {
 		req.ReasoningEffort = strings.ToLower(benchmarkCfg.ReasoningEffort)

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/benchmark/internal/config"
@@ -54,7 +55,7 @@ func main() {
 	)
 
 	logger.Printf("Loaded %d questions", len(questions))
-	logger.Printf("Config: max_tokens=%d, max_workers=%d", benchmarkCfg.MaxTokens, benchmarkCfg.MaxWorkers)
+	logger.Printf("Config: max_tokens=%s, max_completion_tokens=%s, max_workers=%d", optIntLabel(benchmarkCfg.MaxTokens), optIntLabel(benchmarkCfg.MaxCompletionTokens), benchmarkCfg.MaxWorkers)
 	logger.Printf("Model: %s, Base URL: %s", cfg.Model, cfg.BaseURL)
 
 	// 创建 OpenAI 客户端；Transport 包一层请求错误记录（传输失败/非 2xx/流中断）
@@ -76,4 +77,12 @@ func main() {
 	report.OutputResults(results, reportDir)         // 输出 JSON 结果
 	report.SaveIndividualReports(results, reportDir) // 保存每个问题的详细报告
 	reporter.PrintStatistics(results, elapsed)       // 计算统计信息
+}
+
+// optIntLabel 把可选整数配置渲染成日志文本：nil 表示未配置、请求里不带该字段。
+func optIntLabel(v *int) string {
+	if v == nil {
+		return "unset"
+	}
+	return strconv.Itoa(*v)
 }

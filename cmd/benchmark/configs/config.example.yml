@@ -4,7 +4,10 @@
 base_url: "https://api.openai.com/v1" # API 服务地址
 api_key: "sk-xxx"                     # Bearer token
 model: "gpt-4"                        # 待测模型名称
-max_tokens: 65536                     # 最大输出token数限制
+# 输出上限：两项各自独立映射到请求的同名字段，填哪个传哪个，都不填则请求不带上限（由服务端决定）。
+# 多数模型用 max_tokens；o 系列等只认 max_completion_tokens 的模型改填下面那项。
+max_tokens: 65536                     # 映射到请求的 max_tokens
+#max_completion_tokens: 65536          # 映射到请求的 max_completion_tokens
 # 注意：本工具会向流式请求附加 stream_options.include_usage=true 以获取精确 token 统计；
 # 若网关不识别该字段（返回 400），请更换兼容网关或联系网关方支持该选项。
 max_workers: 1                        # 测试进程数

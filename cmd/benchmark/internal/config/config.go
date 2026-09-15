@@ -14,18 +14,19 @@ import (
 
 // Config 从 YAML 加载运行所需的配置
 type Config struct {
-	BaseURL         string           `yaml:"base_url"`
-	APIKey          string           `yaml:"api_key"`
-	Model           string           `yaml:"model"`
-	MaxTokens       int              `yaml:"max_tokens"`
-	MaxWorkers      int              `yaml:"max_workers"`
-	Temperature     *float32         `yaml:"temperature"`
-	TopP            *float32         `yaml:"top_p"`
-	ReasoningEffort string           `yaml:"reasoning_effort"`
-	Dataset         dataset.Config   `yaml:"dataset"`
-	CustomQuestions []types.Question `yaml:"custom_questions"`
-	ReportDir       string           `yaml:"report_dir"`
-	ExtraThinking   string           `yaml:"extra_thinking"` // json string
+	BaseURL             string           `yaml:"base_url"`
+	APIKey              string           `yaml:"api_key"`
+	Model               string           `yaml:"model"`
+	MaxTokens           *int             `yaml:"max_tokens"`
+	MaxCompletionTokens *int             `yaml:"max_completion_tokens"`
+	MaxWorkers          int              `yaml:"max_workers"`
+	Temperature         *float32         `yaml:"temperature"`
+	TopP                *float32         `yaml:"top_p"`
+	ReasoningEffort     string           `yaml:"reasoning_effort"`
+	Dataset             dataset.Config   `yaml:"dataset"`
+	CustomQuestions     []types.Question `yaml:"custom_questions"`
+	ReportDir           string           `yaml:"report_dir"`
+	ExtraThinking       string           `yaml:"extra_thinking"` // json string
 
 	datasetQuestions []types.Question
 }
@@ -83,23 +84,21 @@ func (cfg *Config) Questions() []types.Question {
 
 // BenchmarkConfig 包含 benchmark 运行配置
 type BenchmarkConfig struct {
-	MaxTokens       int             `json:"max_tokens"`
-	MaxWorkers      int             `json:"max_workers"`
-	ReasoningEffort string          `json:"reasoning_effort"`
-	Temperature     *float32        `json:"temperature"`
-	TopP            *float32        `json:"top_p"`
-	Thinking        json.RawMessage `json:"thinking"`
+	MaxTokens           *int            `json:"max_tokens"`
+	MaxCompletionTokens *int            `json:"max_completion_tokens"`
+	MaxWorkers          int             `json:"max_workers"`
+	ReasoningEffort     string          `json:"reasoning_effort"`
+	Temperature         *float32        `json:"temperature"`
+	TopP                *float32        `json:"top_p"`
+	Thinking            json.RawMessage `json:"thinking"`
 }
 
 func (cfg *Config) BenchmarkConfig() (conf BenchmarkConfig) {
-	maxTokens := cfg.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 65536
-	}
 	conf = BenchmarkConfig{
-		MaxTokens:       maxTokens,
-		MaxWorkers:      max(cfg.MaxWorkers, 1),
-		ReasoningEffort: cfg.ReasoningEffort,
+		MaxTokens:           cfg.MaxTokens,
+		MaxCompletionTokens: cfg.MaxCompletionTokens,
+		MaxWorkers:          max(cfg.MaxWorkers, 1),
+		ReasoningEffort:     cfg.ReasoningEffort,
 	}
 	if cfg.Temperature != nil && *cfg.Temperature >= 0.0 && *cfg.Temperature <= 2.0 {
 		conf.Temperature = cfg.Temperature
