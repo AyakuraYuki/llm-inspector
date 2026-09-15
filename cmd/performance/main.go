@@ -15,6 +15,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/report"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/reporter"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/runner"
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/samplelog"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 	"github.com/AyakuraYuki/llm-inspector/internal/errlog"
 )
@@ -35,11 +36,8 @@ func main() {
 
 	bench := cfg.ToBenchmark()
 
-	// 过滤排除名单
-	var active []types.ModelSpec
-	for _, m := range bench.Models {
-		active = append(active, m)
-	}
+	// 过滤排除名单（单机版当前无排除项，整体复制）
+	active := append([]types.ModelSpec(nil), bench.Models...)
 	if len(active) == 0 {
 		_, _ = fmt.Fprintln(os.Stderr, "error: 过滤后无可测试模型")
 		os.Exit(1)
@@ -50,6 +48,8 @@ func main() {
 
 	// 请求错误日志与 Excel 报告同前缀，只有出现错误时才会创建文件
 	errlog.Init(fmt.Sprintf("bench-%s-request-errors.jsonl", startAt.Format("20060102T150405")))
+	// 原始样本导出（可选）：逐档位追加，档位结束即落盘，中途退出也不丢已完成档位
+	samplelog.Init(cfg.SampleOutput)
 
 	var results []types.AggregatedMetrics
 	if useTUI(cfg.NoTUI) {
@@ -57,7 +57,9 @@ func main() {
 	} else {
 		results, err = runWithConsole(bench)
 	}
+	samplelog.Close()
 	printErrlogNotice()
+	printSampleNotice()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -105,6 +107,13 @@ func main() {
 func printErrlogNotice() {
 	if n := errlog.Count(); n > 0 {
 		fmt.Printf("\n请求错误日志（%d 条）: %s\n", n, errlog.Path())
+	}
+}
+
+// printSampleNotice 在压测结束后提示原始样本文件的位置（未开启导出时不输出）。
+func printSampleNotice() {
+	if n := samplelog.Count(); n > 0 {
+		fmt.Printf("原始样本（%d 条）: %s\n", n, samplelog.Path())
 	}
 }
 
@@ -191,6 +200,8 @@ func printHeader(cfg types.BenchmarkConfig) {
 	}
 	fmt.Printf("Warmup      : %s\n", warmupLabel)
 	fmt.Printf("Cooldown    : %s between levels\n", cfg.CooldownDuration)
+	fmt.Printf("Think Time  : %s (closed-loop only)\n", thinkTimeLabel(cfg.ThinkTime))
+	fmt.Printf("Max Tokens  : %d per request\n", cfg.EffectiveMaxOutputTokens())
 	earlyStopLabel := "disabled"
 	if cfg.EarlyStopEnabled {
 		skip := "not skipping higher concurrency"
@@ -214,4 +225,13 @@ func printHeader(cfg types.BenchmarkConfig) {
 	}
 	fmt.Printf("Image Prompt: %s\n", cfg.ImagePrompt)
 	fmt.Printf("\n")
+}
+
+// thinkTimeLabel 渲染配置头里的思考时间：0 要显式说明是「完成即发」，
+// 否则读报告的人无法区分「没配」和「配成了 0」。
+func thinkTimeLabel(d time.Duration) string {
+	if d <= 0 {
+		return "0s (fire as soon as the previous response completes)"
+	}
+	return d.String()
 }

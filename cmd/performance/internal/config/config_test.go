@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 )
 
 func writeTempConfig(t *testing.T, content string) string {
@@ -44,6 +47,16 @@ func TestLoad_ExampleConfigStillValid(t *testing.T) {
 	if len(bench.RequestRate) != 0 {
 		t.Errorf("RequestRate = %v, want empty", bench.RequestRate)
 	}
+	// 示例配置里 think_time/max_output_tokens 都是注释状态，应取历史默认值
+	if bench.ThinkTime != 300*time.Millisecond {
+		t.Errorf("ThinkTime = %v, want 300ms（示例配置未设置 think_time）", bench.ThinkTime)
+	}
+	if got := bench.EffectiveMaxOutputTokens(); got != types.DefaultMaxOutputTokens {
+		t.Errorf("EffectiveMaxOutputTokens() = %d, want %d", got, types.DefaultMaxOutputTokens)
+	}
+	if cfg.SampleOutput != "" {
+		t.Errorf("SampleOutput = %q, want 空", cfg.SampleOutput)
+	}
 }
 
 func TestLoad_OpenLoopRequiresRequestRate(t *testing.T) {
@@ -72,6 +85,97 @@ func TestLoad_OpenLoopValid(t *testing.T) {
 	}
 	if len(bench.RequestRate) != 2 || bench.RequestRate[0] != 5 || bench.RequestRate[1] != 10 {
 		t.Errorf("RequestRate = %v, want [5 10]", bench.RequestRate)
+	}
+}
+
+func TestLoad_ThinkTimeDefaultsToHistoricalValue(t *testing.T) {
+	// 默认值必须保持 300ms：改动它会让新旧压测报告的吞吐数字失去可比性。
+	path := writeTempConfig(t, minimalModels)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() 失败: %v", err)
+	}
+	if got := cfg.ToBenchmark().ThinkTime; got != 300*time.Millisecond {
+		t.Errorf("ThinkTime = %v, want 300ms（未配置时保持历史行为）", got)
+	}
+}
+
+func TestLoad_ThinkTimeExplicitZeroHonored(t *testing.T) {
+	// 显式 0s 是「完成即发」，不能被 applyDefaults 悄悄改回 300ms——
+	// 这是与 evalscope `--rate -1` 对拍的前提。
+	path := writeTempConfig(t, "think_time: 0s\n"+minimalModels)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() 失败: %v", err)
+	}
+	if got := cfg.ToBenchmark().ThinkTime; got != 0 {
+		t.Errorf("ThinkTime = %v, want 0s（显式配 0 应被保留）", got)
+	}
+}
+
+func TestLoad_ThinkTimeCustomValue(t *testing.T) {
+	path := writeTempConfig(t, "think_time: 1s500ms\n"+minimalModels)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() 失败: %v", err)
+	}
+	if got := cfg.ToBenchmark().ThinkTime; got != 1500*time.Millisecond {
+		t.Errorf("ThinkTime = %v, want 1.5s", got)
+	}
+}
+
+func TestLoad_NegativeThinkTimeRejected(t *testing.T) {
+	path := writeTempConfig(t, "think_time: -1s\n"+minimalModels)
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() 应拒绝负数 think_time")
+	}
+}
+
+func TestLoad_MaxOutputTokensDefaultAndOverride(t *testing.T) {
+	path := writeTempConfig(t, minimalModels)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() 失败: %v", err)
+	}
+	if got := cfg.ToBenchmark().EffectiveMaxOutputTokens(); got != types.DefaultMaxOutputTokens {
+		t.Errorf("EffectiveMaxOutputTokens() = %d, want %d", got, types.DefaultMaxOutputTokens)
+	}
+
+	path = writeTempConfig(t, "max_output_tokens: 512\n"+minimalModels)
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load() 失败: %v", err)
+	}
+	if got := cfg.ToBenchmark().EffectiveMaxOutputTokens(); got != 512 {
+		t.Errorf("EffectiveMaxOutputTokens() = %d, want 512", got)
+	}
+}
+
+func TestLoad_NegativeMaxOutputTokensRejected(t *testing.T) {
+	// 负数必须报错，不能被当成「未配置」悄悄回退到 8192。
+	path := writeTempConfig(t, "max_output_tokens: -1\n"+minimalModels)
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() 应拒绝负数 max_output_tokens")
+	}
+}
+
+func TestLoad_SampleOutputPropagates(t *testing.T) {
+	path := writeTempConfig(t, minimalModels)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() 失败: %v", err)
+	}
+	if cfg.SampleOutput != "" {
+		t.Errorf("SampleOutput = %q, want 空（默认不导出原始样本）", cfg.SampleOutput)
+	}
+
+	path = writeTempConfig(t, "sample_output: \"s.jsonl\"\n"+minimalModels)
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load() 失败: %v", err)
+	}
+	if cfg.SampleOutput != "s.jsonl" {
+		t.Errorf("SampleOutput = %q, want s.jsonl", cfg.SampleOutput)
 	}
 }
 

@@ -27,26 +27,53 @@ type jsonConfigSummary struct {
 	Concurrency []int     `json:"concurrency"`
 	LoadMode    string    `json:"load_mode"`
 	RequestRate []float64 `json:"request_rate,omitzero"`
+
+	// ThinkTime/MaxOutputTokens 直接影响吞吐与时延数字，必须随报告留档，
+	// 否则事后对比两次运行（或和 evalscope 对拍）时无法判断口径是否一致。
+	ThinkTime       string `json:"think_time"`
+	MaxOutputTokens int    `json:"max_output_tokens"`
 }
 
 // jsonPercentileMs 是时延类指标的分位数（毫秒），供 JSON 序列化用。
 type jsonPercentileMs struct {
-	P50, P95, P99, P995, P999, Avg float64
-	N                              int
+	Min, P10, P25, P50, P75, P90, P95, P99, P995, P999, Max, Avg, StdDev float64
+	N                                                                    int
 }
 
+// MarshalJSON 用显式结构体而非 map，保证字段顺序稳定（map 会按键名排序，
+// 让 min/max 夹在分位数中间，人读 diff 时很别扭）。
 func (p jsonPercentileMs) MarshalJSON() ([]byte, error) {
 	if p.N == 0 {
 		return []byte("null"), nil
 	}
-	return json.Marshal(map[string]any{
-		"p50": p.P50, "p95": p.P95, "p99": p.P99, "p995": p.P995, "p999": p.P999, "avg": p.Avg, "n": p.N,
-	})
+	type payload struct {
+		Min    float64 `json:"min"`
+		P10    float64 `json:"p10"`
+		P25    float64 `json:"p25"`
+		P50    float64 `json:"p50"`
+		P75    float64 `json:"p75"`
+		P90    float64 `json:"p90"`
+		P95    float64 `json:"p95"`
+		P99    float64 `json:"p99"`
+		P995   float64 `json:"p995"`
+		P999   float64 `json:"p999"`
+		Max    float64 `json:"max"`
+		Avg    float64 `json:"avg"`
+		StdDev float64 `json:"stddev"`
+		N      int     `json:"n"`
+	}
+	// 字段名、类型、顺序与 jsonPercentileMs 逐一对应，直接转换即可（tag 不参与可转换性判定）
+	return json.Marshal(payload(p))
 }
 
 func percentileMsFromDuration(s types.PercentileStats) jsonPercentileMs {
 	toMs := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
-	return jsonPercentileMs{P50: toMs(s.P50), P95: toMs(s.P95), P99: toMs(s.P99), P995: toMs(s.P995), P999: toMs(s.P999), Avg: toMs(s.Avg), N: s.N}
+	return jsonPercentileMs{
+		Min: toMs(s.Min), P10: toMs(s.P10), P25: toMs(s.P25), P50: toMs(s.P50),
+		P75: toMs(s.P75), P90: toMs(s.P90), P95: toMs(s.P95), P99: toMs(s.P99),
+		P995: toMs(s.P995), P999: toMs(s.P999), Max: toMs(s.Max),
+		Avg: toMs(s.Avg), StdDev: toMs(s.StdDev), N: s.N,
+	}
 }
 
 type jsonLevel struct {
@@ -71,10 +98,11 @@ type jsonLevel struct {
 	ITLMs  jsonPercentileMs `json:"itl_ms"`
 	E2EMs  jsonPercentileMs `json:"e2e_ms"`
 
-	TPS float64 `json:"tps"`
-	TPM float64 `json:"tpm"`
-	QPS float64 `json:"qps"`
-	QPM float64 `json:"qpm"`
+	TPS       float64 `json:"tps"`
+	TPM       float64 `json:"tpm"`
+	QPS       float64 `json:"qps"`
+	QPM       float64 `json:"qpm"`
+	DecodeTPS float64 `json:"decode_tps,omitzero"` // 单流解码速度（1/平均 TPOT）
 
 	IORatio          float64 `json:"io_ratio,omitzero"`
 	CacheHitRatioPct float64 `json:"cache_hit_ratio_pct,omitzero"`
@@ -117,6 +145,7 @@ func toJSONLevel(agg types.AggregatedMetrics) jsonLevel {
 		TPM:              agg.TPM,
 		QPS:              agg.QPS,
 		QPM:              agg.QPM,
+		DecodeTPS:        agg.DecodeTPS,
 		IORatio:          agg.IORatio,
 		CacheHitRatioPct: agg.CacheHitRatio,
 	}
@@ -132,11 +161,13 @@ func ExportJSON(cfg types.BenchmarkConfig, results []types.AggregatedMetrics, ru
 	report := jsonReport{
 		RunAt: runAt,
 		Config: jsonConfigSummary{
-			BaseURL:     cfg.BaseURL,
-			Duration:    cfg.Duration.String(),
-			Concurrency: cfg.Concurrency,
-			LoadMode:    "closed",
-			RequestRate: cfg.RequestRate,
+			BaseURL:         cfg.BaseURL,
+			Duration:        cfg.Duration.String(),
+			Concurrency:     cfg.Concurrency,
+			LoadMode:        "closed",
+			RequestRate:     cfg.RequestRate,
+			ThinkTime:       cfg.ThinkTime.String(),
+			MaxOutputTokens: cfg.EffectiveMaxOutputTokens(),
 		},
 	}
 	if cfg.OpenLoop {
@@ -157,11 +188,11 @@ func ExportJSON(cfg types.BenchmarkConfig, results []types.AggregatedMetrics, ru
 var csvHeaders = []string{
 	"model", "provider", "token_group", "concurrency", "target_rate_rps",
 	"total", "success", "failed", "error_rate_pct", "stopped_early",
-	"ttft_p50_ms", "ttft_p95_ms", "ttft_p99_ms",
-	"tpot_p50_ms", "tpot_p95_ms", "tpot_p99_ms",
-	"itl_p50_ms", "itl_p95_ms", "itl_p99_ms",
-	"e2e_p50_ms", "e2e_p95_ms", "e2e_p99_ms",
-	"qps", "tps", "io_ratio", "cache_hit_ratio_pct", "goodput_pct",
+	"ttft_p50_ms", "ttft_p90_ms", "ttft_p95_ms", "ttft_p99_ms", "ttft_stddev_ms",
+	"tpot_p50_ms", "tpot_p90_ms", "tpot_p95_ms", "tpot_p99_ms",
+	"itl_p50_ms", "itl_p90_ms", "itl_p95_ms", "itl_p99_ms",
+	"e2e_p50_ms", "e2e_p90_ms", "e2e_p95_ms", "e2e_p99_ms", "e2e_stddev_ms",
+	"qps", "tps", "decode_tps", "io_ratio", "cache_hit_ratio_pct", "goodput_pct",
 }
 
 func csvRow(agg types.AggregatedMetrics) []string {
@@ -180,11 +211,11 @@ func csvRow(agg types.AggregatedMetrics) []string {
 	return []string{
 		agg.Model, string(agg.Provider), agg.TokenGroup, strconv.Itoa(agg.Concurrency), f2(agg.TargetRate),
 		strconv.Itoa(agg.Total), strconv.Itoa(agg.Success), strconv.Itoa(agg.Failed), f2(errPct), strconv.FormatBool(agg.StoppedEarly),
-		toMs(agg.TTFT.P50), toMs(agg.TTFT.P95), toMs(agg.TTFT.P99),
-		toMs(agg.TPOT.P50), toMs(agg.TPOT.P95), toMs(agg.TPOT.P99),
-		toMs(agg.ITL.P50), toMs(agg.ITL.P95), toMs(agg.ITL.P99),
-		toMs(agg.Latency.P50), toMs(agg.Latency.P95), toMs(agg.Latency.P99),
-		f2(agg.QPS), f2(agg.TPS), f2(agg.IORatio), f2(agg.CacheHitRatio), goodput,
+		toMs(agg.TTFT.P50), toMs(agg.TTFT.P90), toMs(agg.TTFT.P95), toMs(agg.TTFT.P99), toMs(agg.TTFT.StdDev),
+		toMs(agg.TPOT.P50), toMs(agg.TPOT.P90), toMs(agg.TPOT.P95), toMs(agg.TPOT.P99),
+		toMs(agg.ITL.P50), toMs(agg.ITL.P90), toMs(agg.ITL.P95), toMs(agg.ITL.P99),
+		toMs(agg.Latency.P50), toMs(agg.Latency.P90), toMs(agg.Latency.P95), toMs(agg.Latency.P99), toMs(agg.Latency.StdDev),
+		f2(agg.QPS), f2(agg.TPS), f2(agg.DecodeTPS), f2(agg.IORatio), f2(agg.CacheHitRatio), goodput,
 	}
 }
 

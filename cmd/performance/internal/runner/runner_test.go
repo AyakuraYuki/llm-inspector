@@ -88,6 +88,50 @@ func TestRunLevel_OpenLoopArrivalRateApproximatesTarget(t *testing.T) {
 	}
 }
 
+func TestRunLevel_ThinkTimeCappedAtDeadline(t *testing.T) {
+	const provider = types.Provider("__test_think__")
+	defer registerFakeProvider(provider, 0)()
+
+	// 思考时间远大于档位时长：worker 发完第一个请求后必须只等到 deadline 就收工，
+	// 而不是睡满 10s——否则档位的排空期会被思考时间白白拉长。
+	cfg := types.BenchmarkConfig{
+		Duration:  150 * time.Millisecond,
+		ThinkTime: 10 * time.Second,
+	}
+	model := types.ModelSpec{Name: "m", Provider: provider}
+
+	start := time.Now()
+	result := RunLevel(context.Background(), cfg, model, 1, 0, 0, &noopReporter{})
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("档位实际耗时 %v，远超 duration 150ms：思考时间未截断到 deadline", elapsed)
+	}
+	if len(result.Metrics) == 0 {
+		t.Error("至少应完成一个请求")
+	}
+}
+
+func TestRunLevel_ThinkTimeReducesThroughput(t *testing.T) {
+	const provider = types.Provider("__test_think_rate__")
+	defer registerFakeProvider(provider, 0)()
+
+	model := types.ModelSpec{Name: "m", Provider: provider}
+	const duration = 300 * time.Millisecond
+
+	noWait := RunLevel(context.Background(),
+		types.BenchmarkConfig{Duration: duration}, model, 1, 0, 0, &noopReporter{})
+	withWait := RunLevel(context.Background(),
+		types.BenchmarkConfig{Duration: duration, ThinkTime: 50 * time.Millisecond}, model, 1, 0, 0, &noopReporter{})
+
+	// 假 provider 零耗时，所以 think_time=0 能发出的请求数远多于 50ms 间隔的情况
+	//（后者上限约 duration/think_time = 6 个）。只比较量级，不断言精确条数。
+	if len(withWait.Metrics) >= len(noWait.Metrics) {
+		t.Errorf("think_time=50ms 发出 %d 个请求，think_time=0 发出 %d 个：思考时间未生效",
+			len(withWait.Metrics), len(noWait.Metrics))
+	}
+}
+
 func TestShouldStopEarly(t *testing.T) {
 	cases := []struct {
 		name         string

@@ -12,6 +12,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/metrics"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/reporter"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/runner"
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/samplelog"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 )
 
@@ -210,6 +211,17 @@ func runOneLevel(ctx context.Context, clients []*Client, bench types.BenchmarkCo
 	merged.Provider = model.Provider
 	merged.TokenGroup = model.TokenGroup
 	merged.TargetRate = rate // 回填全局目标 RPS（而非各 agent 分片），与单机版口径一致
+
+	// 样本导出落在 coordinator 侧：各 agent 的原始样本已 rebase 到统一时间轴并
+	// 池化，写出的文件与单机版同构（一份全局样本，而非每台一份各自的时间轴）。
+	samplelog.WriteLevel(samplelog.LevelContext{
+		Model:       model.Name,
+		Provider:    model.Provider,
+		TokenGroup:  model.TokenGroup,
+		Concurrency: conc,
+		TargetRate:  rate,
+		LevelStart:  t0,
+	}, merged.Metrics)
 	return metrics.AggregateMetrics(merged, bench.SLO, bench.ShowHistogram), stopped, nil
 }
 

@@ -14,8 +14,9 @@
 - 错误率早停（`early_stop`）：某档位失败率超阈值时提前结束该档位，可选跳过该模型剩余的更高并发档位
 - 可选 SLO 达标率（goodput）：按 TTFT/TPOT/E2E 阈值统计「同时满足全部已配置阈值」的请求占比
 - 终端 TUI（默认，非 TTY 时自动降级为纯文本控制台）+ 运行结束后的文本汇总报告，可选 ASCII 延迟分布直方图
-- Excel 报告导出（默认文件名 `bench-<时间戳>.xlsx`，7 个 sheet，覆盖时延、生成速度、QPS、I/O 比、缓存命中率、错误分析/明细；开启直方图后追加第 8 个 sheet）
-- 可选 JSON/CSV 结构化输出，供 CI 里做基线比对、画趋势图
+- Excel 报告导出（默认文件名 `bench-<时间戳>.xlsx`，8 个 sheet，覆盖时延、生成速度、QPS、I/O 比、缓存命中率、分位数全景、错误分析/明细；开启直方图后追加第 9 个 sheet）
+- 全量分位数统计：每个指标都给出 Min/P10/P25/P50/P75/P90/P95/P99/P99.5/P99.9/Max/Avg/StdDev（全排序精确计算，非近似），低分位与标准差用于判断分布形态与抖动幅度
+- 可选 JSON/CSV 结构化输出，供 CI 里做基线比对、画趋势图；可选原始样本 JSONL 导出（`sample_output`），支持不重跑压测就换口径重算
 - token 用量统计对齐 evaluation/benchmark 的口径（见文末[参数归一化语义](#参数归一化语义)）：无 usage 上报时按字符数粗估
 
 ## 构建与运行
@@ -93,13 +94,36 @@ image_prompt: "A cute fluffy kitten playing with a ball of yarn, soft lighting, 
 warmup: true          # 正式测试前是否执行预热阶段（并发=首个正式档位的并发数，时长由 warmup_duration 控制）
 warmup_duration: 10s  # 预热阶段持续时长
 cooldown: 5s          # 每个并发档位之间的冷却等待时间
+think_time: 300ms     # closed-loop 下同一 worker 两次请求之间的等待（拟人思考时间），默认 300ms
+max_output_tokens: 8192  # 各协议输出长度上限的统一取值，默认 8192
 
 output: ""       # Excel 输出路径（留空则自动生成时间戳文件名，如 bench-20260618T150405.xlsx）
 no_excel: false  # 跳过 Excel 导出，仅打印终端报告
 no_tui: false    # 禁用 TUI，使用纯文本控制台输出（stdout 非终端时自动禁用）
 ```
 
-`warmup`、`cooldown` 用指针类型区分「未配置（取默认值）」与「显式设为 false/0s」，所以显式写 `cooldown: 0s` 就是真的不等待，不会被悄悄改回默认的 5s。
+`warmup`、`cooldown`、`think_time` 用指针类型区分「未配置（取默认值）」与「显式设为 false/0s」，所以显式写 `cooldown: 0s`、`think_time: 0s` 就是真的不等待，不会被悄悄改回默认值。
+
+#### think_time（思考时间）
+
+closed-loop 下，同一个 worker 从「收到上一个响应」到「发出下一个请求」之间的等待，用来模拟真人看完回答再提问的停顿。默认 **300ms**（保持历史行为），`open` 模式不使用该项——发送节奏由 `request_rate` 决定。
+
+| 场景                            | 建议取值                                             |
+|---------------------------------|------------------------------------------------------|
+| 模拟真实用户节奏（默认）        | 保持 `300ms`，或按业务场景调大                       |
+| 与 evalscope 等工具对拍吞吐数字 | 显式设为 `0s`，对齐它 `--rate -1` 的「完成即发」语义 |
+
+**注意可比性**：同样的 `concurrency` 下，`think_time` 越大实际负载越低，QPS/TPS 会更保守。改动它之后，新旧两次压测的吞吐数字不能直接比较——所以默认值刻意保持 300ms 不变，对拍时临时改成 0s
+而不是把默认值改掉。当前取值会打印在配置头并写入 Excel 总览与 JSON 报告，事后可核对口径。
+
+思考时间会被截断到档位 deadline：worker 在临近档位结束时完成请求，不会白等一整个 `think_time` 才发现超期（否则档位的排空期会被凭空拉长）。
+
+#### max_output_tokens（输出上限）
+
+各协议输出长度上限的统一取值，映射到 `max_tokens`（openai/anthropic）、`maxOutputTokens`（gemini）、`max_output_tokens`（responses），默认 **8192**。
+
+压测要控制输出长度，否则 E2E/TPOT/TPS 会混入「模型这次想写多长」的自然波动，同一模型的分位数失真、跨协议横向对比也不公平，所以默认是固定值而非不限。调小它可以显著缩短单请求耗时、在同样时长内拿到更多样本（适合快速回归），但
+**改动后与历史报告不可比**。
 
 ### 错误率早停
 
@@ -118,15 +142,17 @@ early_stop:
 
 ```yaml
 load_mode: "open"          # closed（默认，不写就是这个）| open
-request_rate: [5, 10, 20]  # load_mode: open 时必填，长度必须与 concurrency 相等
+request_rate: [ 5, 10, 20 ]  # load_mode: open 时必填，长度必须与 concurrency 相等
 ```
 
-| 字段            | 必填                | 说明                                                                                          |
-|-----------------|---------------------|-----------------------------------------------------------------------------------------------|
-| `load_mode`     | 否                  | `closed`（默认）：每个 worker 等响应才发下一个（现有行为）；`open`：按目标 RPS 泊松到达发送请求，不等响应 |
-| `request_rate`  | `load_mode: open` 时必填 | 与 `concurrency` 一一对应的目标 RPS 列表，长度必须一致；`open` 模式下 `concurrency[i]` 改为该档位「同时在途请求数上限」，防止过载时本地无限堆积协程/连接 |
+| 字段           | 必填                     | 说明                                                                                                                                                     |
+|----------------|--------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `load_mode`    | 否                       | `closed`（默认）：每个 worker 等响应才发下一个（现有行为）；`open`：按目标 RPS 泊松到达发送请求，不等响应                                                |
+| `request_rate` | `load_mode: open` 时必填 | 与 `concurrency` 一一对应的目标 RPS 列表，长度必须一致；`open` 模式下 `concurrency[i]` 改为该档位「同时在途请求数上限」，防止过载时本地无限堆积协程/连接 |
 
-**为什么需要 open-loop**：closed-loop 下，一旦服务端出现排队延迟，压测客户端会因为「等响应才发下一个」自动降低实际发送速率，相当于自己给自己让路——这就是 **Coordinated Omission**：服务端越慢，closed-loop 测出的延迟分位数反而越「好看」，因为真正被压垮期间本该发出、却被延迟发出的那些请求根本没有被采样到。closed-loop 只能回答「给定并发数，延迟大概是多少」，open-loop 才能回答「给定目标 RPS（贴近线上真实流量的到达模式），尾延迟会不会因排队而爆炸」。
+**为什么需要 open-loop**：closed-loop 下，一旦服务端出现排队延迟，压测客户端会因为「等响应才发下一个」自动降低实际发送速率，相当于自己给自己让路——这就是 **Coordinated Omission**：服务端越慢，closed-loop
+测出的延迟分位数反而越「好看」，因为真正被压垮期间本该发出、却被延迟发出的那些请求根本没有被采样到。closed-loop 只能回答「给定并发数，延迟大概是多少」，open-loop 才能回答「给定目标
+RPS（贴近线上真实流量的到达模式），尾延迟会不会因排队而爆炸」。
 
 **什么时候切到 open-loop**：已知或想设定线上目标 RPS、需要验证某个 RPS 水位下 P99/P999 是否可接受时，用 `open`；只是想画一条「并发数 vs 延迟」的曲线做粗略容量摸底时，`closed`（默认）够用。两种模式可以用同一份配置分别跑两次，互相佐证。
 
@@ -139,17 +165,34 @@ slo:
   e2e_ms: 10000   # 可选，E2E 时延阈值（毫秒）
 ```
 
-三项阈值都可选，只填要考察的维度；一个都不填等价于不配置 `slo` 这一整块（默认行为，不产生任何新报表内容）。开启后，终端和 Excel 会额外展示 **Goodput**：同时满足全部已配置阈值的请求占总请求数的比例——失败请求必然不达标，TTFT/TPOT 阈值只在流式端点生效。相比单纯的分位数，Goodput 直接回答「这个并发/RPS 水位下，服务能不能上线」这个业务问题。
+三项阈值都可选，只填要考察的维度；一个都不填等价于不配置 `slo` 这一整块（默认行为，不产生任何新报表内容）。开启后，终端和 Excel 会额外展示 **Goodput**：同时满足全部已配置阈值的请求占总请求数的比例——失败请求必然不达标，TTFT/TPOT
+阈值只在流式端点生效。相比单纯的分位数，Goodput 直接回答「这个并发/RPS 水位下，服务能不能上线」这个业务问题。
 
 ### 结构化输出与延迟分布直方图
 
 ```yaml
-json_output: "bench.json"  # 结构化 JSON 报告路径，留空（默认）不导出
-csv_output: "bench.csv"    # 逐档位 CSV 汇总路径，留空（默认）不导出
-show_histogram: true       # 终端/Excel 额外输出 E2E/TTFT 延迟分布直方图，默认 false
+json_output: "bench.json"          # 结构化 JSON 报告路径，留空（默认）不导出
+csv_output: "bench.csv"            # 逐档位 CSV 汇总路径，留空（默认）不导出
+sample_output: "bench-samples.jsonl"  # 原始样本 JSONL 路径，留空（默认）不导出
+show_histogram: true               # 终端/Excel 额外输出 E2E/TTFT 延迟分布直方图，默认 false
 ```
 
-JSON/CSV 用于 CI 里做基线比对、画趋势图：JSON 是完整的每档位分位数/吞吐/goodput/错误计数摘要（不含错误明细原始记录），CSV 是每个 `模型×档位` 一行的扁平化汇总，字段见 `internal/report/structured.go`。`show_histogram` 开启后，终端在每个档位报告下追加 ASCII 条形图，Excel 追加一个「延迟分布」sheet（按对数刻度分桶，避免长尾分布把绝大多数样本都挤在第一个桶里）。
+JSON/CSV 用于 CI 里做基线比对、画趋势图：JSON 是完整的每档位分位数/吞吐/goodput/错误计数摘要（不含错误明细原始记录），CSV 是每个 `模型×档位` 一行的扁平化汇总，字段见 `internal/report/structured.go`。
+`show_histogram` 开启后，终端在每个档位报告下追加 ASCII 条形图，Excel 追加一个「延迟分布」sheet（按对数刻度分桶，避免长尾分布把绝大多数样本都挤在第一个桶里）。
+
+#### sample_output（原始样本）
+
+一行一条请求的 JSONL， **含失败请求**，逐档位追加落盘（中途 `Ctrl+C` 也不会丢已完成档位）。报表里的分位数是聚合结果，一旦想换口径重算——换分位算法、按时段切窗口看稳态、剔除某类样本再看分布——没有原始样本就只能重跑一遍压测，而压测环境往往不可复现。
+
+每行包含：档位标识（`model`/`provider`/`token_group`/`concurrency`/`target_rate_rps`/`level_start`）、`ts`（请求发起时刻）、`success`、`ttft_ms`、`e2e_ms`、token 数（`input_tokens`/`output_tokens`/
+`cached_input_tokens` 及 `output_estimated`/`cache_reported` 标记）、`itl_ms`（逐输出事件间隔数组）、失败时的 `error_type`/`error`/`request_id`。
+
+```bash
+# 例：重算某档位 TTFT 的 P99.99（报表只到 P99.9）
+jq -s 'map(select(.concurrency==50 and .success)) | sort_by(.ttft_ms) | .[(length*0.9999|floor)].ttft_ms' bench-samples.jsonl
+```
+
+**体积提示**：每条成功样本都带 `itl_ms` 数组（长度约等于输出事件数），长输出高并发的档位单档可达几十 MB，按需开启。
 
 ### 模型与 Token 分组
 
@@ -211,14 +254,15 @@ tokens:
   Model: gpt-5.6-sol  |  Provider: openai  |  Token Group: openai-channel  |  Concurrency: 50
   Elapsed: 60.12s  |  Window: 60.00s  |  Requests: 812 total, 810 ok, 2 failed (0.2% error)
 --------------------------------------------------------------------------------
-  Metric            P50          P95          P99          Avg          N
-  --------------------------------------------------------------------------
-  TTFT              320.5ms      680.2ms      950.1ms      350.8ms      810
-  TPOT              18.2ms       25.6ms       32.1ms       19.4ms       810
-  ITL               15.1ms       48.3ms       90.7ms       17.2ms       7920
-  E2E Latency       3.20s        4.80s        5.90s        3.45s        810
-  --------------------------------------------------------------------------
+  Metric            P50          P90          P95          P99          Avg          StdDev       N
+  --------------------------------------------------------------------------------------------------
+  TTFT              320.5ms      520.1ms      680.2ms      950.1ms      350.8ms      180.3ms      810
+  TPOT              18.2ms       22.4ms       25.6ms       32.1ms       19.4ms       4.1ms        810
+  ITL               15.1ms       30.2ms       48.3ms       90.7ms       17.2ms       12.6ms       7920
+  E2E Latency       3.20s        4.10s        4.80s        5.90s        3.45s        780.2ms      810
+  --------------------------------------------------------------------------------------------------
   TPS:     2650.30 tok/s  |  TPM:  159018.0 tok/min  |  QPS: 13.5000 req/s  |  QPM: 810.00 req/min  |  I/O Ratio: 12.400
+  Decode: 51.5 tok/s (单流解码速度，1/平均 TPOT)
   Error types: timeout: 2
 
 ============================================================
@@ -247,25 +291,32 @@ per-level 明细下方可能出现的提示行，含义如下：
 
 ### Excel 报告
 
-除非配置 `no_excel: true`，压测结束后会导出一份 `.xlsx`（默认文件名 `bench-<时间戳>.xlsx`，可用 `output` 覆盖），包含 7 个 sheet（开启 `show_histogram` 后追加第 8 个）：
+除非配置 `no_excel: true`，压测结束后会导出一份 `.xlsx`（默认文件名 `bench-<时间戳>.xlsx`，可用 `output` 覆盖），包含 8 个 sheet（开启 `show_histogram` 后追加第 9 个）：
 
-| Sheet               | 内容                                                                                                                          |
-|---------------------|-------------------------------------------------------------------------------------------------------------------------------|
-| 总览                | 测试日期、接口地址、时长/并发档位、负载模式、模型与 token 分组概览、错误率早停配置摘要、SLO/Goodput 配置摘要、各项指标口径说明 |
-| TTFT延迟            | 每个 `模型×并发` 组合的 TTFT 与 E2E 延迟 P50/P95/P99/P99.5/P99.9/Avg                                                          |
-| 生成速度(TPS·token) | per-request tokens/s、TPOT、ITL、TPM 分位数，以及 System TPS/TPM；备注列标注样本量不足/剔除数/估算占比                       |
-| QPS压测(TPS·req)    | 实际时长、吞吐窗口、目标 RPS（open-loop）、QPS/QPM、成功率、成功/失败请求数、Goodput/SLO 阈值；备注列包含吞吐低估提示与早停提示 |
-| 输入输出Token比     | per-request I/O Ratio 分位数与 System I/O Ratio；per-request 与 System 缓存命中率、总输入/缓存 token 数                      |
-| 错误分析            | 每个 `模型×并发` 组合的总请求数、失败数、成功率、是否提前终止，以及按 `types.ErrorTypeOrder` 顺序的各错误类型计数            |
-| 错误明细            | 每条失败请求一行：发生时间、错误类型、RequestID、总时延、错误信息，按时间排序                                                |
-| 延迟分布（可选）    | 仅当至少一个档位携带直方图数据（即运行时开启了 `show_histogram`）才出现；每个 `模型×并发×指标（E2E/TTFT）` 一行，列出各分桶的区间与样本数 |
+| Sheet               | 内容                                                                                                                                                                                    |
+|---------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 总览                | 测试日期、接口地址、时长/并发档位、负载模式、模型与 token 分组概览、错误率早停配置摘要、SLO/Goodput 配置摘要、各项指标口径说明                                                          |
+| TTFT延迟            | 每个 `模型×并发` 组合的 TTFT 与 E2E 延迟 P50/P95/P99/P99.5/P99.9/Avg                                                                                                                    |
+| 生成速度(TPS·token) | per-request tokens/s、TPOT、ITL、TPM 分位数，以及 System TPS/TPM；备注列标注样本量不足/剔除数/估算占比                                                                                  |
+| QPS压测(TPS·req)    | 实际时长、吞吐窗口、目标 RPS（open-loop）、QPS/QPM、成功率、成功/失败请求数、Goodput/SLO 阈值；备注列包含吞吐低估提示与早停提示                                                         |
+| 输入输出Token比     | per-request I/O Ratio 分位数与 System I/O Ratio；per-request 与 System 缓存命中率、总输入/缓存 token 数                                                                                 |
+| 分位数全景          | 每个 `档位 × 指标` 一行，横向列出 Min/P10/P25/P50/P75/P90/P95/P99/P99.5/P99.9/Max/Avg/StdDev 全量统计（TTFT/TPOT/ITL/E2E/tokens·s/TPM/IO Ratio/Cache Hit Rate）；本档无样本的指标不占行 |
+| 错误分析            | 每个 `模型×并发` 组合的总请求数、失败数、成功率、是否提前终止，以及按 `types.ErrorTypeOrder` 顺序的各错误类型计数                                                                       |
+| 错误明细            | 每条失败请求一行：发生时间、错误类型、RequestID、总时延、错误信息，按时间排序                                                                                                           |
+| 延迟分布（可选）    | 仅当至少一个档位携带直方图数据（即运行时开启了 `show_histogram`）才出现；每个 `模型×并发×指标（E2E/TTFT）` 一行，列出各分桶的区间与样本数                                               |
 
 图片生成端点（`openai-image`）不出现在 TTFT延迟/生成速度/输入输出Token比 三个 sheet（这些指标对它无意义），但会出现在 QPS压测 与 错误分析/错误明细。
 
 ## 指标口径
 
-- **TTFT / TPOT / E2E Latency**：仅统计成功请求的时延分位数（P50/P95/P99/P99.5/P99.9/Avg）；TPOT = `(总时延 - TTFT) / 输出 token 数`
-- **ITL**：逐输出内容事件之间的间隔，按 SSE 事件粒度采样——第一个内容事件打 TTFT，之后每次再出现输出内容都记一条与上一次的间隔。多数 provider 一个事件对应一个或几个 token，因此这是**逐 token 生成间隔的近似值，不是逐 token 精确值**；剔除口径与 TPOT/TPS 一致（同一请求未通过 `tokstats.ValidStreamTPS` 校验时，其 ITL 样本也不入池）。相比 TPOT 的单一均值，ITL 的分位数能看出解码过程中的周期性卡顿（如 KV cache 争抢、batching 切换）
+- **TTFT / TPOT / E2E Latency**：仅统计成功请求的时延分位数；TPOT = `(总时延 - TTFT) / 输出 token 数`
+- **分位数档位**：全部指标统一给出 Min/P10/P25/P50/P75/P90/P95/P99/P99.5/P99.9/Max/Avg/StdDev。全排序 + 最近秩（`idx = ceil(n*p) - 1`）精确计算，不用近似算法/直方图插值。终端表只渲染
+  P50/P90/P95/P99/Avg/StdDev 六列（保证一行放得下），全量在 Excel「分位数全景」sheet 与 JSON 报告里。StdDev 为 **总体**标准差（分母 N）；单样本时为 0，与「无数据」的 `N/A` 区分
+- **Decode tok/s**：`1 / 平均 TPOT`，单流解码速度，对标 evalscope 的同名指标。与 per-request `tokens/s Avg` 同源但口径不同——后者是各请求速率的算术均值，长短响应混跑时被短响应拉高；Decode 是「平均每个 token
+  要等多久」的倒数（调和均值口径）。入样口径随 TPOT，未通过速率有效性校验的样本已被剔除
+- **ITL**：逐输出内容事件之间的间隔，按 SSE 事件粒度采样——第一个内容事件打 TTFT，之后每次再出现输出内容都记一条与上一次的间隔。多数 provider 一个事件对应一个或几个 token，因此这是 **逐 token 生成间隔的近似值，不是逐
+  token 精确值**；剔除口径与 TPOT/TPS 一致（同一请求未通过 `tokstats.ValidStreamTPS` 校验时，其 ITL 样本也不入池）。相比 TPOT 的单一均值，ITL 的分位数能看出解码过程中的周期性卡顿（如 KV cache 争抢、batching
+  切换）
 - **per-request TPS/TPM**：`输出 token 数 / 生成窗口秒数` 的分位数；生成窗口过窄（一次性到达）或超出单流物理天花板的样本会被剔除，剔除数计入 `GenSpeedExcluded`
 - **System TPS/TPM**：吞吐窗口内完成的请求总 token 数 / 窗口时长（`Window`），区别于 per-request 分位数——系统级口径反映整体吞吐，per-request 口径反映单条流的解码速度
 - **QPS/QPM**：吞吐窗口内完成的成功请求数 / 窗口时长
@@ -282,6 +333,7 @@ per-level 明细下方可能出现的提示行，含义如下：
 2. **预检失败会中止整轮压测**：任一模型的预检请求失败，压测直接终止且不产生报表，先检查该模型的 `base_url`/`token_group`/网络连通性
 3. **`token_group` 缺 token 时不会回退到 `default`**：只有完全不配置 `token_group` 的模型才使用 `tokens`/`default` 分组
 4. **并发数越高，`duration` 建议越长**：平均 E2E 时延接近吞吐窗口时 QPS/TPS 会被系统性低估，报表里的 `[WARN]` 会提示这种情况
+6. **`think_time`/`max_output_tokens` 影响可比性**：两者都会改变实际负载与单请求耗时，改动后新旧报告的吞吐/时延数字不能直接比较；当前取值会打印在配置头、写入 Excel 总览与 JSON 报告，对比数据前先核对这两项是否一致
 5. **`load_mode: open` 时 `concurrency` 的含义变化**：不再是「协程数」，而是该档位「同时在途请求数上限」；`request_rate` 才是真正驱动发送节奏的目标 RPS，两者长度必须一致
 
 ## 参数归一化语义
@@ -289,12 +341,12 @@ per-level 明细下方可能出现的提示行，含义如下：
 本工具的 SSE 流式解析已下沉到 `internal/llm/sse`（`ParseSSELine`/`SSEIsTerminal`/`SSEHasOutputContent`/`ConsumeSSEUsage`/`ApplySSEEvent` 等纯函数），三个工具共享同一套协议判定与 usage
 提取逻辑。本工具在参数映射总表中的位置：
 
-| 统一参数                       | performance 的实现                                                                                                                        | 说明                                         |
-|--------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------|
-| 输出上限                       | 固定 `max_tokens=8192`（openai）/ `max_tokens=8192`（anthropic）/ `maxOutputTokens=8192`（gemini）/ `max_output_tokens=8192`（responses） | 压测对比需控制输出长度，固定常量而非可配置项 |
-| `stream_options.include_usage` | 恒为 true（openai）                                                                                                                       | 与 evaluation 默认、benchmark 显式开启对齐   |
-| `temperature` / `top_p`        | 不传                                                                                                                                      | 压测用服务端默认值                           |
-| thinking / reasoning_effort    | 不传                                                                                                                                      | 不在压测范围                                 |
+| 统一参数                       | performance 的实现                                                                                                                            | 说明                                                                  |
+|--------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------|
+| 输出上限                       | `max_output_tokens` 配置项，默认 8192；映射为 `max_tokens`（openai/anthropic）/ `maxOutputTokens`（gemini）/ `max_output_tokens`（responses） | 压测对比需控制输出长度，默认固定 8192；可配置但改动后与历史报告不可比 |
+| `stream_options.include_usage` | 恒为 true（openai）                                                                                                                           | 与 evaluation 默认、benchmark 显式开启对齐                            |
+| `temperature` / `top_p`        | 不传                                                                                                                                          | 压测用服务端默认值                                                    |
+| thinking / reasoning_effort    | 不传                                                                                                                                          | 不在压测范围                                                          |
 
 **token 统计口径**：与 evaluation/benchmark 一致，采用 usage 上报值；Gemini 的 `thoughtsTokenCount` 计入 `completion_tokens`（思考时间在生成窗口里，token 计入分母保证跨协议可比）。usage 缺失时按收集的文本字符数粗估（
 `len/4`）。

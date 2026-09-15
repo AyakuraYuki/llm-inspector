@@ -12,12 +12,12 @@ import (
 
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/metrics"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/reporter"
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/samplelog"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 )
 
 const (
-	cooldownPerRequest = 300 * time.Millisecond // 协程内发送每个请求的间隔时间
-	maxRampDuration    = 5 * time.Second        // 档位启动错峰窗口的上限
+	maxRampDuration = 5 * time.Second // 档位启动错峰窗口的上限
 
 	// preflightTimeout 预检单请求的超时。预检要完整走完一次流式生成，
 	// 思考型模型的思考阶段动辄超过 30s，超时过短会把慢模型误判为不连通，
@@ -52,6 +52,14 @@ loop:
 			rep.LevelStart(seq, total, model, conc, time.Now().Add(cfg.Duration))
 
 			result := RunLevel(ctx, cfg, model, conc, rate, RampDuration(conc, cfg.Duration), rep)
+			samplelog.WriteLevel(samplelog.LevelContext{
+				Model:       model.Name,
+				Provider:    model.Provider,
+				TokenGroup:  model.TokenGroup,
+				Concurrency: conc,
+				TargetRate:  rate,
+				LevelStart:  result.Start,
+			}, result.Metrics)
 			agg := metrics.AggregateMetrics(result, cfg.SLO, cfg.ShowHistogram)
 			results = append(results, agg)
 			rep.LevelEnd(agg)
@@ -249,7 +257,7 @@ func dispatchOne(ctx context.Context, cfg types.BenchmarkConfig, model types.Mod
 }
 
 // runLevelClosedLoop 是现有行为：固定 concurrency 个协程，每个协程循环
-// “发请求 → 等响应 → 等 cooldownPerRequest → 发下一个”，直到 deadline 或取消。
+// “发请求 → 等响应 → 等 cfg.ThinkTime → 发下一个”，直到 deadline 或取消。
 func runLevelClosedLoop(levelCtx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, concurrency int, ramp time.Duration, deadline time.Time, rep reporter.Reporter, state *levelState, cancelLevel context.CancelFunc) {
 	var wg sync.WaitGroup
 	for i := range concurrency {
@@ -266,15 +274,27 @@ func runLevelClosedLoop(levelCtx context.Context, cfg types.BenchmarkConfig, mod
 				m := dispatchOne(levelCtx, cfg, model)
 				state.record(cfg, rep, m, levelCtx, cancelLevel)
 
-				// deadline 已过就直接退出：此时的请求间隔等待毫无意义，
-				// 徒增 Elapsed（排空期被多算约一个 cooldownPerRequest）
+				// deadline 已过就直接退出：此时的思考时间等待毫无意义，
+				// 徒增 Elapsed（排空期被多算约一个 ThinkTime）
 				if !time.Now().Before(deadline) {
+					return
+				}
+				// ThinkTime 为 0（完成即发）时不进 select：拿不到定时器也少一次调度，
+				// 这正是与 evalscope `--rate -1` 对拍时的口径
+				if cfg.ThinkTime <= 0 {
+					continue
+				}
+				// 思考时间截断到 deadline：睡过头只会让本档 Elapsed 白白变长
+				//（排空期多算一个 ThinkTime），醒来后照样因超期退出。
+				// 硬编码 300ms 时这点溢出可忽略，配置成几十秒后就不能忽略了。
+				wait := min(cfg.ThinkTime, time.Until(deadline))
+				if wait <= 0 {
 					return
 				}
 				select {
 				case <-levelCtx.Done():
 					return
-				case <-time.After(cooldownPerRequest):
+				case <-time.After(wait):
 				}
 			}
 		})

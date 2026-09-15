@@ -24,12 +24,34 @@ warmup: true          # 正式测试前是否执行预热阶段（并发=10，�
 warmup_duration: 10s  # 预热阶段持续时长
 cooldown: 5s          # 每个并发档位之间的冷却等待时间
 
+# think_time：closed-loop 下同一个 worker「收到上一个响应」到「发出下一个请求」之间的
+# 等待，用来模拟真人看完回答再提问的停顿。默认 300ms。
+#   - 想模拟真实用户节奏 → 保持默认（或按场景调大）
+#   - 想和 evalscope 等工具对拍吞吐数字 → 显式设为 0s，对齐它「完成即发」的语义
+# 注意：同样的 concurrency 下，think_time 越大实际负载越低，QPS/TPS 会更保守，
+# 所以改动它之后，新旧两次压测的吞吐数字不能直接比较。
+# open-loop（load_mode: open）不使用该项——发送节奏由 request_rate 决定。
+#think_time: 0s
+
+# max_output_tokens：各协议输出长度上限的统一取值（openai/anthropic 的 max_tokens、
+# gemini 的 maxOutputTokens、responses 的 max_output_tokens），默认 8192。
+# 压测要控制输出长度，否则 E2E/TPOT/TPS 会混入「模型这次想写多长」的自然波动，
+# 分位数失真、跨协议也不好比，所以默认是固定值而非不限。
+#max_output_tokens: 8192
+
 output: ""       # Excel 输出路径（留空则自动生成时间戳文件名，如 bench-20260618T150405.xlsx）
 no_excel: false  # 跳过 Excel 导出，仅打印终端报告
 no_tui: false    # 禁用 TUI，使用纯文本控制台输出（stdout 非终端时自动禁用）
 
 #json_output: "bench.json"  # 结构化 JSON 报告路径，留空不导出，供 CI 基线比对/画趋势图
 #csv_output: "bench.csv"    # 逐档位 CSV 汇总路径，留空不导出
+
+# sample_output：原始样本 JSONL 导出路径（一行一条请求，含失败请求），留空不导出。
+# 报表里的分位数是聚合结果，一旦想换口径重算（换分位算法、按时段切窗口、剔除某类样本）
+# 没有原始样本就只能重跑一遍压测，而压测环境往往不可复现。
+# 体积提示：每条成功样本都带 ITL 数组（逐输出事件的间隔），长输出高并发的档位
+# 单档可达几十 MB，按需开启。
+#sample_output: "bench-samples.jsonl"
 
 # 压测时"怎么发请求"，两种方式二选一：
 #   closed（默认，不填就是这个）：像打电话问客服——问一句，等它答完了，才问下一句。

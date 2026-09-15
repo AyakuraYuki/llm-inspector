@@ -7,6 +7,11 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/prompts"
 )
 
+// DefaultMaxOutputTokens 是各协议输出上限的默认取值。压测对比的是服务性能，
+// 若输出长度不受控（模型想写多长写多长），E2E 时延/TPOT/TPS 会混入生成长度的
+// 自然波动，同一模型的分位数失真，跨协议横向对比也不公平。
+const DefaultMaxOutputTokens = 8192
+
 // ErrorType 分类请求失败原因
 type ErrorType string
 
@@ -89,6 +94,19 @@ type BenchmarkConfig struct {
 	WarmupDuration   time.Duration
 	CooldownDuration time.Duration
 
+	// ThinkTime 是 closed-loop 下同一 worker 两次请求之间的等待（拟人思考时间）。
+	// 默认 300ms（历史行为），设为 0 等价于 evalscope `--rate -1` 的"完成即发"语义，
+	// 是和它对拍吞吐数字的前置条件——同样的并发数下，思考时间不同则实际负载不同。
+	// 零值按 300ms 处理会让"显式配 0"无法表达，因此这里的 0 就是 0；
+	// 直接构造 BenchmarkConfig 的调用方（测试）因此默认不等待。
+	// open-loop 不使用该字段（到达节奏由 RequestRate 的泊松过程决定）。
+	ThinkTime time.Duration
+
+	// MaxOutputTokens 是各协议输出长度上限（max_tokens/maxOutputTokens/
+	// max_output_tokens）的统一取值，<=0 时回退到 DefaultMaxOutputTokens。
+	// 可配置是为了对齐 evalscope 的输出长度控制，默认值仍固定，保持跨协议可比。
+	MaxOutputTokens int
+
 	// 错误率早停与跳档，EarlyStopEnabled 为 false 时以下字段无效
 	EarlyStopEnabled      bool
 	MaxErrorRate          float64 // 档位失败率超过该值判定为不可用，(0,1]
@@ -130,6 +148,15 @@ type HistBucket struct {
 	Count int
 }
 
+// EffectiveMaxOutputTokens 返回本次压测实际使用的输出长度上限，
+// 未配置（<=0）时回退到 DefaultMaxOutputTokens。
+func (c BenchmarkConfig) EffectiveMaxOutputTokens() int {
+	if c.MaxOutputTokens > 0 {
+		return c.MaxOutputTokens
+	}
+	return DefaultMaxOutputTokens
+}
+
 // PickToken 从该模型关联的 token 分组中随机返回一个 token。
 func (m ModelSpec) PickToken() string {
 	l := len(m.Tokens)
@@ -168,26 +195,44 @@ type BenchmarkResult struct {
 	StoppedEarly bool // 是否因错误率超过 EarlyStop 阈值被提前终止（而非到达 deadline 或用户中止）
 }
 
-// PercentileStats 保存时延类指标的分位数统计
+// PercentileStats 保存时延类指标的分位数统计。
+// 低分位（P10/P25/P75/P90）与 Min/Max/StdDev 用于和 evalscope 的十分位表对标：
+// 只报高分位时看不出分布是"整体偏慢"还是"少数长尾拖高均值"，StdDev 则一眼
+// 区分稳定服务与抖动服务。终端只渲染其中最常看的几列，全量在 Excel/JSON 里。
 type PercentileStats struct {
-	P50  time.Duration
-	P95  time.Duration
-	P99  time.Duration
-	P995 time.Duration
-	P999 time.Duration
-	Avg  time.Duration
-	N    int
+	Min    time.Duration
+	P10    time.Duration
+	P25    time.Duration
+	P50    time.Duration
+	P75    time.Duration
+	P90    time.Duration
+	P95    time.Duration
+	P99    time.Duration
+	P995   time.Duration
+	P999   time.Duration
+	Max    time.Duration
+	Avg    time.Duration
+	StdDev time.Duration // 总体标准差（分母 N，非样本标准差）
+	N      int
 }
 
-// FloatStats 保存 float64 指标的分位数统计（如 TPS、TPM 等非时延指标）
+// FloatStats 保存 float64 指标的分位数统计（如 TPS、TPM 等非时延指标）。
+// 分位档位与 PercentileStats 保持一致，便于两类指标在报表里同构渲染。
 type FloatStats struct {
-	P50  float64
-	P95  float64
-	P99  float64
-	P995 float64
-	P999 float64
-	Avg  float64
-	N    int
+	Min    float64
+	P10    float64
+	P25    float64
+	P50    float64
+	P75    float64
+	P90    float64
+	P95    float64
+	P99    float64
+	P995   float64
+	P999   float64
+	Max    float64
+	Avg    float64
+	StdDev float64 // 总体标准差（分母 N，非样本标准差）
+	N      int
 }
 
 // AggregatedMetrics 保存一次测试的汇聚指标
@@ -226,6 +271,12 @@ type AggregatedMetrics struct {
 	TPM float64
 	QPS float64
 	QPM float64
+
+	// DecodeTPS 是单流解码速度（tok/s），由平均 TPOT 取倒数得到，对标 evalscope
+	// 的 Decode tok/s。与 TpsPr.Avg 同源但口径不同：TpsPr 是各请求速率的均值，
+	// DecodeTPS 是平均每 token 耗时的倒数（调和均值口径），长短响应混跑时前者
+	// 被短响应拉高，后者更贴近"每个 token 平均要等多久"。TPOT 无样本时为 0。
+	DecodeTPS float64
 
 	// 系统级输入/输出 token 比（总 output_tokens / 总 input_tokens，仅统计有 usage 上报的请求）
 	IORatio float64

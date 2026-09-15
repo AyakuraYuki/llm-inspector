@@ -122,13 +122,16 @@ func classifyHTTPStatus(code int) types.ErrorType {
 }
 
 const (
+	// streamTimeout 覆盖思考型模型可能长达数十分钟的思考阶段，流式端点专用。
 	streamTimeout = 30 * time.Minute
-	imageTimeout  = 30 * time.Minute
 
-	// maxOutputTokens 统一各协议的输出长度上限。压测对比的是服务性能，
-	// 若输出长度不受控（模型想写多长写多长），E2E 时延/TPOT/TPS 会混入
-	// 生成长度的自然波动，同一模型的分位数失真，跨协议横向对比也不公平。
-	maxOutputTokens = 8192
+	// imageTimeout 是同步、非流式的图片生成请求超时，刻意比 streamTimeout 短得多：
+	// 图片生成没有流式端点那种"仍在持续吐字符说明活着"的信号，一旦上游偶发变慢
+	// 或卡死，请求会原地占满一个并发槛位直到超时。若沿用 30 分钟的预算，单个
+	// 慢请求就能把整个档位的收尾排空期（RunLevel 的 wg.Wait()）拖到 30 分钟，
+	// 表现为该并发档位测试迟迟不结束。收紧到 3 分钟，既覆盖图片生成正常的
+	// 数秒到数十秒延迟及其重尾，又把最坏情况下的排空期限制在可接受范围内。
+	imageTimeout = 3 * time.Minute
 )
 
 type doSSERequest func(context.Context, types.BenchmarkConfig, types.ModelSpec) types.RequestMetrics
@@ -241,7 +244,7 @@ func doAnthropicRequest(ctx context.Context, cfg types.BenchmarkConfig, model ty
 
 	payload, _ := json.Marshal(map[string]any{
 		"model":      model.Name,
-		"max_tokens": maxOutputTokens,
+		"max_tokens": cfg.EffectiveMaxOutputTokens(),
 		"stream":     true,
 		"messages":   []map[string]any{{"role": "user", "content": cfg.BuildPrompt()}},
 	})
@@ -285,7 +288,7 @@ func doOpenAIRequest(ctx context.Context, cfg types.BenchmarkConfig, model types
 	// 网关会按需为 o 系列等模型转换字段名
 	payload, _ := json.Marshal(map[string]any{
 		"model":          model.Name,
-		"max_tokens":     maxOutputTokens,
+		"max_tokens":     cfg.EffectiveMaxOutputTokens(),
 		"stream":         true,
 		"stream_options": map[string]bool{"include_usage": true},
 		"messages":       []map[string]any{{"role": "user", "content": cfg.BuildPrompt()}},
@@ -331,7 +334,7 @@ func doGeminiRequest(ctx context.Context, cfg types.BenchmarkConfig, model types
 				"parts": []map[string]any{{"text": cfg.BuildPrompt()}},
 			},
 		},
-		"generationConfig": map[string]any{"maxOutputTokens": maxOutputTokens},
+		"generationConfig": map[string]any{"maxOutputTokens": cfg.EffectiveMaxOutputTokens()},
 	})
 
 	reqCtx, cancel := context.WithTimeout(ctx, streamTimeout)
@@ -411,7 +414,7 @@ func doOpenAIResponseRequest(ctx context.Context, cfg types.BenchmarkConfig, mod
 	payload, _ := json.Marshal(map[string]any{
 		"model":             model.Name,
 		"input":             cfg.BuildPrompt(),
-		"max_output_tokens": maxOutputTokens,
+		"max_output_tokens": cfg.EffectiveMaxOutputTokens(),
 		"stream":            true,
 	})
 

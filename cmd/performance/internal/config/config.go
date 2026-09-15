@@ -50,6 +50,10 @@ const (
 	defaultPromptText  = "Explain in plain English what API latency and throughput mean for a developer integrating LLM APIs. Write about 120 words. Do not use bullet points."
 	defaultImagePrompt = "A cute fluffy kitten playing with a ball of yarn, soft lighting, adorable, high detail."
 
+	// defaultThinkTime 保持历史硬编码值，改动它会让新旧报告的吞吐数字失去可比性。
+	// 与 evalscope 对拍时应显式配 think_time: 0s。
+	defaultThinkTime = 300 * time.Millisecond
+
 	defaultMaxErrorRate = 0.5
 	defaultMinSamples   = 20
 
@@ -68,7 +72,8 @@ type Config struct {
 	ImagePrompt    string              `yaml:"image_prompt"`
 	Warmup         *bool               `yaml:"warmup"` // 指针以区分「显式 false」与「未配置」
 	WarmupDuration time.Duration       `yaml:"warmup_duration"`
-	Cooldown       *time.Duration      `yaml:"cooldown"` // 指针以区分「显式 0s（档位间不等待）」与「未配置」
+	Cooldown       *time.Duration      `yaml:"cooldown"`   // 指针以区分「显式 0s（档位间不等待）」与「未配置」
+	ThinkTime      *time.Duration      `yaml:"think_time"` // 指针以区分「显式 0s（完成即发）」与「未配置（取默认 300ms）」
 	Output         string              `yaml:"output"`
 	NoExcel        bool                `yaml:"no_excel"`
 	NoTUI          bool                `yaml:"no_tui"`
@@ -88,6 +93,14 @@ type Config struct {
 	// 结构化输出路径，留空不导出，不影响现有行为。
 	JSONOutput string `yaml:"json_output"`
 	CSVOutput  string `yaml:"csv_output"`
+
+	// SampleOutput 是原始样本 JSONL 的导出路径（一行一条请求），留空不导出。
+	// 报表里的分位数是聚合结果；留下原始样本才能在不重跑压测的前提下换口径重算。
+	SampleOutput string `yaml:"sample_output"`
+
+	// MaxOutputTokens 是各协议输出长度上限的统一取值，未配置（0）时取
+	// types.DefaultMaxOutputTokens（8192），与历史固定值一致。
+	MaxOutputTokens int `yaml:"max_output_tokens"`
 
 	// ShowHistogram 为真时在终端/Excel 额外输出延迟分布直方图，默认 false 不影响现有报表。
 	ShowHistogram bool `yaml:"show_histogram"`
@@ -187,6 +200,15 @@ func (c *Config) applyDefaults() {
 	if c.Cooldown == nil {
 		d := defaultCooldown
 		c.Cooldown = &d
+	}
+	if c.ThinkTime == nil {
+		d := defaultThinkTime
+		c.ThinkTime = &d
+	}
+	// 只在「未配置」（零值）时填默认：负数留给 validate 报错，
+	// 否则 -1 会被悄悄当成 8192。
+	if c.MaxOutputTokens == 0 {
+		c.MaxOutputTokens = types.DefaultMaxOutputTokens
 	}
 	if c.EarlyStop.Enabled {
 		if c.EarlyStop.MaxErrorRate <= 0 {
@@ -297,6 +319,13 @@ func (c *Config) validate() error {
 		}
 	}
 
+	if c.ThinkTime != nil && *c.ThinkTime < 0 {
+		return fmt.Errorf("think_time 不能为负数，发现非法值：%v", *c.ThinkTime)
+	}
+	if c.MaxOutputTokens < 0 {
+		return fmt.Errorf("max_output_tokens 不能为负数，发现非法值：%d", c.MaxOutputTokens)
+	}
+
 	return nil
 }
 
@@ -339,6 +368,12 @@ func (c *Config) ToBenchmark() types.BenchmarkConfig {
 
 	warmup := c.Warmup != nil && *c.Warmup
 
+	// applyDefaults 保证非 nil；这里仍兜一层，容忍不经 Load 直接构造 Config 的调用方
+	thinkTime := defaultThinkTime
+	if c.ThinkTime != nil {
+		thinkTime = *c.ThinkTime
+	}
+
 	return types.BenchmarkConfig{
 		BaseURL:               c.BaseURL,
 		Models:                models,
@@ -352,6 +387,8 @@ func (c *Config) ToBenchmark() types.BenchmarkConfig {
 		Warmup:                warmup,
 		WarmupDuration:        c.WarmupDuration,
 		CooldownDuration:      *c.Cooldown, // applyDefaults 保证非 nil
+		ThinkTime:             thinkTime,
+		MaxOutputTokens:       c.MaxOutputTokens,
 		EarlyStopEnabled:      c.EarlyStop.Enabled,
 		MaxErrorRate:          c.EarlyStop.MaxErrorRate,
 		MinSamples:            c.EarlyStop.MinSamples,

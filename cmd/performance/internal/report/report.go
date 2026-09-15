@@ -10,7 +10,9 @@ import (
 )
 
 const (
-	colWidth     = 80
+	// colWidth 是终端报告的分隔线宽度。100 而非 80 是为了容纳分位数表新增的
+	// P90/StdDev 两列——低分位与标准差是和 evalscope 十分位表对标的最小必要集。
+	colWidth     = 100
 	histBarWidth = 30 // ASCII 直方图条形长度（字符数），按各桶计数占最大计数的比例归一化
 )
 
@@ -40,8 +42,8 @@ func printOne(agg types.AggregatedMetrics) {
 		formatDuration(agg.Elapsed), formatDuration(agg.Window), agg.Total, agg.Success, agg.Failed, errPct)
 	fmt.Printf("%s\n", strings.Repeat("-", colWidth))
 
-	hdr := fmt.Sprintf("  %-16s  %-11s  %-11s  %-11s  %-11s  %s",
-		"Metric", "P50", "P95", "P99", "Avg", "N")
+	hdr := fmt.Sprintf("  %-16s  %-11s  %-11s  %-11s  %-11s  %-11s  %-11s  %s",
+		"Metric", "P50", "P90", "P95", "P99", "Avg", "StdDev", "N")
 	fmt.Println(hdr)
 	fmt.Printf("  %s\n", strings.Repeat("-", colWidth-2))
 
@@ -54,6 +56,9 @@ func printOne(agg types.AggregatedMetrics) {
 		fmt.Printf("  %s\n", strings.Repeat("-", colWidth-2))
 		fmt.Printf("  TPS: %8.2f tok/s  |  TPM: %8.1f tok/min  |  QPS: %.4f req/s  |  QPM: %.2f req/min  |  I/O Ratio: %s\n",
 			agg.TPS, agg.TPM, agg.QPS, agg.QPM, formatRatio(agg.IORatio))
+		if agg.DecodeTPS > 0 {
+			fmt.Printf("  Decode: %.1f tok/s (单流解码速度，1/平均 TPOT)\n", agg.DecodeTPS)
+		}
 	} else {
 		printRow("E2E Latency", agg.Latency)
 
@@ -121,14 +126,29 @@ func printRow(label string, s types.PercentileStats) {
 	if s.N > 0 {
 		n = fmt.Sprintf("%d", s.N)
 	}
-	fmt.Printf("  %-16s  %-11s  %-11s  %-11s  %-11s  %s\n",
+	// StdDev 用 formatStdDev 而非 formatDuration：单样本的标准差 0 是有意义的
+	// 结果（"没有离散度"），不能和"没有数据"一样显示成 N/A。
+	fmt.Printf("  %-16s  %-11s  %-11s  %-11s  %-11s  %-11s  %-11s  %s\n",
 		label,
 		formatDuration(s.P50),
+		formatDuration(s.P90),
 		formatDuration(s.P95),
 		formatDuration(s.P99),
 		formatDuration(s.Avg),
+		formatStdDev(s.StdDev, s.N),
 		n,
 	)
+}
+
+// formatStdDev 渲染标准差：无样本时 N/A，有样本时即使为 0 也照实显示。
+func formatStdDev(d time.Duration, n int) string {
+	if n == 0 {
+		return "N/A"
+	}
+	if d == 0 {
+		return "0ms"
+	}
+	return formatDuration(d)
 }
 
 func printSummaryTable(results []types.AggregatedMetrics) {

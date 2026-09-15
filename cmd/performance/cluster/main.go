@@ -23,6 +23,7 @@ import (
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/config"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/report"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/reporter"
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/samplelog"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 )
 
@@ -117,6 +118,9 @@ func runMain(args []string) {
 
 	startAt := time.Now()
 
+	// 原始样本导出（可选）：coordinator 侧写出各节点池化并归一时间轴后的全局样本
+	samplelog.Init(cfg.SampleOutput)
+
 	var (
 		results []types.AggregatedMetrics
 		summary *coord.RunSummary
@@ -127,8 +131,10 @@ func runMain(args []string) {
 	} else {
 		results, summary, runErr = runWithConsole(bench, cfg.Cluster)
 	}
+	samplelog.Close()
 
 	printAgentErrlogNotices(summary)
+	printSampleNotice()
 	if runErr != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
 		if len(results) == 0 {
@@ -197,6 +203,13 @@ func printAgentErrlogNotices(summary *coord.RunSummary) {
 		if a.ErrlogCount > 0 {
 			fmt.Printf("\nagent %s 请求错误日志（%d 条）: %s\n", a.Addr, a.ErrlogCount, a.ErrlogPath)
 		}
+	}
+}
+
+// printSampleNotice 在压测结束后提示原始样本文件的位置（未开启导出时不输出）。
+func printSampleNotice() {
+	if n := samplelog.Count(); n > 0 {
+		fmt.Printf("原始样本（%d 条，全节点合并）: %s\n", n, samplelog.Path())
 	}
 }
 
@@ -285,6 +298,8 @@ func printHeader(bench types.BenchmarkConfig, cluster *config.ClusterConfig) {
 	}
 	fmt.Printf("Warmup      : %s\n", warmupLabel)
 	fmt.Printf("Cooldown    : %s between levels\n", bench.CooldownDuration)
+	fmt.Printf("Think Time  : %s (closed-loop only)\n", thinkTimeLabel(bench.ThinkTime))
+	fmt.Printf("Max Tokens  : %d per request\n", bench.EffectiveMaxOutputTokens())
 	earlyStopLabel := "disabled"
 	if bench.EarlyStopEnabled {
 		skip := "not skipping higher concurrency"
@@ -308,4 +323,13 @@ func printHeader(bench types.BenchmarkConfig, cluster *config.ClusterConfig) {
 	}
 	fmt.Printf("Image Prompt: %s\n", bench.ImagePrompt)
 	fmt.Printf("\n")
+}
+
+// thinkTimeLabel 渲染配置头里的思考时间：0 要显式说明是「完成即发」，
+// 否则读报告的人无法区分「没配」和「配成了 0」。
+func thinkTimeLabel(d time.Duration) string {
+	if d <= 0 {
+		return "0s (fire as soon as the previous response completes)"
+	}
+	return d.String()
 }

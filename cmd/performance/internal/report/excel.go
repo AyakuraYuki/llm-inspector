@@ -59,20 +59,26 @@ func ExportExcel(cfg types.BenchmarkConfig, results []types.AggregatedMetrics, r
 	_, _ = f.NewSheet("输入输出Token比")
 	writeIORSheet(f, results, hdrStyle)
 
-	// ── Sheet 6: 错误分析 ─────────────────────────────────────────────────
+	// ── Sheet 6: 分位数全景 ───────────────────────────────────────────────
+	// 独立成表而不是把 13 个分位数塞进上面每张表：现有 sheet 的列布局保持不变，
+	// 需要完整分布时来这张表，一个「档位 × 指标」一行，横向就是完整分位数序列。
+	_, _ = f.NewSheet("分位数全景")
+	writePercentileSheet(f, results, hdrStyle)
+
+	// ── Sheet 7: 错误分析 ─────────────────────────────────────────────────
 	_, _ = f.NewSheet("错误分析")
 	writeErrorSheet(f, results, hdrStyle)
 
-	// ── Sheet 7: 错误明细 ─────────────────────────────────────────────────
+	// ── Sheet 8: 错误明细 ─────────────────────────────────────────────────
 	_, _ = f.NewSheet("错误明细")
 	writeErrorDetailSheet(f, results, hdrStyle)
 
-	// ── Sheet 8: 延迟分布（可选）───────────────────────────────────────────
+	// ── Sheet 9: 延迟分布（可选）───────────────────────────────────────────
 	// 仅当至少一个档位携带直方图数据（即运行时开启了 show_histogram）才新增，
-	// 关闭时 sheet 总数、既有 7 个 sheet 的内容和顺序都不变。
+	// 关闭时 sheet 总数、既有 8 个 sheet 的内容和顺序都不变。
 	sheets := []string{
 		"TTFT延迟", "生成速度(TPS·token)", "QPS压测(TPS·req)",
-		"输入输出Token比", "错误分析", "错误明细",
+		"输入输出Token比", "分位数全景", "错误分析", "错误明细",
 	}
 	if hasHistogramData(results) {
 		_, _ = f.NewSheet("延迟分布")
@@ -125,6 +131,8 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 		{"时长 / 并发档位", cfg.Duration.String()},
 		{"并发档位", fmt.Sprintf("%v", cfg.Concurrency)},
 		{"负载模式", loadModeSummary(cfg)},
+		{"思考时间", thinkTimeSummary(cfg)},
+		{"输出上限", fmt.Sprintf("max_tokens=%d", cfg.EffectiveMaxOutputTokens())},
 		{"模型数量", len(cfg.Models)},
 		{"排除模型", excludedModel},
 		{"错误率早停", earlyStopSummary(cfg)},
@@ -156,12 +164,14 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 	rows = append(rows, []any{"- ITL", "逐输出内容事件之间的间隔（近似逐 token 生成间隔），按 SSE 事件粒度采样：多数 provider 一个事件对应一个或几个 token，并非逐 token 精确值；剔除口径同 TPOT/TPS"})
 	rows = append(rows, []any{"- TPS", "per-request tokens/s（P50/P95/P99/P99.5/P99.9；生成窗口 <100ms 或 <5%×E2E 的样本视为一次性到达，不入样，剔除数见备注列）"})
 	rows = append(rows, []any{"- TPM", "per-request tokens/min（P50/P95/P99/P99.5/P99.9；入样口径同 TPS）"})
+	rows = append(rows, []any{"- Decode tok/s", "单流解码速度（1/平均 TPOT），入样口径同 TPOT/TPS；对标 evalscope 的 Decode tok/s。与 tokens/s Avg 同源但口径不同：后者是各请求速率的算术均值，长短响应混跑时被短响应拉高"})
 	rows = append(rows, []any{"- System TPS", "吞吐窗口内完成的总 tokens/窗口时长（窗口外完成的长尾请求不计入）"})
 	rows = append(rows, []any{"- QPS（又称RPS）", "系统级 req/s"})
 	rows = append(rows, []any{"- QPM（又称RPM）", "系统级 req/min"})
 	rows = append(rows, []any{"- I/O Ratio", "输出/输入 token 比（output_tokens/input_tokens，per-request 分位数及 System 总量比）"})
 	rows = append(rows, []any{"- Cache Hit Rate", "缓存命中率（cached_input_tokens/input_tokens*100%，input_tokens 为全量输入口径：Anthropic 已补入 cache_read/cache_creation；per-request 分位数及 System 总量比，仅上报了缓存字段的 provider 有效，未上报时显示 N/A）"})
 	rows = append(rows, []any{"- Goodput", "满足全部已配置 SLO 阈值（TTFT/TPOT/E2E）的请求占总请求数的比例；未配置 slo 时显示 N/A"})
+	rows = append(rows, []any{"- 分位数全景 sheet", "每个「档位 × 指标」一行，列出 Min/P10/P25/P50/P75/P90/P95/P99/P99.5/P99.9/Max/Avg/StdDev 全量统计。低分位看整体分布形态，StdDev 看抖动幅度——只看高分位分不出「整体偏慢」与「少数长尾拖高均值」"})
 
 	for i, row := range rows {
 		xlSetCell(f, sh, 1, i+3, row[0])
@@ -208,6 +218,18 @@ func earlyStopSummary(cfg types.BenchmarkConfig) string {
 		skip = "跳过更高并发档位"
 	}
 	return fmt.Sprintf("启用（阈值 %.1f%%，最少样本 %d，%s）", cfg.MaxErrorRate*100, cfg.MinSamples, skip)
+}
+
+// thinkTimeSummary 渲染总览 sheet 里的思考时间摘要。0 要显式说明语义，
+// 否则读报告的人无法区分「没配」和「配成了完成即发」。
+func thinkTimeSummary(cfg types.BenchmarkConfig) string {
+	if cfg.OpenLoop {
+		return "不适用（open-loop 的到达节奏由目标 RPS 决定）"
+	}
+	if cfg.ThinkTime <= 0 {
+		return "0s（完成即发，对齐 evalscope --rate -1 语义）"
+	}
+	return fmt.Sprintf("%s（closed-loop 每个 worker 两次请求之间的等待）", cfg.ThinkTime)
 }
 
 // loadModeSummary 渲染总览 sheet 里的负载模式摘要。
@@ -276,6 +298,67 @@ func writeHistogramSheet(f *excelize.File, results []types.AggregatedMetrics, hd
 	}
 }
 
+// writePercentileSheet 把每个「档位 × 指标」的全量分位数拆成一行。
+// 时延类指标统一以 ms 为单位，速率/比例类保留原单位，靠「单位」列区分。
+func writePercentileSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
+	const sh = "分位数全景"
+	headers := []any{
+		"模型 ID", "Provider", "Token Group", "并发数", "指标", "单位", "样本数(N)",
+		"Min", "P10", "P25", "P50", "P75", "P90", "P95", "P99", "P99.5", "P99.9", "Max", "Avg", "StdDev",
+	}
+	xlSetRow(f, sh, 1, headers, hdrStyle)
+	_ = f.SetColWidth(sh, "A", "A", 30)
+	_ = f.SetColWidth(sh, "B", "B", 14)
+	_ = f.SetColWidth(sh, "C", "C", 18)
+	_ = f.SetColWidth(sh, "D", "D", 10)
+	_ = f.SetColWidth(sh, "E", "E", 18)
+	_ = f.SetColWidth(sh, "F", "G", 10)
+	_ = f.SetColWidth(sh, "H", "T", 12)
+
+	row := 2
+	emit := func(agg types.AggregatedMetrics, metric, unit string, vals []any, n int) {
+		if n == 0 {
+			return // 该指标本档无样本，不占行
+		}
+		head := []any{agg.Model, string(agg.Provider), agg.TokenGroup, agg.Concurrency, metric, unit, n}
+		xlSetRow(f, sh, row, append(head, vals...), 0)
+		row++
+	}
+	for _, agg := range results {
+		isStreaming := agg.Provider != types.ProviderOpenAIImage
+		if isStreaming {
+			emit(agg, "TTFT", "ms", durStatCells(agg.TTFT), agg.TTFT.N)
+			emit(agg, "TPOT", "ms", durStatCells(agg.TPOT), agg.TPOT.N)
+			emit(agg, "ITL", "ms", durStatCells(agg.ITL), agg.ITL.N)
+		}
+		emit(agg, "E2E Latency", "ms", durStatCells(agg.Latency), agg.Latency.N)
+		if isStreaming {
+			emit(agg, "tokens/s", "tok/s", floatStatCells(agg.TpsPr), agg.TpsPr.N)
+			emit(agg, "TPM", "tok/min", floatStatCells(agg.TpmPr), agg.TpmPr.N)
+			emit(agg, "I/O Ratio", "ratio", floatStatCells(agg.IOR), agg.IOR.N)
+			emit(agg, "Cache Hit Rate", "%", floatStatCells(agg.CacheHitPr), agg.CacheHitPr.N)
+		}
+	}
+}
+
+// durStatCells 把时延分位数按表头顺序摊平为毫秒数值。这里不用 durMs：
+// 0 在本表里是合法取值（单样本的 StdDev、快到测不出的 Min），显示成 N/A 会误导。
+func durStatCells(s types.PercentileStats) []any {
+	ms := func(d time.Duration) any { return round2(float64(d) / float64(time.Millisecond)) }
+	return []any{
+		ms(s.Min), ms(s.P10), ms(s.P25), ms(s.P50), ms(s.P75), ms(s.P90),
+		ms(s.P95), ms(s.P99), ms(s.P995), ms(s.P999), ms(s.Max), ms(s.Avg), ms(s.StdDev),
+	}
+}
+
+// floatStatCells 把 float 分位数按表头顺序摊平，同样保留合法的 0。
+func floatStatCells(s types.FloatStats) []any {
+	return []any{
+		round2(s.Min), round2(s.P10), round2(s.P25), round2(s.P50), round2(s.P75), round2(s.P90),
+		round2(s.P95), round2(s.P99), round2(s.P995), round2(s.P999), round2(s.Max), round2(s.Avg), round2(s.StdDev),
+	}
+}
+
 func writeTTFTSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "TTFT延迟"
 	headers := []any{
@@ -320,6 +403,7 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 		"TPOT P50(ms)", "TPOT P95(ms)", "TPOT P99(ms)", "TPOT P99.5(ms)", "TPOT P99.9(ms)", "TPOT Avg(ms)",
 		"ITL P50(ms)", "ITL P95(ms)", "ITL P99(ms)", "ITL P99.5(ms)", "ITL P99.9(ms)", "ITL Avg(ms)", "ITL 样本数(N)",
 		"TPM P50", "TPM P95", "TPM P99", "TPM P99.5", "TPM P99.9", "TPM Avg",
+		"Decode tok/s",
 		"System TPS(tok/s)",
 		"System TPM(tok/min)",
 		"备注",
@@ -360,6 +444,7 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 			durMs(agg.TPOT.P50), durMs(agg.TPOT.P95), durMs(agg.TPOT.P99), durMs(agg.TPOT.P995), durMs(agg.TPOT.P999), durMs(agg.TPOT.Avg),
 			durMs(agg.ITL.P50), durMs(agg.ITL.P95), durMs(agg.ITL.P99), durMs(agg.ITL.P995), durMs(agg.ITL.P999), durMs(agg.ITL.Avg), agg.ITL.N,
 			fVal(agg.TpmPr.P50), fVal(agg.TpmPr.P95), fVal(agg.TpmPr.P99), fVal(agg.TpmPr.P995), fVal(agg.TpmPr.P999), fVal(agg.TpmPr.Avg),
+			fVal(agg.DecodeTPS),
 			fVal(agg.TPS),
 			fVal(agg.TPM),
 			note,

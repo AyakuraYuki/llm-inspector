@@ -1,6 +1,7 @@
 # performance-cluster 多机分布式压测工具
 
-[performance](../README.md) 压测工具的多机分布式版本：coordinator/agent 强协调架构，把并发档位切分到多台内网机器分摊发压负载，原始样本统一回收后按与单机版**完全一致的口径**聚合、输出终端报告与 Excel。适用于单机顶不住的高并发档位（如 5000 全局并发）。
+[performance](../README.md) 压测工具的多机分布式版本：coordinator/agent 强协调架构，把并发档位切分到多台内网机器分摊发压负载，原始样本统一回收后按与单机版 **完全一致的口径**聚合、输出终端报告与
+Excel。适用于单机顶不住的高并发档位（如 5000 全局并发）。
 
 ## 架构
 
@@ -14,6 +15,8 @@
 └────────────────────┘                      └──────────────────┘
 ```
 
+- **版本一致性**：协议当前为 **v2**（`think_time`/`max_output_tokens` 随任务下发）。coordinator 与所有 agent 必须来自 **同一次构建**——版本不一致会在探活阶段直接中止，而不是让旧 agent
+  静默沿用自己硬编码的默认值、各节点用着不同的负载参数却汇总成一份报告
 - **agent**：常驻守护进程，单任务互斥；档位任务在本机执行单机版同款的 `runner.RunLevel`，热路径只做本地原子计数
 - **coordinator**：镜像单机版主循环（preflight → warmup → 逐档 → cooldown），每档把全局并发按节点数切分下发、1s 轮询各 agent 的计数快照喂 TUI、档位结束后回收原始样本合并聚合
 - **正确性关键**：分位数不可跨机合并——agent 回传原始 `RequestMetrics` 样本，coordinator 拼接后统一走单机版的 `metrics.AggregateMetrics`，数值口径与单机版逐字段一致
@@ -29,7 +32,7 @@ make build-performance-cluster                          # coordinator 侧（默�
 make build-performance-cluster GOOS=linux GOARCH=amd64  # agent 部署到 Linux 节点
 ```
 
-产物：`build/performance-cluster/performance-cluster-<GOOS>_<GOARCH>` 与配置模板 `config.yaml`。agent 与 coordinator 是**同一个二进制**，只需按平台各编译一份。
+产物：`build/performance-cluster/performance-cluster-<GOOS>_<GOARCH>` 与配置模板 `config.yaml`。agent 与 coordinator 是 **同一个二进制**，只需按平台各编译一份。
 
 ## 使用
 
@@ -41,7 +44,7 @@ make build-performance-cluster GOOS=linux GOARCH=amd64  # agent 部署到 Linux 
 ./performance-cluster-linux_amd64 agent -listen :7070 -token my-secret
 ```
 
-agent 无配置文件，压测参数（含 API token）随任务由 coordinator 通过内网明文下发——**请确保集群运行在可信内网**。
+agent 无配置文件，压测参数（含 API token）随任务由 coordinator 通过内网明文下发—— **请确保集群运行在可信内网**。
 
 节点准备建议：`ulimit -n` 调到远高于本机最大并发分片（如 `ulimit -n 65536`），否则高并发档位会先撞上 fd 上限而不是被测服务的真实瓶颈。
 
@@ -52,28 +55,32 @@ cp configs/config.example.yaml config.yaml   # 修改 cluster.agents / models / 
 ./performance-cluster-darwin_amd64 run -config config.yaml
 ```
 
-配置与单机版一致，新增 `cluster` 段；`concurrency` 档位语义变为**全局总并发**，coordinator 按节点数均分（余数逐台 +1）：
+配置与单机版一致，新增 `cluster` 段；`concurrency` 档位语义变为 **全局总并发**，coordinator 按节点数均分（余数逐台 +1）：
 
 ```yaml
 cluster:
-  agents: ["10.0.0.1:7070", "10.0.0.2:7070", "10.0.0.3:7070", "10.0.0.4:7070"]
+  agents: [ "10.0.0.1:7070", "10.0.0.2:7070", "10.0.0.3:7070", "10.0.0.4:7070" ]
   auth_token: ""      # 可选
   poll_interval: 1s   # 进度轮询间隔
   agent_timeout: 10s  # 连续无响应判定失联
-concurrency: [1000, 2000, 3000, 4000, 5000]  # 5000 ÷ 4 节点 = 每台 1250
+concurrency: [ 1000, 2000, 3000, 4000, 5000 ]  # 5000 ÷ 4 节点 = 每台 1250
 ```
 
 TUI/纯文本控制台、终端汇总报告、Excel 导出（默认 `bench-cluster-<时间戳>.xlsx`）均与单机版相同；Excel 总览 sheet 额外包含节点数与各节点最大并发分片。
 
-`load_mode: open`（[open-loop 目标 RPS 模式](../README.md#负载模式closed-loop-与-open-loop)）与单机版语义一致：`request_rate` 是**全局**目标 RPS，coordinator 按节点数**等分**后随任务下发给各 agent（除不尽时有 <1 个 agent 份的浮点误差，量级可忽略）；`concurrency` 此时是全局在途请求数上限，切分方式与 closed-loop 相同。`slo`（goodput）、`show_histogram`、`json_output`/`csv_output` 同样与单机版完全一致，直接写在同一份配置里即可。
+`load_mode: open`（[open-loop 目标 RPS 模式](../README.md#负载模式closed-loop-与-open-loop)）与单机版语义一致：`request_rate` 是 **全局**目标 RPS，coordinator 按节点数 **等分**后随任务下发给各
+agent（除不尽时有 <1 个 agent 份的浮点误差，量级可忽略）；`concurrency` 此时是全局在途请求数上限，切分方式与 closed-loop 相同。`slo`（goodput）、`show_histogram`、`json_output`/`csv_output`、`think_time`、
+`max_output_tokens` 同样与单机版完全一致，直接写在同一份配置里即可——后两项随任务下发，全集群统一取值。
+
+`sample_output`（原始样本 JSONL）由 **coordinator** 写出全节点合并后的样本：各 agent 的样本先归一到统一时间轴再池化，因此文件格式与单机版完全相同，不是每台一份各自的时间轴。
 
 ## 运行流程
 
 1. **探活**：逐台 `ping`，校验协议版本一致且空闲，任一不可达即中止
 2. **会话建立**：下发各节点在整个 run 中的最大并发分片，agent 据此一次性配置连接池
-3. **预检**：**每台 agent** 都对全部模型做一次连通性预检（验证各机到上游的网络路径），任一失败即中止；终端里模型名会标注 `@agent地址`
+3. **预检**： **每台 agent** 都对全部模型做一次连通性预检（验证各机到上游的网络路径），任一失败即中止；终端里模型名会标注 `@agent地址`
 4. **正式测试**：逐档切分下发 → 各 agent 在统一的全局 ramp 窗口内错峰启动 worker → coordinator 轮询聚合进度 → 档位结束回收原始样本合并聚合；warmup/cooldown/跳档语义与单机版一致
-5. **收尾**：通知各 agent 结束会话，打印各节点本机的请求错误日志位置（`bench-agent-<runID>-request-errors.jsonl`，在 agent 的工作目录）
+5. **收尾**：通知各 agent 结束会话，打印各节点本机的请求错误日志位置（`bench-agent-<runID>-request-errors.jsonl`，在 agent 的工作目录）；开启 `sample_output` 时另打印 coordinator 侧合并样本文件的位置与条数
 
 `Ctrl+C` 两段式与单机版一致：第一次广播取消并输出已完成部分的报告，第二次直接终止。
 

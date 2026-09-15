@@ -13,7 +13,11 @@ import (
 
 // Version 是协议版本。coordinator 探活时校验，不匹配即中止，
 // 避免新旧二进制混部时字段语义悄然错位。
-const Version = 1
+//
+// v2：BenchmarkConfig 新增 ThinkTime / MaxOutputTokens。两者都是 agent 侧
+// 实际发压行为的一部分，旧 agent 会静默忽略它们、沿用硬编码的 300ms 与 8192，
+// 于是各节点用着不同的负载参数却汇总成一份报告——正是版本校验要拦的情况。
+const Version = 2
 
 // HeaderToken 是可选的共享密钥鉴权头。agent 以 -token 启动时，
 // 所有请求都必须携带一致的值；未配置时跳过校验。

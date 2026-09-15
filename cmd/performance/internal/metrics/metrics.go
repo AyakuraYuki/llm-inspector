@@ -136,6 +136,12 @@ func AggregateMetrics(result types.BenchmarkResult, slo types.SLOThresholds, sho
 	agg.ITL = percentileStats(itls)
 	agg.Latency = percentileStats(latencies)
 
+	// Decode tok/s：平均 TPOT 取倒数，对标 evalscope 的同名指标。入样口径随
+	// TPOT——未通过速率有效性校验的样本已被剔除，不会把排空速度算成解码速度。
+	if agg.TPOT.Avg > 0 {
+		agg.DecodeTPS = float64(time.Second) / float64(agg.TPOT.Avg)
+	}
+
 	// per-request TPS 分位数
 	agg.TpsPr = floatPercentileStats(tpsValues)
 	tpmValues := make([]float64, len(tpsValues))
@@ -193,7 +199,7 @@ func AggregateMetrics(result types.BenchmarkResult, slo types.SLOThresholds, sho
 	return agg
 }
 
-// percentileStats 计算一组时延样本的 P50/P95/P99/Avg。
+// percentileStats 计算一组时延样本的 Min/P10/P25/P50/P75/P90/P95/P99/P99.5/P99.9/Max/Avg/StdDev。
 func percentileStats(durations []time.Duration) types.PercentileStats {
 	n := len(durations)
 	if n == 0 {
@@ -208,6 +214,7 @@ func percentileStats(durations []time.Duration) types.PercentileStats {
 	for _, d := range sorted {
 		total += d
 	}
+	avg := total / time.Duration(n)
 
 	pct := func(p float64) time.Duration {
 		idx := max(int(math.Ceil(float64(n)*p))-1, 0)
@@ -215,17 +222,39 @@ func percentileStats(durations []time.Duration) types.PercentileStats {
 	}
 
 	return types.PercentileStats{
-		P50:  pct(0.50),
-		P95:  pct(0.95),
-		P99:  pct(0.99),
-		P995: pct(0.995),
-		P999: pct(0.999),
-		Avg:  total / time.Duration(n),
-		N:    n,
+		Min:    sorted[0],
+		P10:    pct(0.10),
+		P25:    pct(0.25),
+		P50:    pct(0.50),
+		P75:    pct(0.75),
+		P90:    pct(0.90),
+		P95:    pct(0.95),
+		P99:    pct(0.99),
+		P995:   pct(0.995),
+		P999:   pct(0.999),
+		Max:    sorted[n-1],
+		Avg:    avg,
+		StdDev: stdDevDuration(sorted, avg),
+		N:      n,
 	}
 }
 
-// floatPercentileStats 计算一组 float64 样本的 P50/P95/P99/Avg。
+// stdDevDuration 计算一组时延样本相对 avg 的总体标准差（分母 N）。
+// 偏差先转 float64 再平方：纳秒量级的 Duration 平方会轻易溢出 int64
+// （1s 的偏差平方已是 1e18，接近 int64 上限）。
+func stdDevDuration(sorted []time.Duration, avg time.Duration) time.Duration {
+	if len(sorted) < 2 {
+		return 0
+	}
+	var sumSq float64
+	for _, d := range sorted {
+		diff := float64(d - avg)
+		sumSq += diff * diff
+	}
+	return time.Duration(math.Sqrt(sumSq / float64(len(sorted))))
+}
+
+// floatPercentileStats 计算一组 float64 样本的分位数，档位与 percentileStats 一致。
 func floatPercentileStats(values []float64) types.FloatStats {
 	n := len(values)
 	if n == 0 {
@@ -240,20 +269,38 @@ func floatPercentileStats(values []float64) types.FloatStats {
 	for _, v := range sorted {
 		total += v
 	}
+	avg := total / float64(n)
 
 	pct := func(p float64) float64 {
 		idx := max(int(math.Ceil(float64(n)*p))-1, 0)
 		return sorted[idx]
 	}
 
+	stdDev := 0.0
+	if n >= 2 {
+		var sumSq float64
+		for _, v := range sorted {
+			diff := v - avg
+			sumSq += diff * diff
+		}
+		stdDev = math.Sqrt(sumSq / float64(n))
+	}
+
 	return types.FloatStats{
-		P50:  pct(0.50),
-		P95:  pct(0.95),
-		P99:  pct(0.99),
-		P995: pct(0.995),
-		P999: pct(0.999),
-		Avg:  total / float64(n),
-		N:    n,
+		Min:    sorted[0],
+		P10:    pct(0.10),
+		P25:    pct(0.25),
+		P50:    pct(0.50),
+		P75:    pct(0.75),
+		P90:    pct(0.90),
+		P95:    pct(0.95),
+		P99:    pct(0.99),
+		P995:   pct(0.995),
+		P999:   pct(0.999),
+		Max:    sorted[n-1],
+		Avg:    avg,
+		StdDev: stdDev,
+		N:      n,
 	}
 }
 

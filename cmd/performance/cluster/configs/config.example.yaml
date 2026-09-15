@@ -40,12 +40,27 @@ warmup: true          # 正式测试前是否执行预热阶段（各 agent 按�
 warmup_duration: 10s  # 预热阶段持续时长
 cooldown: 5s          # 每个并发档位之间的冷却等待时间
 
+# think_time / max_output_tokens 语义与单机版完全一致，随任务下发给各 agent，
+# 全集群统一取值：
+#   think_time       —— closed-loop 下每个 worker 两次请求之间的等待，默认 300ms；
+#                       与 evalscope 对拍吞吐数字时显式设为 0s（完成即发）
+#   max_output_tokens —— 各协议输出长度上限的统一取值，默认 8192
+# 注意：这两项属于协议 v2 新增字段，coordinator 与各节点 agent 必须是同一次构建的
+# 二进制，否则探活阶段就会因协议版本不匹配中止（这正是版本校验要拦的情况）。
+#think_time: 0s
+#max_output_tokens: 8192
+
 output: ""       # Excel 输出路径（留空则自动生成时间戳文件名，如 bench-cluster-20260618T150405.xlsx）
 no_excel: false  # 跳过 Excel 导出，仅打印终端报告
 no_tui: false    # 禁用 TUI，使用纯文本控制台输出（stdout 非终端时自动禁用）
 
 #json_output: "bench-cluster.json"  # 结构化 JSON 报告路径，留空不导出，供 CI 基线比对/画趋势图
 #csv_output: "bench-cluster.csv"    # 逐档位 CSV 汇总路径，留空不导出
+
+# sample_output：原始样本 JSONL 导出路径（一行一条请求），留空不导出。
+# 分布式模式下由 coordinator 写出【全节点合并后】的样本——各 agent 的样本已归一到
+# 统一时间轴再池化，因此文件格式与单机版完全相同，不是每台一份各自的时间轴。
+#sample_output: "bench-cluster-samples.jsonl"
 
 # 压测时"怎么发请求"，两种方式二选一，语义和单机版完全一致（这里再简单说一遍）：
 #   closed（默认，不填就是这个）：像打电话问客服——问一句，等它答完了，才问下一句。
