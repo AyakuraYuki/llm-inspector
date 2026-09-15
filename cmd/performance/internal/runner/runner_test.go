@@ -53,7 +53,7 @@ func TestRunLevel_ClosedLoopTargetRateZero(t *testing.T) {
 	model := types.ModelSpec{Name: "m", Provider: provider}
 	rep := &noopReporter{}
 
-	result := RunLevel(context.Background(), cfg, model, 5, 0, 0, rep)
+	result := RunLevel(context.Background(), cfg, model, 5, 0, 0, 0, rep)
 	if result.TargetRate != 0 {
 		t.Errorf("TargetRate = %v, want 0 for closed-loop", result.TargetRate)
 	}
@@ -74,7 +74,7 @@ func TestRunLevel_OpenLoopArrivalRateApproximatesTarget(t *testing.T) {
 	model := types.ModelSpec{Name: "m", Provider: provider}
 	rep := &noopReporter{}
 
-	result := RunLevel(context.Background(), cfg, model, 50, targetRate, 0, rep)
+	result := RunLevel(context.Background(), cfg, model, 50, targetRate, 0, 0, rep)
 	if result.TargetRate != targetRate {
 		t.Errorf("TargetRate = %v, want %v", result.TargetRate, targetRate)
 	}
@@ -101,7 +101,7 @@ func TestRunLevel_ThinkTimeCappedAtDeadline(t *testing.T) {
 	model := types.ModelSpec{Name: "m", Provider: provider}
 
 	start := time.Now()
-	result := RunLevel(context.Background(), cfg, model, 1, 0, 0, &noopReporter{})
+	result := RunLevel(context.Background(), cfg, model, 1, 0, 0, 0, &noopReporter{})
 	elapsed := time.Since(start)
 
 	if elapsed > 2*time.Second {
@@ -120,9 +120,9 @@ func TestRunLevel_ThinkTimeReducesThroughput(t *testing.T) {
 	const duration = 300 * time.Millisecond
 
 	noWait := RunLevel(context.Background(),
-		types.BenchmarkConfig{Duration: duration}, model, 1, 0, 0, &noopReporter{})
+		types.BenchmarkConfig{Duration: duration}, model, 1, 0, 0, 0, &noopReporter{})
 	withWait := RunLevel(context.Background(),
-		types.BenchmarkConfig{Duration: duration, ThinkTime: 50 * time.Millisecond}, model, 1, 0, 0, &noopReporter{})
+		types.BenchmarkConfig{Duration: duration, ThinkTime: 50 * time.Millisecond}, model, 1, 0, 0, 0, &noopReporter{})
 
 	// 假 provider 零耗时，所以 think_time=0 能发出的请求数远多于 50ms 间隔的情况
 	//（后者上限约 duration/think_time = 6 个）。只比较量级，不断言精确条数。
@@ -156,5 +156,63 @@ func TestShouldStopEarly(t *testing.T) {
 					c.total, c.failed, c.minSamples, c.maxErrorRate, got, c.want)
 			}
 		})
+	}
+}
+
+func TestRunLevel_RequestLimitStopsBeforeDeadline(t *testing.T) {
+	const provider = types.Provider("__test_limit_closed__")
+	defer registerFakeProvider(provider, 0)()
+
+	cfg := types.BenchmarkConfig{Duration: 5 * time.Second}
+	model := types.ModelSpec{Name: "m", Provider: provider}
+
+	start := time.Now()
+	result := RunLevel(context.Background(), cfg, model, 8, 0, 0, 37, &noopReporter{})
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("请求数制应远早于 5s deadline 结束，实际耗时 %s", elapsed)
+	}
+	if got := len(result.Metrics); got != 37 {
+		t.Errorf("closed-loop 请求数 = %d, want 恰好 37", got)
+	}
+	if result.RequestLimit != 37 {
+		t.Errorf("RequestLimit = %d, want 37", result.RequestLimit)
+	}
+}
+
+func TestRunLevel_RequestLimitOpenLoop(t *testing.T) {
+	const provider = types.Provider("__test_limit_open__")
+	defer registerFakeProvider(provider, 5*time.Millisecond)()
+
+	cfg := types.BenchmarkConfig{Duration: 5 * time.Second}
+	model := types.ModelSpec{Name: "m", Provider: provider}
+
+	start := time.Now()
+	result := RunLevel(context.Background(), cfg, model, 50, 1000, 0, 20, &noopReporter{})
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("open-loop 请求数制应远早于 deadline 结束，实际耗时 %s", elapsed)
+	}
+	if got := len(result.Metrics); got != 20 {
+		t.Errorf("open-loop 请求数 = %d, want 恰好 20", got)
+	}
+}
+
+func TestRunLevel_OpenLoopUnboundedIgnoresConcurrencyCap(t *testing.T) {
+	const provider = types.Provider("__test_unbounded__")
+	// 每个请求 300ms：有界模式下并发上限 1 会把 400ms 内能发出的请求压到 1~2 个
+	defer registerFakeProvider(provider, 300*time.Millisecond)()
+
+	model := types.ModelSpec{Name: "m", Provider: provider}
+	const duration = 400 * time.Millisecond
+
+	bounded := RunLevel(context.Background(),
+		types.BenchmarkConfig{Duration: duration}, model, 1, 200, 0, 0, &noopReporter{})
+	unbounded := RunLevel(context.Background(),
+		types.BenchmarkConfig{Duration: duration, OpenLoopUnbounded: true}, model, 1, 200, 0, 0, &noopReporter{})
+
+	if len(bounded.Metrics) > 3 {
+		t.Errorf("有界 open-loop 在途上限 1 却发出 %d 个请求", len(bounded.Metrics))
+	}
+	if len(unbounded.Metrics) < 20 {
+		t.Errorf("无界 open-loop 目标 200 rps × 0.4s 应发出数十个请求，实际 %d", len(unbounded.Metrics))
 	}
 }

@@ -73,10 +73,17 @@ type RequestMetrics struct {
 	CachedInputTokens int64         // 命中缓存的输入 token 数（provider 未上报缓存字段时为 0）
 	CacheReported     bool          // provider 是否上报了缓存命中字段（区分「未上报」与「上报了但命中为 0」）
 	ITLSamplesMS      []float64     // 逐次输出内容事件之间的间隔（毫秒），按 SSE 事件粒度近似逐 token 生成间隔（ITL），仅成功的流式请求非空
-	Success           bool
-	Error             string
-	ErrorType         ErrorType
-	RequestID         string // 失败请求从响应 Header/响应体提取的请求 ID（拿不到响应时为空）
+
+	// usage 对拍：配置了本地分词器且服务端上报了 usage、且请求未出现思考内容时，
+	// 用分词器对收到的可见文本重新计数并与 usage 比较。LocalOutputTokens 为 0 表示未对拍。
+	LocalOutputTokens int64   // 本地分词器对可见输出文本的计数
+	UsageDriftPct     float64 // (usage - local) / local * 100，正数表示服务端多报
+	UsageDrifted      bool    // |UsageDriftPct| 超过配置阈值
+
+	Success   bool
+	Error     string
+	ErrorType ErrorType
+	RequestID string // 失败请求从响应 Header/响应体提取的请求 ID（拿不到响应时为空）
 }
 
 // BenchmarkConfig 保存测试参数
@@ -93,6 +100,33 @@ type BenchmarkConfig struct {
 	Warmup           bool
 	WarmupDuration   time.Duration
 	CooldownDuration time.Duration
+
+	// WarmupPerLevel 为真时每个并发档位前都预热（而非只在模型首档前），
+	// 并发数取该档位的并发数。档位切换同样有冷启动批效应（新增连接、上游扩容），
+	// 首档预热只挡住了第一档的。仅 Warmup 为真时有效。
+	WarmupPerLevel bool
+
+	// PromptTokensMin/Max 让 DynamicPrompt 的目标 token 数按请求在区间内均匀采样，
+	// 两者都 > 0 时覆盖 PromptTokens。真实流量的输入长度是分布而非单点。
+	PromptTokensMin int
+	PromptTokensMax int
+
+	// TokenizerPath 指向本地分词器目录（configs/tokenizers/<name>）。非空时
+	// DynamicPrompt 用它把输入精确收敛到目标 token 数，并在 usage 缺失时用它
+	// 代替字符估算。TokenizerFingerprint 是词表文件的 SHA-256，分布式下各节点
+	// 预检时校验自己手里的词表与 coordinator 一致。
+	TokenizerPath        string
+	TokenizerFingerprint string
+
+	// UsageDriftPct 是 usage 对拍阈值（百分比）：服务端 completion_tokens 与本地
+	// 分词计数偏差超过它的请求打 UsageDrifted 标记。0 关闭对拍；需 TokenizerPath。
+	UsageDriftPct float64
+
+	// DatasetPrompt 为真时每次请求从 DatasetLines 随机取一行作为 prompt
+	//（line_by_line 数据集）。行内容由配置加载阶段读入并内联在配置里：分布式下
+	// 随任务下发，各节点无需预置文件，也不存在版本不一致的问题。
+	DatasetPrompt bool
+	DatasetLines  []string
 
 	// ThinkTime 是 closed-loop 下同一 worker 两次请求之间的等待（拟人思考时间）。
 	// 默认 300ms（历史行为），设为 0 等价于 evalscope `--rate -1` 的"完成即发"语义，
@@ -119,6 +153,17 @@ type BenchmarkConfig struct {
 	// Concurrency[i] 变为该档位同时在途请求数上限。
 	OpenLoop    bool
 	RequestRate []float64
+
+	// OpenLoopUnbounded 为真时 open-loop 不再受 Concurrency 的在途上限约束，
+	// 到点即发，是严格意义上的开环（对标 evalscope --open-loop）：找系统饱和点
+	// 时更真实，但过载时在途请求会在本地无限堆积，需自行评估压测机承受力。
+	// 默认 false 保留有界模式作为安全默认。
+	OpenLoopUnbounded bool
+
+	// RequestsPerLevel 是各档位的请求数上限（与 Concurrency 一一对应，或只有
+	// 一项作用于全部档位）；档位在「发满该数量」与「到达 Duration」两者先到者结束。
+	// 空切片为纯时长制（历史行为）。对标 evalscope --number 的请求数制。
+	RequestsPerLevel []int
 
 	// SLO 达标率（goodput）判定阈值，SLO.Enabled() 为 false 时不计算 goodput。
 	SLO SLOThresholds
@@ -148,6 +193,31 @@ type HistBucket struct {
 	Count int
 }
 
+// LevelRequestLimit 返回第 i 档的请求数上限：未配置为 0（纯时长制），
+// 只配一项时作用于全部档位，否则按档位一一对应。
+func (c BenchmarkConfig) LevelRequestLimit(i int) int {
+	switch n := len(c.RequestsPerLevel); {
+	case n == 0:
+		return 0
+	case n == 1:
+		return c.RequestsPerLevel[0]
+	case i >= 0 && i < n:
+		return c.RequestsPerLevel[i]
+	default:
+		return 0
+	}
+}
+
+// ValidateTokenizer 校验 TokenizerPath 可加载且指纹一致（未配置时恒为 nil）。
+func (c BenchmarkConfig) ValidateTokenizer() error {
+	return prompts.ValidateTokenizer(c.TokenizerPath, c.TokenizerFingerprint)
+}
+
+// TokenCounter 返回本次压测的本地分词计数器，未配置或加载失败时为 nil。
+func (c BenchmarkConfig) TokenCounter() *prompts.Counter {
+	return prompts.CounterFor(c.TokenizerPath)
+}
+
 // EffectiveMaxOutputTokens 返回本次压测实际使用的输出长度上限，
 // 未配置（<=0）时回退到 DefaultMaxOutputTokens。
 func (c BenchmarkConfig) EffectiveMaxOutputTokens() int {
@@ -166,14 +236,18 @@ func (m ModelSpec) PickToken() string {
 	return m.Tokens[rand.IntN(l)]
 }
 
-// BuildPrompt 返回本次文本请求使用的 prompt。DynamicPrompt、CodexPrompt、Prompt
-// 三者互斥：DynamicPrompt 开启时，每次调用都会现场拼装一段目标长度的随机长文本
-// （用于长上下文压测）；CodexPrompt 开启时，返回类 Codex 系统提示词加随机简短提问
-// （用于高相似度请求压测）；否则返回固定的 Prompt。
+// BuildPrompt 返回本次文本请求使用的 prompt。DatasetPrompt、DynamicPrompt、
+// CodexPrompt、Prompt 四者互斥：DatasetPrompt 开启时从数据集随机取一行；
+// DynamicPrompt 开启时现场拼装一段目标长度的随机长文本（目标可在区间内采样，
+// 配置了分词器则精确收敛）；CodexPrompt 开启时返回类 Codex 系统提示词加随机
+// 简短提问；否则返回固定的 Prompt。
 func (c *BenchmarkConfig) BuildPrompt() string {
 	switch {
+	case c.DatasetPrompt:
+		return prompts.PickDatasetLine(c.DatasetLines)
 	case c.DynamicPrompt:
-		return prompts.BuildDynamicPrompt(c.PromptTokens)
+		target := prompts.PickTargetTokens(c.PromptTokensMin, c.PromptTokensMax, c.PromptTokens)
+		return prompts.BuildDynamicPrompt(target, c.TokenCounter())
 	case c.CodexPrompt:
 		return prompts.BuildCodexPrompt()
 	default:
@@ -193,6 +267,7 @@ type BenchmarkResult struct {
 	Elapsed      time.Duration // 实际运行时长（含 deadline 后在途请求的排空期）
 	Metrics      []RequestMetrics
 	StoppedEarly bool // 是否因错误率超过 EarlyStop 阈值被提前终止（而非到达 deadline 或用户中止）
+	RequestLimit int  // 本档请求数上限（0 为纯时长制），达到后档位在 deadline 前结束
 }
 
 // PercentileStats 保存时延类指标的分位数统计。
@@ -251,6 +326,7 @@ type AggregatedMetrics struct {
 	ErrorCounts   map[ErrorType]int
 	FailedDetails []RequestMetrics // 每条失败请求的原始记录，用于错误明细 sheet
 	StoppedEarly  bool             // 是否因错误率超过 EarlyStop 阈值被提前终止
+	RequestLimit  int              // 本档请求数上限（0 为纯时长制）
 
 	// 仅流式端点有效
 	TTFT             PercentileStats // 首 token 时延，仅统计成功请求
@@ -271,6 +347,24 @@ type AggregatedMetrics struct {
 	TPM float64
 	QPS float64
 	QPM float64
+
+	// 稳态吞吐窗口，对标 evalscope 的 Workload Throughput（Overall / Steady / Last 30s）：
+	// Overall 就是上面的 TPS/QPS；Steady 掐掉窗口头尾各 10%（去掉 ramp 与收尾衰减），
+	// 只算在中间 80% 内完成的请求；Last30s 只算窗口最后 30s 内完成的请求，窗口不足
+	// 30s 时 Last30sWindow 为 0 表示 N/A。三者差异大说明档位内负载未进入稳态。
+	SteadyQPS     float64
+	SteadyTPS     float64
+	SteadyWindow  time.Duration
+	Last30sQPS    float64
+	Last30sTPS    float64
+	Last30sWindow time.Duration
+
+	// usage 对拍（需配置本地分词器）：UsageChecked 是完成对拍的成功样本数，
+	// UsageDrifted 是偏差超阈值的样本数，UsageDriftAbs 是 |偏差%| 的分位数。
+	// 大量样本漂移说明网关/上游的 usage 统计与可见文本不符（计费或 TPOT 分母都会失真）。
+	UsageChecked  int
+	UsageDrifted  int
+	UsageDriftAbs FloatStats
 
 	// DecodeTPS 是单流解码速度（tok/s），由平均 TPOT 取倒数得到，对标 evalscope
 	// 的 Decode tok/s。与 TpsPr.Avg 同源但口径不同：TpsPr 是各请求速率的均值，

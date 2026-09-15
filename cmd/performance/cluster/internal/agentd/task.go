@@ -64,7 +64,7 @@ func (t *runningTask) run(ctx context.Context, req proto.TaskStart) {
 		t.done.Store(true)
 	}()
 
-	result := runner.RunLevel(ctx, req.Bench, req.Model, req.Concurrency, req.TargetRate, req.Ramp, t.rep)
+	result := runner.RunLevel(ctx, req.Bench, req.Model, req.Concurrency, req.TargetRate, req.Ramp, req.RequestLimit, t.rep)
 	if req.Kind == proto.TaskWarmup {
 		result.Metrics = nil // 预热结果丢弃，不占回传带宽
 	}

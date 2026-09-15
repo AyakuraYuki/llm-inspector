@@ -32,6 +32,19 @@ type jsonConfigSummary struct {
 	// 否则事后对比两次运行（或和 evalscope 对拍）时无法判断口径是否一致。
 	ThinkTime       string `json:"think_time"`
 	MaxOutputTokens int    `json:"max_output_tokens"`
+
+	// 输入构造与运行形态同样影响可比性，一并留档
+	PromptMode        string  `json:"prompt_mode"`
+	PromptTokens      int     `json:"prompt_tokens,omitzero"`
+	PromptTokensMin   int     `json:"prompt_tokens_min,omitzero"`
+	PromptTokensMax   int     `json:"prompt_tokens_max,omitzero"`
+	DatasetLines      int     `json:"dataset_lines,omitzero"`
+	Tokenizer         string  `json:"tokenizer,omitzero"`
+	TokenizerSHA256   string  `json:"tokenizer_sha256,omitzero"`
+	UsageDriftPct     float64 `json:"usage_drift_pct,omitzero"`
+	RequestsPerLevel  []int   `json:"requests_per_level,omitzero"`
+	OpenLoopUnbounded bool    `json:"open_loop_unbounded,omitzero"`
+	WarmupPerLevel    bool    `json:"warmup_per_level,omitzero"`
 }
 
 // jsonPercentileMs 是时延类指标的分位数（毫秒），供 JSON 序列化用。
@@ -91,6 +104,7 @@ type jsonLevel struct {
 	Failed       int            `json:"failed"`
 	ErrorRatePct float64        `json:"error_rate_pct"`
 	StoppedEarly bool           `json:"stopped_early"`
+	RequestLimit int            `json:"request_limit,omitzero"` // 请求数制上限，0 为纯时长制
 	ErrorCounts  map[string]int `json:"error_counts,omitzero"`
 
 	TTFTMs jsonPercentileMs `json:"ttft_ms"`
@@ -103,6 +117,20 @@ type jsonLevel struct {
 	QPS       float64 `json:"qps"`
 	QPM       float64 `json:"qpm"`
 	DecodeTPS float64 `json:"decode_tps,omitzero"` // 单流解码速度（1/平均 TPOT）
+
+	// 稳态吞吐窗口：*_window_sec 为 0 表示 N/A（无时间轴或窗口不足 30s）
+	SteadyQPS        float64 `json:"steady_qps,omitzero"`
+	SteadyTPS        float64 `json:"steady_tps,omitzero"`
+	SteadyWindowSec  float64 `json:"steady_window_sec,omitzero"`
+	Last30sQPS       float64 `json:"last30s_qps,omitzero"`
+	Last30sTPS       float64 `json:"last30s_tps,omitzero"`
+	Last30sWindowSec float64 `json:"last30s_window_sec,omitzero"`
+
+	// usage 对拍（需本地分词器）
+	UsageChecked     int     `json:"usage_checked,omitzero"`
+	UsageDrifted     int     `json:"usage_drifted,omitzero"`
+	UsageDriftAbsP50 float64 `json:"usage_drift_abs_p50_pct,omitzero"`
+	UsageDriftAbsMax float64 `json:"usage_drift_abs_max_pct,omitzero"`
 
 	IORatio          float64 `json:"io_ratio,omitzero"`
 	CacheHitRatioPct float64 `json:"cache_hit_ratio_pct,omitzero"`
@@ -136,6 +164,7 @@ func toJSONLevel(agg types.AggregatedMetrics) jsonLevel {
 		Failed:           agg.Failed,
 		ErrorRatePct:     errPct,
 		StoppedEarly:     agg.StoppedEarly,
+		RequestLimit:     agg.RequestLimit,
 		ErrorCounts:      errCounts,
 		TTFTMs:           percentileMsFromDuration(agg.TTFT),
 		TPOTMs:           percentileMsFromDuration(agg.TPOT),
@@ -146,6 +175,16 @@ func toJSONLevel(agg types.AggregatedMetrics) jsonLevel {
 		QPS:              agg.QPS,
 		QPM:              agg.QPM,
 		DecodeTPS:        agg.DecodeTPS,
+		SteadyQPS:        agg.SteadyQPS,
+		SteadyTPS:        agg.SteadyTPS,
+		SteadyWindowSec:  agg.SteadyWindow.Seconds(),
+		Last30sQPS:       agg.Last30sQPS,
+		Last30sTPS:       agg.Last30sTPS,
+		Last30sWindowSec: agg.Last30sWindow.Seconds(),
+		UsageChecked:     agg.UsageChecked,
+		UsageDrifted:     agg.UsageDrifted,
+		UsageDriftAbsP50: agg.UsageDriftAbs.P50,
+		UsageDriftAbsMax: agg.UsageDriftAbs.Max,
 		IORatio:          agg.IORatio,
 		CacheHitRatioPct: agg.CacheHitRatio,
 	}
@@ -154,6 +193,28 @@ func toJSONLevel(agg types.AggregatedMetrics) jsonLevel {
 		l.GoodputPct = &v
 	}
 	return l
+}
+
+// promptModeName 返回配置的 prompt 生成方式名，与 YAML 里 prompt.mode 的取值一致。
+func promptModeName(cfg types.BenchmarkConfig) string {
+	switch {
+	case cfg.DatasetPrompt:
+		return "dataset"
+	case cfg.DynamicPrompt:
+		return "dynamic"
+	case cfg.CodexPrompt:
+		return "codex"
+	default:
+		return "text"
+	}
+}
+
+// promptTokensIf 仅 dynamic 模式下返回目标 token 数，其他模式该值无意义。
+func promptTokensIf(cfg types.BenchmarkConfig) int {
+	if cfg.DynamicPrompt {
+		return cfg.PromptTokens
+	}
+	return 0
 }
 
 // ExportJSON 把汇聚结果导出为结构化 JSON 报告，供 CI 里做基线比对、画趋势图。
@@ -168,6 +229,18 @@ func ExportJSON(cfg types.BenchmarkConfig, results []types.AggregatedMetrics, ru
 			RequestRate:     cfg.RequestRate,
 			ThinkTime:       cfg.ThinkTime.String(),
 			MaxOutputTokens: cfg.EffectiveMaxOutputTokens(),
+
+			PromptMode:        promptModeName(cfg),
+			PromptTokens:      promptTokensIf(cfg),
+			PromptTokensMin:   cfg.PromptTokensMin,
+			PromptTokensMax:   cfg.PromptTokensMax,
+			DatasetLines:      len(cfg.DatasetLines),
+			Tokenizer:         cfg.TokenizerPath,
+			TokenizerSHA256:   cfg.TokenizerFingerprint,
+			UsageDriftPct:     cfg.UsageDriftPct,
+			RequestsPerLevel:  cfg.RequestsPerLevel,
+			OpenLoopUnbounded: cfg.OpenLoopUnbounded,
+			WarmupPerLevel:    cfg.WarmupPerLevel,
 		},
 	}
 	if cfg.OpenLoop {
@@ -192,7 +265,8 @@ var csvHeaders = []string{
 	"tpot_p50_ms", "tpot_p90_ms", "tpot_p95_ms", "tpot_p99_ms",
 	"itl_p50_ms", "itl_p90_ms", "itl_p95_ms", "itl_p99_ms",
 	"e2e_p50_ms", "e2e_p90_ms", "e2e_p95_ms", "e2e_p99_ms", "e2e_stddev_ms",
-	"qps", "tps", "decode_tps", "io_ratio", "cache_hit_ratio_pct", "goodput_pct",
+	"qps", "tps", "decode_tps", "steady_qps", "steady_tps", "last30s_qps", "last30s_tps",
+	"io_ratio", "cache_hit_ratio_pct", "goodput_pct", "usage_checked", "usage_drifted",
 }
 
 func csvRow(agg types.AggregatedMetrics) []string {
@@ -215,7 +289,8 @@ func csvRow(agg types.AggregatedMetrics) []string {
 		toMs(agg.TPOT.P50), toMs(agg.TPOT.P90), toMs(agg.TPOT.P95), toMs(agg.TPOT.P99),
 		toMs(agg.ITL.P50), toMs(agg.ITL.P90), toMs(agg.ITL.P95), toMs(agg.ITL.P99),
 		toMs(agg.Latency.P50), toMs(agg.Latency.P90), toMs(agg.Latency.P95), toMs(agg.Latency.P99), toMs(agg.Latency.StdDev),
-		f2(agg.QPS), f2(agg.TPS), f2(agg.DecodeTPS), f2(agg.IORatio), f2(agg.CacheHitRatio), goodput,
+		f2(agg.QPS), f2(agg.TPS), f2(agg.DecodeTPS), f2(agg.SteadyQPS), f2(agg.SteadyTPS), f2(agg.Last30sQPS), f2(agg.Last30sTPS),
+		f2(agg.IORatio), f2(agg.CacheHitRatio), goodput, strconv.Itoa(agg.UsageChecked), strconv.Itoa(agg.UsageDrifted),
 	}
 }
 

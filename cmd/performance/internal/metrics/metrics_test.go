@@ -243,3 +243,117 @@ func TestHistogram_AllSameValueSingleBucket(t *testing.T) {
 		t.Errorf("buckets[0].Count = %d, want 3", buckets[0].Count)
 	}
 }
+
+// timedSample 构造带时间轴的成功样本：在档位开始后 at 时刻发出、耗时 lat。
+func timedSample(start time.Time, at, lat time.Duration, toks int64) types.RequestMetrics {
+	return types.RequestMetrics{
+		Timestamp: start.Add(at), TTFT: lat / 10, TotalLatency: lat,
+		OutputTokens: toks, InputTokens: 10, Success: true,
+	}
+}
+
+func TestAggregateMetrics_SteadyAndLast30sWindows(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	const window = 100 * time.Second
+	result := types.BenchmarkResult{
+		Provider: types.ProviderOpenAI,
+		Start:    start,
+		Window:   window,
+		Elapsed:  window,
+		Metrics: []types.RequestMetrics{
+			timedSample(start, 1*time.Second, 1*time.Second, 10),  // 完成于 2s：头部 10% 内，Steady 不计
+			timedSample(start, 20*time.Second, 1*time.Second, 20), // 完成于 21s：Steady 计
+			timedSample(start, 50*time.Second, 1*time.Second, 30), // 完成于 51s：Steady 计
+			timedSample(start, 80*time.Second, 1*time.Second, 40), // 完成于 81s：Steady 计，Last30s 计
+			timedSample(start, 95*time.Second, 1*time.Second, 50), // 完成于 96s：尾部 10% 内，Steady 不计；Last30s 计
+			timedSample(start, 99*time.Second, 5*time.Second, 60), // 完成于 104s：窗口外，三者都不计
+		},
+	}
+	agg := AggregateMetrics(result, types.SLOThresholds{}, false)
+
+	if agg.SteadyWindow != 80*time.Second {
+		t.Fatalf("SteadyWindow = %s, want 80s", agg.SteadyWindow)
+	}
+	if want := 3.0 / 80; !approx(agg.SteadyQPS, want) {
+		t.Errorf("SteadyQPS = %v, want %v", agg.SteadyQPS, want)
+	}
+	if want := float64(20+30+40) / 80; !approx(agg.SteadyTPS, want) {
+		t.Errorf("SteadyTPS = %v, want %v", agg.SteadyTPS, want)
+	}
+	if agg.Last30sWindow != 30*time.Second {
+		t.Fatalf("Last30sWindow = %s, want 30s", agg.Last30sWindow)
+	}
+	if want := 2.0 / 30; !approx(agg.Last30sQPS, want) {
+		t.Errorf("Last30sQPS = %v, want %v", agg.Last30sQPS, want)
+	}
+	if want := float64(40+50) / 30; !approx(agg.Last30sTPS, want) {
+		t.Errorf("Last30sTPS = %v, want %v", agg.Last30sTPS, want)
+	}
+	// Overall 口径不变：窗口内完成 5 个
+	if want := 5.0 / 100; !approx(agg.QPS, want) {
+		t.Errorf("QPS = %v, want %v", agg.QPS, want)
+	}
+}
+
+func TestAggregateMetrics_Last30sNAForShortWindow(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	result := types.BenchmarkResult{
+		Provider: types.ProviderOpenAI, Start: start, Window: 10 * time.Second, Elapsed: 10 * time.Second,
+		Metrics: []types.RequestMetrics{timedSample(start, 5*time.Second, time.Second, 10)},
+	}
+	agg := AggregateMetrics(result, types.SLOThresholds{}, false)
+	if agg.Last30sWindow != 0 || agg.Last30sQPS != 0 {
+		t.Errorf("窗口 10s 时 Last30s 应为 N/A，got window=%s qps=%v", agg.Last30sWindow, agg.Last30sQPS)
+	}
+	if agg.SteadyWindow != 8*time.Second {
+		t.Errorf("SteadyWindow = %s, want 8s", agg.SteadyWindow)
+	}
+	// 无时间轴（Start 零值）时稳态窗口整体 N/A，不 panic
+	noTL := AggregateMetrics(types.BenchmarkResult{Provider: types.ProviderOpenAI, Window: time.Second,
+		Metrics: []types.RequestMetrics{sample(time.Millisecond, 10*time.Millisecond, 5, true)}}, types.SLOThresholds{}, false)
+	if noTL.SteadyWindow != 0 {
+		t.Errorf("无时间轴时 SteadyWindow 应为 0")
+	}
+}
+
+func TestAggregateMetrics_UsageDrift(t *testing.T) {
+	mk := func(local int64, drift float64, flagged bool) types.RequestMetrics {
+		m := sample(10*time.Millisecond, 200*time.Millisecond, 100, true)
+		m.LocalOutputTokens, m.UsageDriftPct, m.UsageDrifted = local, drift, flagged
+		return m
+	}
+	result := types.BenchmarkResult{
+		Provider: types.ProviderOpenAI, Window: time.Second,
+		Metrics: []types.RequestMetrics{
+			mk(100, 2, false),
+			mk(100, -3, false),
+			mk(100, 25, true),
+			mk(0, 0, false), // 未对拍（思考模型/无分词器），不计入
+		},
+	}
+	agg := AggregateMetrics(result, types.SLOThresholds{}, false)
+	if agg.UsageChecked != 3 {
+		t.Errorf("UsageChecked = %d, want 3", agg.UsageChecked)
+	}
+	if agg.UsageDrifted != 1 {
+		t.Errorf("UsageDrifted = %d, want 1", agg.UsageDrifted)
+	}
+	if agg.UsageDriftAbs.N != 3 || agg.UsageDriftAbs.Max != 25 || agg.UsageDriftAbs.Min != 2 {
+		t.Errorf("UsageDriftAbs = %+v, want N=3 Min=2 Max=25（取绝对值）", agg.UsageDriftAbs)
+	}
+}
+
+func TestAggregateMetrics_RequestLimitCopied(t *testing.T) {
+	agg := AggregateMetrics(types.BenchmarkResult{Provider: types.ProviderOpenAI, Window: time.Second, RequestLimit: 42}, types.SLOThresholds{}, false)
+	if agg.RequestLimit != 42 {
+		t.Errorf("RequestLimit = %d, want 42", agg.RequestLimit)
+	}
+}
+
+func approx(a, b float64) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d < 1e-9
+}

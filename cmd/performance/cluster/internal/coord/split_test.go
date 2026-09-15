@@ -53,3 +53,37 @@ func TestSplitMonotonicPerIndex(t *testing.T) {
 		prev = cur
 	}
 }
+
+func TestSplitAmongActive(t *testing.T) {
+	// 5 个 agent 但并发只有 3：只有前 3 台拿到 worker，请求配额也只分给它们
+	shares := Split(3, 5) // [1 1 1 0 0]
+	limits := SplitAmongActive(100, shares)
+	if len(limits) != 5 {
+		t.Fatalf("len = %d, want 5", len(limits))
+	}
+	sum := 0
+	for i, l := range limits {
+		if shares[i] == 0 && l != 0 {
+			t.Errorf("agent %d 无并发份额却分到 %d 个请求", i, l)
+		}
+		if shares[i] > 0 && l == 0 {
+			t.Errorf("agent %d 有并发份额却没分到请求", i)
+		}
+		sum += l
+	}
+	if sum != 100 {
+		t.Errorf("请求配额总和 %d, want 100", sum)
+	}
+	// 纯时长制：total 为 0 → 全 0
+	for _, l := range SplitAmongActive(0, shares) {
+		if l != 0 {
+			t.Fatalf("total=0 时应全为 0，got %v", SplitAmongActive(0, shares))
+		}
+	}
+	// 没有任何活跃 agent 时不 panic、全 0
+	for _, l := range SplitAmongActive(10, []int{0, 0}) {
+		if l != 0 {
+			t.Fatalf("无活跃 agent 时应全为 0")
+		}
+	}
+}

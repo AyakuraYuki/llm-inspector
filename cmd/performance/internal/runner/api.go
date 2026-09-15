@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"net"
 	"net/http"
 	"slices"
@@ -272,7 +273,7 @@ func doAnthropicRequest(ctx context.Context, cfg types.BenchmarkConfig, model ty
 		return httpStatusFailure(info, t0, resp)
 	}
 
-	m := parseStreamMetrics(t0, resp.Body)
+	m := parseStreamMetrics(t0, resp.Body, cfg)
 	if !m.Success {
 		return logFailure(info, resp, nil, m)
 	}
@@ -316,7 +317,7 @@ func doOpenAIRequest(ctx context.Context, cfg types.BenchmarkConfig, model types
 		return httpStatusFailure(info, t0, resp)
 	}
 
-	m := parseStreamMetrics(t0, resp.Body)
+	m := parseStreamMetrics(t0, resp.Body, cfg)
 	if !m.Success {
 		return logFailure(info, resp, nil, m)
 	}
@@ -360,7 +361,7 @@ func doGeminiRequest(ctx context.Context, cfg types.BenchmarkConfig, model types
 		return httpStatusFailure(info, t0, resp)
 	}
 
-	m := parseStreamMetrics(t0, resp.Body)
+	m := parseStreamMetrics(t0, resp.Body, cfg)
 	if !m.Success {
 		return logFailure(info, resp, nil, m)
 	}
@@ -440,7 +441,7 @@ func doOpenAIResponseRequest(ctx context.Context, cfg types.BenchmarkConfig, mod
 		return httpStatusFailure(info, t0, resp)
 	}
 
-	m := parseStreamMetrics(t0, resp.Body)
+	m := parseStreamMetrics(t0, resp.Body, cfg)
 	if !m.Success {
 		return logFailure(info, resp, nil, m)
 	}
@@ -485,8 +486,9 @@ func doBaselineRequest(ctx context.Context, cfg types.BenchmarkConfig, _ types.M
 	}
 }
 
-// parseStreamMetrics 消费 SSE 流，提取 TTFT / tokens / e2e。
-func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
+// parseStreamMetrics 消费 SSE 流，提取 TTFT / tokens / e2e。cfg 提供本地分词器
+// （可选）：usage 缺失时用它代替字符估算，usage 存在时用它对拍。
+func parseStreamMetrics(t0 time.Time, body io.Reader, cfg types.BenchmarkConfig) types.RequestMetrics {
 	var firstByteMs float64
 	tracker := &firstByteTracker{r: body, t0: t0, firstByte: &firstByteMs}
 
@@ -562,14 +564,34 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 		}
 	}
 
-	// 无 usage 时按文本构成粗估（ASCII 4 字符/token、CJK 1.5 字符/token 加权），
-	// 并打估算标记——估算样本的速率分位数可信度低于 usage 精确上报
+	// 无 usage 时按文本估算并打估算标记——估算样本的速率分位数可信度低于 usage
+	// 精确上报。配置了本地分词器就用它数（准确得多），否则按文本构成粗估
+	//（ASCII 4 字符/token、CJK 1.5 字符/token 加权）。
+	ctr := cfg.TokenCounter()
+	joined := strings.Join(s.TextParts, "")
+	hasText := strings.TrimSpace(joined) != ""
 	outputEstimated := false
-	if !s.UsageSeen && len(s.TextParts) > 0 {
-		joined := strings.Join(s.TextParts, "")
-		if strings.TrimSpace(joined) != "" {
+	if !s.UsageSeen && hasText {
+		if n := ctr.Count(joined); n > 0 {
+			s.CompletionTokens = int64(n)
+		} else {
 			s.CompletionTokens = tokstats.EstimateTokens(joined)
-			outputEstimated = true
+		}
+		outputEstimated = true
+	}
+
+	// usage 对拍：服务端 completion_tokens 与本地分词计数比较。思考型请求排除——
+	// 思考 token 计入 usage 却不在可见文本里，本地必然偏小，比了全是误报。
+	var (
+		localToks int64
+		driftPct  float64
+		drifted   bool
+	)
+	if ctr != nil && cfg.UsageDriftPct > 0 && s.UsageSeen && hasText && !s.ReasoningSeen {
+		if n := ctr.Count(joined); n > 0 {
+			localToks = int64(n)
+			driftPct = float64(s.CompletionTokens-localToks) / float64(localToks) * 100
+			drifted = math.Abs(driftPct) > cfg.UsageDriftPct
 		}
 	}
 
@@ -581,6 +603,9 @@ func parseStreamMetrics(t0 time.Time, body io.Reader) types.RequestMetrics {
 		OutputEstimated:   outputEstimated,
 		CachedInputTokens: max(int64(0), s.CachedInputTokens),
 		CacheReported:     s.CacheSeen,
+		LocalOutputTokens: localToks,
+		UsageDriftPct:     driftPct,
+		UsageDrifted:      drifted,
 		ITLSamplesMS:      s.ITLSamplesMS,
 		Success:           true,
 	}

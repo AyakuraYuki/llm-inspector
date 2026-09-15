@@ -54,6 +54,11 @@ type sampleLine struct {
 	CachedInputTokens int64 `json:"cached_input_tokens,omitempty"`
 	CacheReported     bool  `json:"cache_reported,omitempty"`
 
+	// usage 对拍（配置了本地分词器时才有值）：local_output_tokens 为 0 表示该请求未对拍
+	LocalOutputTokens int64   `json:"local_output_tokens,omitempty"`
+	UsageDriftPct     float64 `json:"usage_drift_pct,omitempty"`
+	UsageDrifted      bool    `json:"usage_drifted,omitempty"`
+
 	// ITLMs 是逐输出内容事件的间隔（毫秒）。这是全文件体积的主要来源
 	//（每条成功样本一个数组，长度约等于输出事件数），但没有它就无法事后
 	// 重算 ITL 分布，而 ITL 恰恰是解码卡顿最灵敏的指标。
@@ -139,6 +144,9 @@ func WriteLevel(lv LevelContext, samples []types.RequestMetrics) {
 			OutputEstimated:   m.OutputEstimated,
 			CachedInputTokens: m.CachedInputTokens,
 			CacheReported:     m.CacheReported,
+			LocalOutputTokens: m.LocalOutputTokens,
+			UsageDriftPct:     m.UsageDriftPct,
+			UsageDrifted:      m.UsageDrifted,
 			ITLMs:             m.ITLSamplesMS,
 			ErrorType:         string(m.ErrorType),
 			Error:             m.Error,

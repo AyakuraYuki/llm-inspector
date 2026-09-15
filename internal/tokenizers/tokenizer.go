@@ -13,6 +13,8 @@
 package tokenizers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,8 +40,9 @@ type encoder interface {
 
 // Tokenizer 是对外暴露的分词器句柄，可安全地被多个 goroutine 并发使用。
 type Tokenizer struct {
-	impl encoder
-	name string
+	impl        encoder
+	name        string
+	fingerprint string
 }
 
 // EncodeSingle 编码单段文本。
@@ -78,6 +81,18 @@ func (t *Tokenizer) Name() string {
 		return ""
 	}
 	return t.name
+}
+
+// Fingerprint 返回词表文件内容的 SHA-256（十六进制）。
+//
+// 分布式压测时各节点各自从本地目录加载分词器，目录名相同不代表词表相同
+// （版本漂移、手工替换过文件），指纹让 coordinator 能在开测前发现不一致，
+// 否则各节点按不同词表构造输入长度，汇总出的数字口径混杂却无从察觉。
+func (t *Tokenizer) Fingerprint() string {
+	if t == nil {
+		return ""
+	}
+	return t.fingerprint
 }
 
 // VocabSize 返回词表大小，供诊断使用。
@@ -158,7 +173,22 @@ func load(abs string) (tk *Tokenizer, err error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Tokenizer{impl: impl, name: filepath.Base(dir)}, nil
+	fp, err := fileSHA256(filepath.Join(dir, spec.VocabFile))
+	if err != nil {
+		return nil, err
+	}
+	return &Tokenizer{impl: impl, name: filepath.Base(dir), fingerprint: fp}, nil
+}
+
+// fileSHA256 计算文件内容的 SHA-256 十六进制摘要。词表文件在 load 中已被完整
+// 读取过一次，这里再读一遍只发生在首次加载（结果随 Tokenizer 缓存），可忽略。
+func fileSHA256(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("tokenizer: 读取词表 %q 计算指纹失败: %w", path, err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // resolveDir 把传入路径归一为分词器配置所在目录。

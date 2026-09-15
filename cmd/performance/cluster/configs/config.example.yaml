@@ -40,13 +40,24 @@ warmup: true          # 正式测试前是否执行预热阶段（各 agent 按�
 warmup_duration: 10s  # 预热阶段持续时长
 cooldown: 5s          # 每个并发档位之间的冷却等待时间
 
+# prompt.tokens_min/tokens_max、prompt.mode: dataset、tokenizer、requests_per_level、
+# open_loop_unbounded、warmup_per_level 语义与单机版一致（见 ../../configs/config.example.yaml），
+# 分布式下的落点：
+#   tokenizer.path    —— 只下发路径，每台 agent 必须预置同一份词表目录；预检时校验 SHA-256 指纹
+#   dataset           —— coordinator 读文件后把全部行内联下发，agent 无需预置
+#   requests_per_level —— 全局请求数按拿到并发份额的 agent 等分，全局恰好发出配置的数量
+#tokenizer:
+#  path: "configs/tokenizers/kimi-k3"
+#requests_per_level: [2000]
+#warmup_per_level: true
+
 # think_time / max_output_tokens 语义与单机版完全一致，随任务下发给各 agent，
 # 全集群统一取值：
 #   think_time       —— closed-loop 下每个 worker 两次请求之间的等待，默认 300ms；
 #                       与 evalscope 对拍吞吐数字时显式设为 0s（完成即发）
 #   max_output_tokens —— 各协议输出长度上限的统一取值，默认 8192
-# 注意：这两项属于协议 v2 新增字段，coordinator 与各节点 agent 必须是同一次构建的
-# 二进制，否则探活阶段就会因协议版本不匹配中止（这正是版本校验要拦的情况）。
+# 注意：协议当前为 v3（v2 起新增这两项，v3 新增上面那一组），coordinator 与各节点 agent
+# 必须是同一次构建的二进制，否则探活阶段就会因协议版本不匹配中止（这正是版本校验要拦的情况）。
 #think_time: 0s
 #max_output_tokens: 8192
 

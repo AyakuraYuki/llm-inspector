@@ -176,6 +176,59 @@ func HasOutputContent(obj map[string]any) bool {
 	return false
 }
 
+// HasReasoningContent 检测 SSE 对象是否携带思考内容（Claude thinking_delta、
+// OpenAI 兼容方言的 reasoning_content/reasoning、Gemini thought:true 的 part、
+// Responses API 的 reasoning*_text.delta）。
+//
+// 与 HasOutputContent 的区别：后者回答「有没有 token 到达」（TTFT 打点用），
+// 本函数回答「到达的是不是思考内容」。思考 token 计入各协议的 completion 计数，
+// 却不出现在 TextParts 收集的可见文本里，因此用本地分词器对拍 usage 时必须把
+// 出现过思考内容的请求排除，否则本地计数永远偏小、全是误报。
+func HasReasoningContent(obj map[string]any) bool {
+	if t, _ := obj["type"].(string); t == "content_block_delta" {
+		if delta, ok := obj["delta"].(map[string]any); ok {
+			if thinking, _ := delta["thinking"].(string); thinking != "" {
+				return true
+			}
+		}
+	}
+	if choices, ok := obj["choices"].([]any); ok && len(choices) > 0 {
+		if c, ok := choices[0].(map[string]any); ok {
+			if delta, ok := c["delta"].(map[string]any); ok {
+				for _, dialect := range ReasoningDialects {
+					if reasoning, _ := delta[dialect].(string); reasoning != "" {
+						return true
+					}
+				}
+			}
+		}
+	}
+	if candidates, ok := obj["candidates"].([]any); ok && len(candidates) > 0 {
+		if cand, ok := candidates[0].(map[string]any); ok {
+			if content, ok := cand["content"].(map[string]any); ok {
+				if parts, ok := content["parts"].([]any); ok {
+					for _, p := range parts {
+						if part, ok := p.(map[string]any); ok {
+							if thought, _ := part["thought"].(bool); thought {
+								if text, _ := part["text"].(string); text != "" {
+									return true
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if t, _ := obj["type"].(string); t == "response.reasoning_summary_text.delta" ||
+		t == "response.reasoning_text.delta" {
+		if delta, _ := obj["delta"].(string); delta != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // ConsumeUsage 从 SSE 对象中提取 usage（completion_tokens/output_tokens/cached_tokens）和文本片段。
 // compT == -1 表示本事件无 usage 信息；cachedT == -1 表示本事件未携带缓存命中信息。
 // promptT 在各协议下统一为「全部输入上下文」口径：OpenAI/Gemini 的输入计数本身

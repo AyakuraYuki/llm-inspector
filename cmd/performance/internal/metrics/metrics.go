@@ -33,6 +33,7 @@ func AggregateMetrics(result types.BenchmarkResult, slo types.SLOThresholds, sho
 		Total:        len(result.Metrics),
 		ErrorCounts:  make(map[types.ErrorType]int),
 		StoppedEarly: result.StoppedEarly,
+		RequestLimit: result.RequestLimit,
 	}
 
 	// 吞吐统计窗口：正常结束的档位取名义压测时长，提前中止的档位取实际运行时长。
@@ -44,6 +45,16 @@ func AggregateMetrics(result types.BenchmarkResult, slo types.SLOThresholds, sho
 	}
 	agg.Window = window
 	cutoff := result.Start.Add(window)
+
+	// 稳态窗口：掐掉头尾各 10%，只算中间 80% 内完成的请求；Last 30s 只算窗口
+	// 最后 30s 内完成的请求（窗口不足 30s 时不算）。都以「完成时刻」判定，与
+	// Overall 的口径一致。Start 为零值（直接构造的测试样本）时无时间轴，跳过。
+	hasTimeline := !result.Start.IsZero()
+	steadyLo := result.Start.Add(window / 10)
+	steadyHi := result.Start.Add(window - window/10)
+	steadyWindow := steadyHi.Sub(steadyLo)
+	last30Lo := cutoff.Add(-last30sWindow)
+	hasLast30 := hasTimeline && window >= last30sWindow
 
 	var (
 		ttfts           []time.Duration
@@ -60,6 +71,11 @@ func AggregateMetrics(result types.BenchmarkResult, slo types.SLOThresholds, sho
 		winSuccess      int
 		winToks         int64
 		goodCount       int
+		steadySuccess   int
+		steadyToks      int64
+		last30Success   int
+		last30Toks      int64
+		driftAbs        []float64
 	)
 
 	isStreaming := result.Provider != types.ProviderOpenAIImage
@@ -84,9 +100,18 @@ func AggregateMetrics(result types.BenchmarkResult, slo types.SLOThresholds, sho
 		totalToks += m.OutputTokens
 		totalInputToks += m.InputTokens
 		totalCachedToks += m.CachedInputTokens
-		if result.Start.IsZero() || !m.Timestamp.Add(m.TotalLatency).After(cutoff) {
+		end := m.Timestamp.Add(m.TotalLatency)
+		if !hasTimeline || !end.After(cutoff) {
 			winSuccess++
 			winToks += m.OutputTokens
+		}
+		if hasTimeline && end.After(steadyLo) && !end.After(steadyHi) {
+			steadySuccess++
+			steadyToks += m.OutputTokens
+		}
+		if hasLast30 && end.After(last30Lo) && !end.After(cutoff) {
+			last30Success++
+			last30Toks += m.OutputTokens
 		}
 
 		if isStreaming {
@@ -114,6 +139,14 @@ func AggregateMetrics(result types.BenchmarkResult, slo types.SLOThresholds, sho
 			}
 			if m.OutputEstimated {
 				agg.EstimatedOutputs++
+			}
+			// usage 对拍：LocalOutputTokens > 0 表示该请求完成了对拍
+			if m.LocalOutputTokens > 0 {
+				agg.UsageChecked++
+				if m.UsageDrifted {
+					agg.UsageDrifted++
+				}
+				driftAbs = append(driftAbs, math.Abs(m.UsageDriftPct))
 			}
 			// per-request 输入/输出 token 比
 			if m.InputTokens > 0 && m.OutputTokens > 0 {
@@ -166,6 +199,27 @@ func AggregateMetrics(result types.BenchmarkResult, slo types.SLOThresholds, sho
 		}
 	}
 
+	// 稳态 / Last 30s 吞吐
+	if hasTimeline {
+		if secs := steadyWindow.Seconds(); secs > 0 {
+			agg.SteadyWindow = steadyWindow
+			agg.SteadyQPS = float64(steadySuccess) / secs
+			if isStreaming {
+				agg.SteadyTPS = float64(steadyToks) / secs
+			}
+		}
+		if hasLast30 {
+			secs := last30sWindow.Seconds()
+			agg.Last30sWindow = last30sWindow
+			agg.Last30sQPS = float64(last30Success) / secs
+			if isStreaming {
+				agg.Last30sTPS = float64(last30Toks) / secs
+			}
+		}
+	}
+
+	agg.UsageDriftAbs = floatPercentileStats(driftAbs)
+
 	// 系统级输入/输出 token 比
 	if totalInputToks > 0 {
 		agg.IORatio = float64(totalToks) / float64(totalInputToks)
@@ -198,6 +252,9 @@ func AggregateMetrics(result types.BenchmarkResult, slo types.SLOThresholds, sho
 
 	return agg
 }
+
+// last30sWindow 是「Last 30s」吞吐窗口的长度，与 evalscope 的同名指标一致。
+const last30sWindow = 30 * time.Second
 
 // percentileStats 计算一组时延样本的 Min/P10/P25/P50/P75/P90/P95/P99/P99.5/P99.9/Max/Avg/StdDev。
 func percentileStats(durations []time.Duration) types.PercentileStats {

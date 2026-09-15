@@ -1,10 +1,16 @@
 package prompts
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"math/rand/v2"
+	"os"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/AyakuraYuki/llm-inspector/internal/tokenizers"
 )
 
 // approxCharsPerToken 是英文文本下字符数换算 token 数的经验比例，
@@ -37,13 +43,109 @@ var dynamicPromptCorpus = []string{
 	"API versioning strategies range from URL path versions to header-based negotiation, and each comes with different maintenance costs. Whatever scheme is chosen, the harder problem is usually organizational: deciding how long old versions must be supported and communicating deprecation timelines clearly to every downstream consumer.",
 }
 
-// BuildDynamicPrompt 从语料库中随机乱序拼接段落，直到达到目标 token 数（按
-// approxCharsPerToken 近似换算的字符数），并在开头附加随机 nonce 防止上游按
-// 内容命中缓存。targetTokens <= 0 时退化为一个默认长度（约 2000 token）。
-func BuildDynamicPrompt(targetTokens int) string {
+// dynamicPromptSuffix 是动态长文本末尾的固定指令，让请求有一个明确的任务，
+// 避免模型面对一堆无问题的段落时输出不可控。
+const dynamicPromptSuffix = "\n\nBased on the passages above, write a concise summary in your own words."
+
+// Counter 是绑定到一份词表的 token 计数器，并缓存语料库各段落的 token 数：
+// 段落是固定的，逐请求重复分词纯属浪费；有了缓存，拼装一条 prompt 只需对
+// 「最后一个被截断的段落」做少量分词，其余全是整数加法。
+type Counter struct {
+	tk *tokenizers.Tokenizer
+
+	once       sync.Once
+	paraTokens []int // 与 dynamicPromptCorpus 一一对应，带前导空格计数
+	suffix     int
+}
+
+var counters sync.Map // map[string]*Counter，key 为 tokenizer 目录路径
+
+// CounterFor 返回指向 path 的分词计数器；path 为空或加载失败时返回 nil，
+// 调用方据此回退到字符估算。tokenizers.New 本身按绝对路径缓存解析结果，
+// 这里再按原始路径缓存 Counter 是为了复用段落计数。
+func CounterFor(path string) *Counter {
+	if path == "" {
+		return nil
+	}
+	if v, ok := counters.Load(path); ok {
+		return v.(*Counter)
+	}
+	tk, err := tokenizers.New(path)
+	if err != nil {
+		return nil
+	}
+	c := &Counter{tk: tk}
+	v, _ := counters.LoadOrStore(path, c)
+	return v.(*Counter)
+}
+
+// Count 返回文本的 token 数（不含特殊 token），编码失败时返回 0。
+func (c *Counter) Count(text string) int {
+	if c == nil || c.tk == nil {
+		return 0
+	}
+	return c.tk.Count(text)
+}
+
+// Name 返回分词器名称（配置目录名）。
+func (c *Counter) Name() string {
+	if c == nil {
+		return ""
+	}
+	return c.tk.Name()
+}
+
+// Fingerprint 返回词表文件的 SHA-256。
+func (c *Counter) Fingerprint() string {
+	if c == nil {
+		return ""
+	}
+	return c.tk.Fingerprint()
+}
+
+// ValidateTokenizer 校验分词器目录可加载；fingerprint 非空时还要求词表指纹一致。
+// 单机版在配置加载时调用（fail fast），分布式 agent 在预检时调用：coordinator
+// 下发的是路径而非词表本体，各节点必须自己证明手里的词表和 coordinator 的是同一份。
+func ValidateTokenizer(path, fingerprint string) error {
+	if path == "" {
+		return nil
+	}
+	tk, err := tokenizers.New(path)
+	if err != nil {
+		return err
+	}
+	if fingerprint != "" && tk.Fingerprint() != fingerprint {
+		return fmt.Errorf("tokenizer %q 词表指纹不一致：本地 %s，期望 %s（各节点需预置同一份词表文件）",
+			path, shortHash(tk.Fingerprint()), shortHash(fingerprint))
+	}
+	return nil
+}
+
+func shortHash(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
+}
+
+// BuildDynamicPrompt 从语料库中随机乱序拼接段落到目标 token 数，并在开头附加
+// 随机 nonce 防止上游按内容命中缓存。targetTokens <= 0 时退化为默认长度（约 2000 token）。
+//
+// ctr 为 nil 时按 approxCharsPerToken 的字符数近似（历史行为，误差随模型词表
+// 可达 ±30%）；非 nil 时用本地分词器逐段累加并截断最后一段，结果与目标的偏差
+// 通常在个位数 token 以内——这是对标 evalscope `--tokenizer-path` 精确控长的关键。
+func BuildDynamicPrompt(targetTokens int, ctr *Counter) string {
 	if targetTokens <= 0 {
 		targetTokens = 2000
 	}
+	if ctr == nil {
+		return buildDynamicByChars(targetTokens)
+	}
+	return buildDynamicByTokens(targetTokens, ctr)
+}
+
+// buildDynamicByChars 是无分词器时的字符数近似实现。
+func buildDynamicByChars(targetTokens int) string {
 	targetChars := targetTokens * approxCharsPerToken
 
 	var sb strings.Builder
@@ -58,8 +160,120 @@ func BuildDynamicPrompt(targetTokens int) string {
 		sb.WriteString(" ")
 	}
 
-	sb.WriteString("\n\nBased on the passages above, write a concise summary in your own words.")
+	sb.WriteString(dynamicPromptSuffix)
 	return sb.String()
+}
+
+// buildDynamicByTokens 用分词器把 prompt 收敛到目标 token 数。
+//
+// 段落以「前导空格 + 段落」为单位拼接：BPE 的预切分把空格归给后一个词，
+// 因此单独计数的片段与拼接后整体切分的边界一致，逐段累加不会因边界合并而漂移。
+// 最后一段按词数二分截断，只需 O(log 词数) 次分词。
+func buildDynamicByTokens(targetTokens int, ctr *Counter) string {
+	ctr.once.Do(func() {
+		ctr.paraTokens = make([]int, len(dynamicPromptCorpus))
+		for i, p := range dynamicPromptCorpus {
+			ctr.paraTokens[i] = ctr.Count(" " + p)
+		}
+		ctr.suffix = ctr.Count(dynamicPromptSuffix)
+	})
+
+	prefix := fmt.Sprintf("[bench-nonce %d-%d]", time.Now().UnixNano(), rand.IntN(1_000_000_000))
+	budget := targetTokens - ctr.Count(prefix) - ctr.suffix
+
+	var sb strings.Builder
+	sb.WriteString(prefix)
+
+	used := 0
+	order := rand.Perm(len(dynamicPromptCorpus))
+	for i := 0; used < budget; i++ {
+		if i > 0 && i%len(order) == 0 {
+			order = rand.Perm(len(dynamicPromptCorpus))
+		}
+		idx := order[i%len(order)]
+		if c := ctr.paraTokens[idx]; used+c <= budget {
+			sb.WriteString(" ")
+			sb.WriteString(dynamicPromptCorpus[idx])
+			used += c
+			continue
+		}
+		// 整段放不下：按词截断补足剩余预算后结束
+		sb.WriteString(takeWords(dynamicPromptCorpus[idx], budget-used, ctr))
+		break
+	}
+
+	sb.WriteString(dynamicPromptSuffix)
+	return sb.String()
+}
+
+// takeWords 返回段落 p 的前若干个词（带前导空格），使其 token 数不超过 budget
+// 且尽可能接近。二分查找词数，每次探测分词一次。
+func takeWords(p string, budget int, ctr *Counter) string {
+	if budget <= 0 {
+		return ""
+	}
+	words := strings.Fields(p)
+	lo, hi := 0, len(words)
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if ctr.Count(" "+strings.Join(words[:mid], " ")) <= budget {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	if lo == 0 {
+		return ""
+	}
+	return " " + strings.Join(words[:lo], " ")
+}
+
+// PickTargetTokens 在 [lo, hi] 内均匀采样一个目标 token 数；区间未配置
+// （lo/hi 任一 <= 0）时返回 fallback。对标 evalscope 的 min/max-prompt-length：
+// 真实流量的输入长度是分布而非单点，固定长度测出的时延分位数偏「干净」。
+func PickTargetTokens(lo, hi, fallback int) int {
+	if lo <= 0 || hi <= 0 {
+		return fallback
+	}
+	if hi < lo {
+		lo, hi = hi, lo
+	}
+	return lo + rand.IntN(hi-lo+1)
+}
+
+// LoadDatasetLines 读取 line_by_line 数据集：每个非空行是一条独立 prompt，
+// 首尾空白被裁剪。对标 evalscope 的同名数据集（仅纯文本行，不解析 JSON 消息体）。
+func LoadDatasetLines(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("读取数据集失败: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var lines []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 16*1024*1024) // 单行上限 16MB，容纳超长上下文 prompt
+	for sc.Scan() {
+		if line := strings.TrimSpace(sc.Text()); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("读取数据集 %s 失败: %w", path, err)
+	}
+	if len(lines) == 0 {
+		return nil, errors.New("数据集 " + path + " 中没有任何非空行")
+	}
+	return lines, nil
+}
+
+// PickDatasetLine 从数据集中随机返回一行。随机而非顺序轮转：分布式下各节点
+// 若都从第一行顺序发送，会同时打出完全相同的请求序列，叠加放大缓存/批处理效应。
+func PickDatasetLine(lines []string) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	return lines[rand.IntN(len(lines))]
 }
 
 // codexSystemPrompt 模拟标准 AI Agent 开发工具（如 Codex CLI）在每次会话中固定

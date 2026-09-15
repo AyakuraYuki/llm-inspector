@@ -40,18 +40,24 @@ func RunBenchmark(ctx context.Context, cfg types.BenchmarkConfig, rep reporter.R
 
 loop:
 	for mi, model := range cfg.Models {
-		if cfg.Warmup && ctx.Err() == nil {
-			warmupModel(ctx, cfg, model, mi, rep)
-		}
 		for i, conc := range cfg.Concurrency {
 			if ctx.Err() != nil {
 				break loop
 			}
-			seq++
 			rate := levelTargetRate(cfg, i)
+			// 预热：首档前必做（Warmup 开启时）；WarmupPerLevel 开启时每档前都做，
+			// 并发/速率取本档的，把档位切换的冷启动批效应也挡在测量窗口外
+			if cfg.Warmup && (i == 0 || cfg.WarmupPerLevel) {
+				warmupLevel(ctx, cfg, model, mi, conc, rate, rep)
+				if ctx.Err() != nil {
+					break loop
+				}
+			}
+			seq++
+			limit := cfg.LevelRequestLimit(i)
 			rep.LevelStart(seq, total, model, conc, time.Now().Add(cfg.Duration))
 
-			result := RunLevel(ctx, cfg, model, conc, rate, RampDuration(conc, cfg.Duration), rep)
+			result := RunLevel(ctx, cfg, model, conc, rate, RampDuration(conc, cfg.Duration), limit, rep)
 			samplelog.WriteLevel(samplelog.LevelContext{
 				Model:       model.Name,
 				Provider:    model.Provider,
@@ -133,22 +139,20 @@ func PreflightModel(ctx context.Context, cfg types.BenchmarkConfig, model types.
 	return types.RequestMetrics{Success: false, Error: "unknown provider: " + string(model.Provider)}
 }
 
-// warmupModel 在 model 的正式档位开始前做短暂预热，让连接池和运行时热身，丢弃结果。
-// 预热并发取首个正式档位的并发数：把首档所需的连接提前建好，
-// 否则首档要独自承担全部冷启动建连开销，指标被系统性抬高。
-// 预热紧贴各自模型的首档执行，而不是开测前统一预热全部模型：
+// warmupLevel 在一个正式档位开始前做短暂预热，让连接池和运行时热身，丢弃结果。
+// 预热并发/速率取即将开始的档位的取值：把该档所需的连接提前建好，
+// 否则该档要独自承担全部冷启动建连开销，指标被系统性抬高。
+// 预热紧贴各自模型的档位执行，而不是开测前统一预热全部模型：
 // 排在后面的模型要等前面模型跑完全部档位才轮到自己，若提前预热，
 // 上游侧的热身效果（模型驻留、扩容）在正式压测时早已衰减，
 // 冷启动开销仍会落进该模型首档的测量窗口。
-// open-loop 时预热档的目标 RPS 取首档的 RequestRate[0]，与正式档位口径一致。
-func warmupModel(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, idx int, rep reporter.Reporter) {
+// 预热始终按时长运行（不受 RequestsPerLevel 约束）：它的目的是热身，不是采样。
+func warmupLevel(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, idx, conc int, rate float64, rep reporter.Reporter) {
 	warmupCfg := cfg
 	warmupCfg.Duration = cfg.WarmupDuration
-	warmupConc := cfg.Concurrency[0]
-	rate := levelTargetRate(cfg, 0)
-	rep.WarmupStart(warmupConc, cfg.WarmupDuration)
+	rep.WarmupStart(conc, cfg.WarmupDuration)
 	rep.WarmupModel(idx+1, len(cfg.Models), model, time.Now().Add(cfg.WarmupDuration))
-	RunLevel(ctx, warmupCfg, model, warmupConc, rate, RampDuration(warmupConc, warmupCfg.Duration), rep)
+	RunLevel(ctx, warmupCfg, model, conc, rate, RampDuration(conc, warmupCfg.Duration), 0, rep)
 	rep.WarmupEnd()
 }
 
@@ -178,6 +182,24 @@ type levelState struct {
 	totalCnt       atomic.Int64
 	failCnt        atomic.Int64
 	stoppedEarly   atomic.Bool
+
+	// 请求数制：limit > 0 时每次发请求前先 claim 一个名额，名额用尽即停止发送。
+	// 按「已发出」而非「已完成」计数，保证恰好发出 limit 个请求、不多发一个。
+	limit      int64
+	dispatched atomic.Int64
+}
+
+// claim 申请一个发送名额；纯时长制（limit <= 0）恒为真。
+func (s *levelState) claim() bool {
+	if s.limit <= 0 {
+		return true
+	}
+	return s.dispatched.Add(1) <= s.limit
+}
+
+// exhausted 报告名额是否已用尽（用于在思考时间等待之前提前退出）。
+func (s *levelState) exhausted() bool {
+	return s.limit > 0 && s.dispatched.Load() >= s.limit
 }
 
 // record 落地一条请求结果并做早停判定；levelCtx.Err() != nil 且请求失败时
@@ -205,23 +227,25 @@ func (s *levelState) record(cfg types.BenchmarkConfig, rep reporter.Reporter, m 
 	}
 }
 
-// RunLevel 以指定并发数持续发送请求，直到 deadline 或 ctx 取消为止。
+// RunLevel 以指定并发数持续发送请求，直到 deadline、ctx 取消或发满 requestLimit
+// 个请求（requestLimit > 0 时）为止——请求数制与时长制先到者为准。
 // targetRate 为 0 时走 closed-loop（现有行为：每个 worker 等响应才发下一个）；
 // targetRate > 0 时走 open-loop（按泊松过程到达发送请求，不等响应），
-// concurrency 此时改为“同时在途请求数上限”，防止过载时本地无限堆积协程/连接。
+// concurrency 此时改为“同时在途请求数上限”，防止过载时本地无限堆积协程/连接
+// （cfg.OpenLoopUnbounded 为真时不设上限，到点即发）。
 // ramp 是首批请求的错峰启动窗口，仅 closed-loop 使用（单机路径由 RampDuration
 // 按本档并发计算；分布式路径由 coordinator 按全局并发统一算好后下发，各节点
 // 共用同一窗口）；open-loop 的到达时刻本身已被泊松过程随机打散，无需额外错峰。
 // 若 cfg.EarlyStopEnabled 且档位内失败率超过 cfg.MaxErrorRate，会提前取消 levelCtx
 // 结束本档位（不影响其他档位或外层 ctx），并在返回结果中标记 StoppedEarly。
-func RunLevel(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, concurrency int, targetRate float64, ramp time.Duration, rep reporter.Reporter) types.BenchmarkResult {
+func RunLevel(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, concurrency int, targetRate float64, ramp time.Duration, requestLimit int, rep reporter.Reporter) types.BenchmarkResult {
 	start := time.Now()
 	deadline := start.Add(cfg.Duration)
 
 	levelCtx, cancelLevel := context.WithCancel(ctx)
 	defer cancelLevel()
 
-	state := &levelState{}
+	state := &levelState{limit: int64(max(requestLimit, 0))}
 
 	if targetRate > 0 {
 		runLevelOpenLoop(levelCtx, cfg, model, concurrency, targetRate, deadline, rep, state, cancelLevel)
@@ -240,6 +264,7 @@ func RunLevel(ctx context.Context, cfg types.BenchmarkConfig, model types.ModelS
 		Elapsed:      time.Since(start),
 		Metrics:      state.requestMetrics,
 		StoppedEarly: state.stoppedEarly.Load(),
+		RequestLimit: max(requestLimit, 0),
 	}
 }
 
@@ -271,12 +296,15 @@ func runLevelClosedLoop(levelCtx context.Context, cfg types.BenchmarkConfig, mod
 				}
 			}
 			for time.Now().Before(deadline) && levelCtx.Err() == nil {
+				if !state.claim() {
+					return // 请求数制：名额用尽
+				}
 				m := dispatchOne(levelCtx, cfg, model)
 				state.record(cfg, rep, m, levelCtx, cancelLevel)
 
-				// deadline 已过就直接退出：此时的思考时间等待毫无意义，
+				// deadline 已过或名额用尽就直接退出：此时的思考时间等待毫无意义，
 				// 徒增 Elapsed（排空期被多算约一个 ThinkTime）
-				if !time.Now().Before(deadline) {
+				if !time.Now().Before(deadline) || state.exhausted() {
 					return
 				}
 				// ThinkTime 为 0（完成即发）时不进 select：拿不到定时器也少一次调度，
@@ -310,25 +338,38 @@ func runLevelClosedLoop(levelCtx context.Context, cfg types.BenchmarkConfig, mod
 // concurrency 用作同时在途请求数上限（channel 信号量）：超过上限时，下一次
 // 到达会阻塞等空位再发出，对应 AIPerf 里 request-rate + max-concurrency 的双控——
 // 既保留“到达按目标速率”的开环语义，又防止过载时协程/连接本地无限堆积。
+//
+// cfg.OpenLoopUnbounded 为真时跳过信号量：严格开环，到点即发、永不因在途数阻塞，
+// 对标 evalscope --open-loop。过载时在途请求在本地无限堆积，是找饱和点的代价。
 func runLevelOpenLoop(levelCtx context.Context, cfg types.BenchmarkConfig, model types.ModelSpec, concurrency int, targetRate float64, deadline time.Time, rep reporter.Reporter, state *levelState, cancelLevel context.CancelFunc) {
-	sem := make(chan struct{}, max(concurrency, 1))
+	var sem chan struct{}
+	if !cfg.OpenLoopUnbounded {
+		sem = make(chan struct{}, max(concurrency, 1))
+	}
 	var wg sync.WaitGroup
 
 	for time.Now().Before(deadline) && levelCtx.Err() == nil {
-		select {
-		case sem <- struct{}{}:
-		case <-levelCtx.Done():
-			wg.Wait()
-			return
+		if !state.claim() {
+			break // 请求数制：名额用尽，等在途请求排空
+		}
+		if sem != nil {
+			select {
+			case sem <- struct{}{}:
+			case <-levelCtx.Done():
+				wg.Wait()
+				return
+			}
 		}
 
 		wg.Go(func() {
-			defer func() { <-sem }()
+			if sem != nil {
+				defer func() { <-sem }()
+			}
 			m := dispatchOne(levelCtx, cfg, model)
 			state.record(cfg, rep, m, levelCtx, cancelLevel)
 		})
 
-		if !time.Now().Before(deadline) {
+		if !time.Now().Before(deadline) || state.exhausted() {
 			break
 		}
 

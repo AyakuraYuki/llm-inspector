@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/prompts"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/runner"
 	"github.com/AyakuraYuki/llm-inspector/cmd/performance/internal/types"
 )
@@ -25,6 +26,9 @@ const (
 	PromptModeDynamic PromptMode = "dynamic"
 	// PromptModeCodex 使用类 Codex 系统提示词加随机简短提问，模拟高相似度请求场景。
 	PromptModeCodex PromptMode = "codex"
+	// PromptModeDataset 从 dataset_path 指向的文本文件逐行取 prompt（每个非空行一条），
+	// 对标 evalscope 的 line_by_line 数据集。
+	PromptModeDataset PromptMode = "dataset"
 )
 
 // LoadMode 定义档位的负载生成方式。
@@ -57,6 +61,11 @@ const (
 	defaultMaxErrorRate = 0.5
 	defaultMinSamples   = 20
 
+	// defaultUsageDriftPct 是 usage 对拍的默认阈值（%）。分词器与服务端一致时
+	// 可见文本的计数偏差通常只有个位数 token，10% 足以放过边界合并的正常抖动、
+	// 抓住「usage 统计的是另一套东西」这类真问题。
+	defaultUsageDriftPct = 10.0
+
 	defaultPollInterval = time.Second
 	defaultAgentTimeout = 10 * time.Second
 )
@@ -72,8 +81,9 @@ type Config struct {
 	ImagePrompt    string              `yaml:"image_prompt"`
 	Warmup         *bool               `yaml:"warmup"` // 指针以区分「显式 false」与「未配置」
 	WarmupDuration time.Duration       `yaml:"warmup_duration"`
-	Cooldown       *time.Duration      `yaml:"cooldown"`   // 指针以区分「显式 0s（档位间不等待）」与「未配置」
-	ThinkTime      *time.Duration      `yaml:"think_time"` // 指针以区分「显式 0s（完成即发）」与「未配置（取默认 300ms）」
+	WarmupPerLevel bool                `yaml:"warmup_per_level"` // 每个并发档位前都预热（默认只在模型首档前），仅 warmup 为真时有效
+	Cooldown       *time.Duration      `yaml:"cooldown"`         // 指针以区分「显式 0s（档位间不等待）」与「未配置」
+	ThinkTime      *time.Duration      `yaml:"think_time"`       // 指针以区分「显式 0s（完成即发）」与「未配置（取默认 300ms）」
 	Output         string              `yaml:"output"`
 	NoExcel        bool                `yaml:"no_excel"`
 	NoTUI          bool                `yaml:"no_tui"`
@@ -86,6 +96,18 @@ type Config struct {
 	// LoadMode/RequestRate 均可选，不配置时等价于现有 closed-loop 行为。
 	LoadMode    LoadMode  `yaml:"load_mode"`
 	RequestRate []float64 `yaml:"request_rate"`
+
+	// OpenLoopUnbounded 为真时 open 模式不受 concurrency 在途上限约束（严格开环），
+	// 仅 load_mode: open 下合法。默认 false 保留有界模式作为安全默认。
+	OpenLoopUnbounded bool `yaml:"open_loop_unbounded"`
+
+	// RequestsPerLevel 是各档位请求数上限：长度为 1 时作用于全部档位，否则必须与
+	// concurrency 等长一一对应。档位在「发满」与「到达 duration」两者先到者结束。
+	// 留空为纯时长制（历史行为）。
+	RequestsPerLevel []int `yaml:"requests_per_level"`
+
+	// Tokenizer 是可选的本地分词器配置，留空不启用。
+	Tokenizer *TokenizerConfig `yaml:"tokenizer"`
 
 	// SLO 达标率（goodput）判定阈值，留空（nil）不计算 goodput，不影响现有报表。
 	SLO *SLOConfig `yaml:"slo"`
@@ -104,6 +126,14 @@ type Config struct {
 
 	// ShowHistogram 为真时在终端/Excel 额外输出延迟分布直方图，默认 false 不影响现有报表。
 	ShowHistogram bool `yaml:"show_histogram"`
+}
+
+// TokenizerConfig 描述本地分词器：path 指向 configs/tokenizers/<name> 这类目录。
+// 启用后 dynamic prompt 用它精确收敛输入 token 数、usage 缺失时用它代替字符估算，
+// 并按 usage_drift_pct 对拍服务端 usage。
+type TokenizerConfig struct {
+	Path          string   `yaml:"path"`
+	UsageDriftPct *float64 `yaml:"usage_drift_pct"` // 指针以区分「显式 0（关闭对拍）」与「未配置（默认 10）」
 }
 
 // SLOConfig 描述 goodput 判定用的 SLO 阈值（毫秒），三项均可选，0 表示该维度不参与判定。
@@ -132,9 +162,20 @@ type EarlyStopConfig struct {
 
 // PromptConfig 描述文本端点的 prompt 生成方式。
 type PromptConfig struct {
-	Mode   PromptMode `yaml:"mode"`   // text | dynamic | codex，默认 text
+	Mode   PromptMode `yaml:"mode"`   // text | dynamic | codex | dataset，默认 text
 	Text   string     `yaml:"text"`   // mode=text 时使用的固定文本
 	Tokens int        `yaml:"tokens"` // mode=dynamic 时生成文本的目标近似 token 数
+
+	// TokensMin/TokensMax 让 dynamic 的目标 token 数按请求在区间内均匀采样，
+	// 两者须同时配置且 min <= max，配置后覆盖 tokens；仅 mode=dynamic 下合法。
+	TokensMin int `yaml:"tokens_min"`
+	TokensMax int `yaml:"tokens_max"`
+
+	// DatasetPath 是 mode=dataset 时的文本文件路径（每个非空行一条 prompt），必填。
+	DatasetPath string `yaml:"dataset_path"`
+
+	// datasetLines 是 validate 阶段读入的数据集内容，ToBenchmark 内联进配置。
+	datasetLines []string
 }
 
 // ModelConfig 描述一个待测模型。
@@ -233,16 +274,29 @@ func (c *Config) applyDefaults() {
 	if c.LoadMode == "" {
 		c.LoadMode = LoadModeClosed
 	}
+	if c.Tokenizer != nil && strings.TrimSpace(c.Tokenizer.Path) != "" && c.Tokenizer.UsageDriftPct == nil {
+		d := defaultUsageDriftPct
+		c.Tokenizer.UsageDriftPct = &d
+	}
 }
 
 // validate 校验必填项与取值合法性。默认值已在 applyDefaults 中填充，
 // 此处只需检查用户可能填错的内容。
 func (c *Config) validate() error {
 	switch c.Prompt.Mode {
-	case PromptModeText, PromptModeDynamic, PromptModeCodex:
+	case PromptModeText, PromptModeDynamic, PromptModeCodex, PromptModeDataset:
 	default:
-		return fmt.Errorf("prompt.mode 非法：%q（合法值：%s、%s、%s）",
-			c.Prompt.Mode, PromptModeText, PromptModeDynamic, PromptModeCodex)
+		return fmt.Errorf("prompt.mode 非法：%q（合法值：%s、%s、%s、%s）",
+			c.Prompt.Mode, PromptModeText, PromptModeDynamic, PromptModeCodex, PromptModeDataset)
+	}
+	if err := c.validatePromptExtras(); err != nil {
+		return err
+	}
+	if err := c.validateTokenizer(); err != nil {
+		return err
+	}
+	if err := c.validateRequestsPerLevel(); err != nil {
+		return err
 	}
 
 	for _, v := range c.Concurrency {
@@ -298,6 +352,9 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("load_mode 非法：%q（合法值：%s、%s）", c.LoadMode, LoadModeClosed, LoadModeOpen)
 	}
+	if c.OpenLoopUnbounded && c.LoadMode != LoadModeOpen {
+		return fmt.Errorf("open_loop_unbounded 仅在 load_mode 为 %s 时有效", LoadModeOpen)
+	}
 	if c.LoadMode == LoadModeOpen {
 		if len(c.RequestRate) == 0 {
 			return fmt.Errorf("load_mode 为 %s 时 request_rate 为必填项，至少配置一个目标 RPS", LoadModeOpen)
@@ -326,6 +383,80 @@ func (c *Config) validate() error {
 		return fmt.Errorf("max_output_tokens 不能为负数，发现非法值：%d", c.MaxOutputTokens)
 	}
 
+	return nil
+}
+
+// validatePromptExtras 校验 dynamic 的长度区间与 dataset 模式的数据集文件。
+// 数据集在这里一次读入并缓存：既是校验（文件存在、非空），也避免运行期再读磁盘。
+func (c *Config) validatePromptExtras() error {
+	lo, hi := c.Prompt.TokensMin, c.Prompt.TokensMax
+	if lo != 0 || hi != 0 {
+		if c.Prompt.Mode != PromptModeDynamic {
+			return fmt.Errorf("prompt.tokens_min/tokens_max 仅在 prompt.mode 为 %s 时有效", PromptModeDynamic)
+		}
+		if lo <= 0 || hi <= 0 {
+			return fmt.Errorf("prompt.tokens_min 与 tokens_max 必须同时为正整数，发现 min=%d max=%d", lo, hi)
+		}
+		if lo > hi {
+			return fmt.Errorf("prompt.tokens_min（%d）不能大于 tokens_max（%d）", lo, hi)
+		}
+	}
+
+	if strings.TrimSpace(c.Prompt.DatasetPath) != "" && c.Prompt.Mode != PromptModeDataset {
+		return fmt.Errorf("prompt.dataset_path 仅在 prompt.mode 为 %s 时有效", PromptModeDataset)
+	}
+	if c.Prompt.Mode == PromptModeDataset {
+		path := strings.TrimSpace(c.Prompt.DatasetPath)
+		if path == "" {
+			return fmt.Errorf("prompt.mode 为 %s 时 prompt.dataset_path 为必填项", PromptModeDataset)
+		}
+		lines, err := prompts.LoadDatasetLines(path)
+		if err != nil {
+			return fmt.Errorf("prompt.dataset_path: %w", err)
+		}
+		c.Prompt.datasetLines = lines
+	}
+	return nil
+}
+
+// validateTokenizer 校验分词器目录可加载、阈值非负。加载失败要在这里报出来：
+// 运行期静默回退到字符估算会让「配了分词器」的报告口径其实和没配一样。
+func (c *Config) validateTokenizer() error {
+	if c.Tokenizer == nil {
+		return nil
+	}
+	path := strings.TrimSpace(c.Tokenizer.Path)
+	if path == "" {
+		if c.Tokenizer.UsageDriftPct != nil {
+			return fmt.Errorf("tokenizer.usage_drift_pct 需要同时配置 tokenizer.path")
+		}
+		return nil
+	}
+	c.Tokenizer.Path = path
+	if err := prompts.ValidateTokenizer(path, ""); err != nil {
+		return fmt.Errorf("tokenizer.path: %w", err)
+	}
+	if c.Tokenizer.UsageDriftPct != nil && *c.Tokenizer.UsageDriftPct < 0 {
+		return fmt.Errorf("tokenizer.usage_drift_pct 不能为负数，发现非法值：%v", *c.Tokenizer.UsageDriftPct)
+	}
+	return nil
+}
+
+// validateRequestsPerLevel 校验请求数制配置：长度 1 或与 concurrency 等长，逐项为正。
+func (c *Config) validateRequestsPerLevel() error {
+	n := len(c.RequestsPerLevel)
+	if n == 0 {
+		return nil
+	}
+	if n != 1 && n != len(c.Concurrency) {
+		return fmt.Errorf("requests_per_level 长度（%d）必须为 1（作用于全部档位）或与 concurrency 长度（%d）一致",
+			n, len(c.Concurrency))
+	}
+	for i, v := range c.RequestsPerLevel {
+		if v <= 0 {
+			return fmt.Errorf("requests_per_level 必须为正整数，发现非法值：requests_per_level[%d]=%d", i, v)
+		}
+	}
 	return nil
 }
 
@@ -374,6 +505,20 @@ func (c *Config) ToBenchmark() types.BenchmarkConfig {
 		thinkTime = *c.ThinkTime
 	}
 
+	var (
+		tokenizerPath string
+		fingerprint   string
+		driftPct      float64
+	)
+	if c.Tokenizer != nil && c.Tokenizer.Path != "" {
+		tokenizerPath = c.Tokenizer.Path
+		// validate 已保证可加载；指纹随配置下发，分布式 agent 预检时据此校验词表一致
+		fingerprint = prompts.CounterFor(tokenizerPath).Fingerprint()
+		if c.Tokenizer.UsageDriftPct != nil {
+			driftPct = *c.Tokenizer.UsageDriftPct
+		}
+	}
+
 	return types.BenchmarkConfig{
 		BaseURL:               c.BaseURL,
 		Models:                models,
@@ -383,9 +528,17 @@ func (c *Config) ToBenchmark() types.BenchmarkConfig {
 		ImagePrompt:           c.ImagePrompt,
 		DynamicPrompt:         c.Prompt.Mode == PromptModeDynamic,
 		PromptTokens:          c.Prompt.Tokens,
+		PromptTokensMin:       c.Prompt.TokensMin,
+		PromptTokensMax:       c.Prompt.TokensMax,
 		CodexPrompt:           c.Prompt.Mode == PromptModeCodex,
+		DatasetPrompt:         c.Prompt.Mode == PromptModeDataset,
+		DatasetLines:          append([]string(nil), c.Prompt.datasetLines...),
+		TokenizerPath:         tokenizerPath,
+		TokenizerFingerprint:  fingerprint,
+		UsageDriftPct:         driftPct,
 		Warmup:                warmup,
 		WarmupDuration:        c.WarmupDuration,
+		WarmupPerLevel:        warmup && c.WarmupPerLevel,
 		CooldownDuration:      *c.Cooldown, // applyDefaults 保证非 nil
 		ThinkTime:             thinkTime,
 		MaxOutputTokens:       c.MaxOutputTokens,
@@ -394,7 +547,9 @@ func (c *Config) ToBenchmark() types.BenchmarkConfig {
 		MinSamples:            c.EarlyStop.MinSamples,
 		SkipHigherConcurrency: c.EarlyStop.Enabled && c.EarlyStop.SkipHigherConcurrency != nil && *c.EarlyStop.SkipHigherConcurrency,
 		OpenLoop:              c.LoadMode == LoadModeOpen,
+		OpenLoopUnbounded:     c.LoadMode == LoadModeOpen && c.OpenLoopUnbounded,
 		RequestRate:           append([]float64(nil), c.RequestRate...),
+		RequestsPerLevel:      append([]int(nil), c.RequestsPerLevel...),
 		SLO:                   c.sloThresholds(),
 		ShowHistogram:         c.ShowHistogram,
 	}

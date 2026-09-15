@@ -190,7 +190,11 @@ func printHeader(cfg types.BenchmarkConfig) {
 	fmt.Printf("Duration    : %s per concurrency level\n", cfg.Duration)
 	fmt.Printf("Concurrency : %v\n", cfg.Concurrency)
 	if cfg.OpenLoop {
-		fmt.Printf("Load Mode   : open-loop（目标 RPS：%v，泊松到达）\n", cfg.RequestRate)
+		bound := "在途上限=concurrency"
+		if cfg.OpenLoopUnbounded {
+			bound = "无界，不设在途上限"
+		}
+		fmt.Printf("Load Mode   : open-loop（目标 RPS：%v，泊松到达，%s）\n", cfg.RequestRate, bound)
 	} else {
 		fmt.Printf("Load Mode   : closed-loop（默认；高负载下尾延迟可能被低估，见 README「Coordinated Omission」）\n")
 	}
@@ -198,7 +202,11 @@ func printHeader(cfg types.BenchmarkConfig) {
 	if cfg.Warmup {
 		warmupLabel = cfg.WarmupDuration.String()
 	}
+	if cfg.Warmup && cfg.WarmupPerLevel {
+		warmupLabel += " (before every concurrency level)"
+	}
 	fmt.Printf("Warmup      : %s\n", warmupLabel)
+	fmt.Printf("Requests    : %s\n", requestsLabel(cfg))
 	fmt.Printf("Cooldown    : %s between levels\n", cfg.CooldownDuration)
 	fmt.Printf("Think Time  : %s (closed-loop only)\n", thinkTimeLabel(cfg.ThinkTime))
 	fmt.Printf("Max Tokens  : %d per request\n", cfg.EffectiveMaxOutputTokens())
@@ -216,13 +224,16 @@ func printHeader(cfg types.BenchmarkConfig) {
 		fmt.Printf("  - %-32s [%s]  group=%s  (%d keys)\n", m.Name, m.Provider, m.TokenGroup, len(m.Tokens))
 	}
 	switch {
+	case cfg.DatasetPrompt:
+		fmt.Printf("Prompt      : dataset (line_by_line, %d lines, one random line per request)\n", len(cfg.DatasetLines))
 	case cfg.DynamicPrompt:
-		fmt.Printf("Prompt      : dynamic (~%d tokens, randomized per request)\n", cfg.PromptTokens)
+		fmt.Printf("Prompt      : %s\n", dynamicPromptLabel(cfg))
 	case cfg.CodexPrompt:
 		fmt.Printf("Prompt      : codex-style (fixed system prompt + random short question, simulating high-similarity agent traffic)\n")
 	default:
 		fmt.Printf("Prompt      : %s\n", cfg.Prompt)
 	}
+	fmt.Printf("Tokenizer   : %s\n", tokenizerLabel(cfg))
 	fmt.Printf("Image Prompt: %s\n", cfg.ImagePrompt)
 	fmt.Printf("\n")
 }
@@ -234,4 +245,45 @@ func thinkTimeLabel(d time.Duration) string {
 		return "0s (fire as soon as the previous response completes)"
 	}
 	return d.String()
+}
+
+// dynamicPromptLabel 渲染 dynamic 模式的配置头：长度是单点还是区间、精度是字符近似还是分词器收敛。
+func dynamicPromptLabel(cfg types.BenchmarkConfig) string {
+	length := fmt.Sprintf("~%d tokens", cfg.PromptTokens)
+	if cfg.PromptTokensMin > 0 && cfg.PromptTokensMax > 0 {
+		length = fmt.Sprintf("[%d, %d] tokens uniformly sampled", cfg.PromptTokensMin, cfg.PromptTokensMax)
+	}
+	precision := "char-approximated"
+	if cfg.TokenizerPath != "" {
+		precision = "tokenizer-exact"
+	}
+	return fmt.Sprintf("dynamic (%s, %s, randomized per request)", length, precision)
+}
+
+// tokenizerLabel 渲染本地分词器配置：路径、词表指纹前缀、usage 对拍阈值。
+func tokenizerLabel(cfg types.BenchmarkConfig) string {
+	if cfg.TokenizerPath == "" {
+		return "none (char-based estimates, no usage cross-check)"
+	}
+	fp := cfg.TokenizerFingerprint
+	if len(fp) > 12 {
+		fp = fp[:12]
+	}
+	drift := "usage cross-check off"
+	if cfg.UsageDriftPct > 0 {
+		drift = fmt.Sprintf("usage drift threshold %.1f%%", cfg.UsageDriftPct)
+	}
+	return fmt.Sprintf("%s (vocab sha256 %s…, %s)", cfg.TokenizerPath, fp, drift)
+}
+
+// requestsLabel 渲染运行形态：纯时长制，还是请求数与时长先到者结束。
+func requestsLabel(cfg types.BenchmarkConfig) string {
+	switch len(cfg.RequestsPerLevel) {
+	case 0:
+		return "duration-based (no per-level request cap)"
+	case 1:
+		return fmt.Sprintf("%d per level, or duration, whichever comes first", cfg.RequestsPerLevel[0])
+	default:
+		return fmt.Sprintf("%v per level (one per concurrency level), or duration, whichever comes first", cfg.RequestsPerLevel)
+	}
 }

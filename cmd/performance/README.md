@@ -74,25 +74,57 @@ concurrency: [ 10, 20, 30, 40, 50, 75, 100, 120, 150 ]  # 并发档位列表，�
 
 ```yaml
 prompt:
-  mode: "text"     # text | dynamic | codex，三选一
-  text: "..."      # mode=text 时使用的固定 prompt
-  tokens: 2000     # mode=dynamic 时生成文本的目标近似 token 数
+  mode: "text"           # text | dynamic | codex | dataset，四选一
+  text: "..."            # mode=text 时使用的固定 prompt
+  tokens: 2000           # mode=dynamic 时生成文本的目标 token 数（单点）
+  #tokens_min: 500       # mode=dynamic 时改为在 [tokens_min, tokens_max] 内逐请求均匀采样，覆盖 tokens
+  #tokens_max: 4000
+  #dataset_path: "prompts.txt"  # mode=dataset 时必填：每个非空行一条 prompt
 image_prompt: "A cute fluffy kitten playing with a ball of yarn, soft lighting, adorable, high detail."
+
+#tokenizer:
+#  path: "configs/tokenizers/kimi-k3"  # 本地分词器目录，留空不启用
+#  usage_drift_pct: 10                 # usage 对拍阈值（%），显式 0 关闭对拍
 ```
 
-| mode      | 行为                                                                       |
-|-----------|----------------------------------------------------------------------------|
-| `text`    | 每次请求都发送同一段固定文本（`prompt.text`）                              |
-| `dynamic` | 每次请求现场拼装约 `prompt.tokens` 个 token 的随机长文本，用于长上下文压测 |
-| `codex`   | 使用类 Codex 系统提示词 + 随机简短提问，模拟高相似度请求场景               |
+| mode      | 行为                                                                                                             |
+|-----------|------------------------------------------------------------------------------------------------------------------|
+| `text`    | 每次请求都发送同一段固定文本（`prompt.text`）                                                                    |
+| `dynamic` | 每次请求现场拼装目标长度的随机长文本，用于长上下文压测；长度可单点（`tokens`）或区间采样（`tokens_min/max`）     |
+| `codex`   | 使用类 Codex 系统提示词 + 随机简短提问，模拟高相似度请求场景                                                     |
+| `dataset` | 每次请求从 `dataset_path` 文件随机取一个非空行作为 prompt（对标 evalscope 的 `line_by_line`，仅纯文本行）        |
 
 `image_prompt` 仅在模型 provider 为 `openai-image` 时使用，与文本端点的 `prompt` 互不影响。
+
+#### 输入长度：单点还是区间
+
+`tokens_min`/`tokens_max` 仅 `dynamic` 模式合法，两者须同时配置且 `min <= max`；配置后每个请求的目标 token 数在区间内均匀采样，覆盖 `tokens`。真实流量的输入长度是分布而非单点，固定长度测出的时延分位数会偏「干净」——想看长短输入混跑下的
+TTFT 分布形态用区间，想做严格可比的回归基线用单点。
+
+#### tokenizer（本地分词器）
+
+`tokenizer.path` 指向 `configs/tokenizers/<name>` 这类目录（HF `tokenizer.json` 或 tiktoken 格式，纯 Go 加载，见 `internal/tokenizers`）。启用后三件事随之改变：
+
+1. **输入精确控长**：`dynamic` 模式按分词器逐段累加、截断最后一段，把输入收敛到目标 token 数（实测偏差在个位数 token 以内）；不配时按「4 字符 ≈ 1 token」近似，不同模型词表下误差可达 ±30%。这是对标 evalscope
+   `--tokenizer-path` 的关键能力
+2. **usage 缺失时的估算更准**：provider 未上报 usage 的请求，输出 token 数改用分词器对可见文本计数（仍打 `OutputEstimated` 标记）
+3. **usage 对拍**：服务端 `completion_tokens` 与本地对可见输出文本的计数比较，|偏差| 超过 `usage_drift_pct`（默认 10%）的请求打 `UsageDrifted` 标记；报表给出对拍条数、漂移条数与 |偏差| 分位数。大量漂移说明网关/上游的
+   usage 统计与实际输出不符——计费和 TPOT 分母都会失真，这是 evalscope 做不到的「两边对账」
+
+**范围限制，务必知道**：
+
+- 分词器必须与被测模型一致，借用别家词表不会报错，但计数会静默失真。仓库目前预置 `deepseek-v4`（HF）与 `kimi-k3`（tiktoken）两份；GPT 系可自行补 `o200k_base`（tiktoken 格式，放目录 + `inspector.json` 即可）；**Claude 与
+  Gemini 的词表不公开**，这两家做不到精确控长与 usage 对拍，evalscope 同样做不到
+- **思考型请求不对拍**：思考 token 计入各协议的 completion 计数，却不在可见文本里，本地必然偏小。出现过思考内容（`thinking_delta`/`reasoning_content`/Gemini `thought:true`/Responses `reasoning_*`）的请求自动跳过对拍，
+  `local_output_tokens` 为 0
+- 配置了路径但目录不可加载时，配置加载阶段直接报错，而不是运行时静默退回字符估算——否则「配了分词器」的报告口径其实和没配一样
 
 ### 预热、冷却与输出偏好
 
 ```yaml
-warmup: true          # 正式测试前是否执行预热阶段（并发=首个正式档位的并发数，时长由 warmup_duration 控制）
+warmup: true          # 正式测试前是否执行预热阶段（并发=即将开始档位的并发数，时长由 warmup_duration 控制）
 warmup_duration: 10s  # 预热阶段持续时长
+warmup_per_level: false  # true 时每个并发档位前都预热（默认只在每个模型的首档前），仅 warmup 为真时有效
 cooldown: 5s          # 每个并发档位之间的冷却等待时间
 think_time: 300ms     # closed-loop 下同一 worker 两次请求之间的等待（拟人思考时间），默认 300ms
 max_output_tokens: 8192  # 各协议输出长度上限的统一取值，默认 8192
@@ -103,6 +135,11 @@ no_tui: false    # 禁用 TUI，使用纯文本控制台输出（stdout 非终�
 ```
 
 `warmup`、`cooldown`、`think_time` 用指针类型区分「未配置（取默认值）」与「显式设为 false/0s」，所以显式写 `cooldown: 0s`、`think_time: 0s` 就是真的不等待，不会被悄悄改回默认值。
+
+#### warmup_per_level（每档预热）
+
+默认只在每个模型的**首个**档位前预热一次（并发取首档并发）。档位切换同样有冷启动批效应——新增的 worker 要建连、上游可能要扩容——而每档开头的 ramp 只摊开了建连压力，没有把它挡在测量窗口外。`warmup_per_level: true`
+让每个档位开始前都按**本档**并发/速率预热 `warmup_duration`，代价是总耗时增加「档位数 × warmup_duration」。预热始终按时长运行，不受 `requests_per_level` 约束。
 
 #### think_time（思考时间）
 
@@ -143,18 +180,28 @@ early_stop:
 ```yaml
 load_mode: "open"          # closed（默认，不写就是这个）| open
 request_rate: [ 5, 10, 20 ]  # load_mode: open 时必填，长度必须与 concurrency 相等
+#open_loop_unbounded: true   # open 模式下去掉在途上限（严格开环），默认 false
+#requests_per_level: [ 500 ] # 每档请求数上限：一项作用于全部档位，或与 concurrency 等长逐档对应；默认纯时长制
 ```
 
-| 字段           | 必填                     | 说明                                                                                                                                                     |
-|----------------|--------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `load_mode`    | 否                       | `closed`（默认）：每个 worker 等响应才发下一个（现有行为）；`open`：按目标 RPS 泊松到达发送请求，不等响应                                                |
-| `request_rate` | `load_mode: open` 时必填 | 与 `concurrency` 一一对应的目标 RPS 列表，长度必须一致；`open` 模式下 `concurrency[i]` 改为该档位「同时在途请求数上限」，防止过载时本地无限堆积协程/连接 |
+| 字段                  | 必填                     | 说明                                                                                                                                                     |
+|-----------------------|--------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `load_mode`           | 否                       | `closed`（默认）：每个 worker 等响应才发下一个（现有行为）；`open`：按目标 RPS 泊松到达发送请求，不等响应                                                |
+| `request_rate`        | `load_mode: open` 时必填 | 与 `concurrency` 一一对应的目标 RPS 列表，长度必须一致；`open` 模式下 `concurrency[i]` 改为该档位「同时在途请求数上限」，防止过载时本地无限堆积协程/连接 |
+| `open_loop_unbounded` | 否                       | 仅 `open` 下合法。`true` 时不再受 `concurrency` 在途上限约束，到点即发，是严格意义的开环（对标 evalscope `--open-loop`）                                 |
+| `requests_per_level`  | 否                       | 各档位请求数上限。档位在「发满该数量」与「到达 `duration`」两者**先到者**结束（对标 evalscope `--number` + `--duration`）；留空为纯时长制                |
 
 **为什么需要 open-loop**：closed-loop 下，一旦服务端出现排队延迟，压测客户端会因为「等响应才发下一个」自动降低实际发送速率，相当于自己给自己让路——这就是 **Coordinated Omission**：服务端越慢，closed-loop
 测出的延迟分位数反而越「好看」，因为真正被压垮期间本该发出、却被延迟发出的那些请求根本没有被采样到。closed-loop 只能回答「给定并发数，延迟大概是多少」，open-loop 才能回答「给定目标
 RPS（贴近线上真实流量的到达模式），尾延迟会不会因排队而爆炸」。
 
 **什么时候切到 open-loop**：已知或想设定线上目标 RPS、需要验证某个 RPS 水位下 P99/P999 是否可接受时，用 `open`；只是想画一条「并发数 vs 延迟」的曲线做粗略容量摸底时，`closed`（默认）够用。两种模式可以用同一份配置分别跑两次，互相佐证。
+
+**有界 vs 无界开环**：默认的有界开环在途请求数到达 `concurrency[i]` 后，新到达会先排队等空位——过载时退化成「限速闭环」，测出的是「被压测机自我保护后」的数字，安全但偏乐观。`open_loop_unbounded: true`
+去掉这层保护，到点即发，服务端跟不上时在途请求只会越积越多，测出的排队延迟才是真实流量下的形态，是找系统**饱和点**的正确姿势；代价是压测机自身的协程/连接/内存会随积压增长，务必先估算承受力再开。
+
+**请求数制**：`requests_per_level` 让每档在发满 N 个请求后就结束（在途请求照常等完），不必等 `duration` 到期，适合短回归和与 evalscope 默认的请求数制对拍。注意两点：档位仍受 `duration` 兜底（先到者结束，不想被时长截断就把
+`duration` 调大）；请求数制下吞吐分母是实际用时（含最后一批请求的排空），与 evalscope 口径一致，而纯时长制的分母是名义窗口。TUI/控制台的进度条仍按时长渲染，档位提前结束属正常现象。
 
 ### SLO 达标率（Goodput）
 
@@ -231,8 +278,8 @@ tokens:
 ## 运行流程
 
 1. **预检（preflight）**：对每个模型发一次完整的流式请求（超时 2 分钟，覆盖思考型模型的长思考阶段），验证渠道配置、Token 有效性和网络连通性；任一模型失败则整轮压测中止，不会进入正式测试。
-2. **预热（可选）**：每个模型在自己的首个正式档位前预热，并发数取该模型首档的并发数，时长由 `warmup_duration` 控制，结果丢弃不计入报表。
-3. **正式测试**：按 `models × concurrency` 的顺序逐档运行。closed-loop（默认）时每档内部按并发数错峰启动 worker（错峰窗口 ≈1ms/worker，上限 5s 且不超过 `duration` 的 1/6），worker
+2. **预热（可选）**：每个模型在自己的首个正式档位前预热（`warmup_per_level: true` 时每个档位前都预热），并发数/目标 RPS 取即将开始档位的取值，时长由 `warmup_duration` 控制，结果丢弃不计入报表。
+3. **正式测试**：按 `models × concurrency` 的顺序逐档运行。配置了 `requests_per_level` 时，档位在发满该数量与到达 `duration` 两者先到者结束。closed-loop（默认）时每档内部按并发数错峰启动 worker（错峰窗口 ≈1ms/worker，上限 5s 且不超过 `duration` 的 1/6），worker
    持续发请求直到档位 `duration` 到期或被早停取消，等响应才发下一个；open-loop（`load_mode: open`）时按 `request_rate` 中对应的目标 RPS 以泊松过程持续发出请求（不等响应），`concurrency`
    改为同时在途请求数上限，超过上限时新请求会阻塞等空位再发出。两种模式下，deadline 前发出、deadline 后才完成的长尾请求都仍计入时延分位数，但不计入 QPS/TPS 分母。
 4. **冷却**：非最后一档时，档位之间按 `cooldown` 等待后再进入下一档；因早停中止的档位不会执行冷却。
@@ -320,6 +367,10 @@ per-level 明细下方可能出现的提示行，含义如下：
 - **per-request TPS/TPM**：`输出 token 数 / 生成窗口秒数` 的分位数；生成窗口过窄（一次性到达）或超出单流物理天花板的样本会被剔除，剔除数计入 `GenSpeedExcluded`
 - **System TPS/TPM**：吞吐窗口内完成的请求总 token 数 / 窗口时长（`Window`），区别于 per-request 分位数——系统级口径反映整体吞吐，per-request 口径反映单条流的解码速度
 - **QPS/QPM**：吞吐窗口内完成的成功请求数 / 窗口时长
+- **Steady / Last 30s**：稳态吞吐窗口，对标 evalscope 的 Workload Throughput 表。**Steady** 掐掉窗口头尾各 10%，只算在中间 80% 内**完成**的请求 / 0.8×窗口；**Last 30s** 只算窗口最后 30 秒内完成的请求 / 30s，窗口不足
+  30s 时显示 N/A。三者（Overall/Steady/Last 30s）差异大说明档位内负载未进入稳态——ramp 未过、上游还在扩容、或收尾衰减占比过高，此时 Steady 比 Overall 更接近「稳定运行时能扛多少」
+- **usage 对拍**（需 `tokenizer`）：服务端 `completion_tokens` 与本地分词器对可见输出文本计数的相对偏差 `(usage - local) / local`。报表给出对拍条数、|偏差| 超过 `usage_drift_pct` 的条数、|偏差| 的分位数；思考型请求与无 usage
+  的请求不对拍。原始样本里逐请求带 `local_output_tokens`/`usage_drift_pct`/`usage_drifted`
 - **I/O Ratio**：输出/输入 token 比，per-request 分位数与系统级总量比（`总 output_tokens / 总 input_tokens`）两种口径
 - **Cache Hit Rate**：`cached_input_tokens / input_tokens * 100%`，同样有 per-request 分位数与系统级总量比两种口径；仅统计上报了缓存字段的 provider，未上报时显示 `N/A`（区别于「上报了但命中率为 0%」）
 - **Goodput**：同时满足全部已配置 `slo` 阈值（TTFT/TPOT/E2E）的请求数占总请求数的比例；失败请求必然不达标，未配置 `slo` 时显示 `N/A`（区别于「配置了但 0%」）
@@ -333,6 +384,8 @@ per-level 明细下方可能出现的提示行，含义如下：
 2. **预检失败会中止整轮压测**：任一模型的预检请求失败，压测直接终止且不产生报表，先检查该模型的 `base_url`/`token_group`/网络连通性
 3. **`token_group` 缺 token 时不会回退到 `default`**：只有完全不配置 `token_group` 的模型才使用 `tokens`/`default` 分组
 4. **并发数越高，`duration` 建议越长**：平均 E2E 时延接近吞吐窗口时 QPS/TPS 会被系统性低估，报表里的 `[WARN]` 会提示这种情况
+7. **请求数制的进度条仍按时长渲染**：配置了 `requests_per_level` 的档位会在发满后提前结束，TUI/控制台的时间进度条不会走满，属正常现象；档位报告头里的 `cap N` 标注了本档上限
+8. **`tokenizer` 词表必须与被测模型匹配**：借用别家词表不报错但计数静默失真；Claude/Gemini 词表不公开，对这两家配 `tokenizer` 只能拿到「按某个开源词表近似」的输入长度，usage 对拍结果没有意义
 6. **`think_time`/`max_output_tokens` 影响可比性**：两者都会改变实际负载与单请求耗时，改动后新旧报告的吞吐/时延数字不能直接比较；当前取值会打印在配置头、写入 Excel 总览与 JSON 报告，对比数据前先核对这两项是否一致
 5. **`load_mode: open` 时 `concurrency` 的含义变化**：不再是「协程数」，而是该档位「同时在途请求数上限」；`request_rate` 才是真正驱动发送节奏的目标 RPS，两者长度必须一致
 
@@ -348,5 +401,5 @@ per-level 明细下方可能出现的提示行，含义如下：
 | `temperature` / `top_p`        | 不传                                                                                                                                          | 压测用服务端默认值                                                    |
 | thinking / reasoning_effort    | 不传                                                                                                                                          | 不在压测范围                                                          |
 
-**token 统计口径**：与 evaluation/benchmark 一致，采用 usage 上报值；Gemini 的 `thoughtsTokenCount` 计入 `completion_tokens`（思考时间在生成窗口里，token 计入分母保证跨协议可比）。usage 缺失时按收集的文本字符数粗估（
-`len/4`）。
+**token 统计口径**：与 evaluation/benchmark 一致，采用 usage 上报值；Gemini 的 `thoughtsTokenCount` 计入 `completion_tokens`（思考时间在生成窗口里，token 计入分母保证跨协议可比）。usage 缺失时，配置了 `tokenizer`
+就用本地分词器对可见文本计数，否则按文本构成粗估（ASCII 4 字符/token、CJK 1.5 字符/token 加权）；两种情况都打 `OutputEstimated` 标记。

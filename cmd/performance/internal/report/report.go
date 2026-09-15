@@ -38,8 +38,12 @@ func printOne(agg types.AggregatedMetrics) {
 	fmt.Printf("\n%s\n", strings.Repeat("-", colWidth))
 	fmt.Printf("  Model: %s  |  Provider: %s  |  Token Group: %s  |  Concurrency: %d%s\n",
 		agg.Model, agg.Provider, agg.TokenGroup, agg.Concurrency, targetRateSuffix(agg.TargetRate))
-	fmt.Printf("  Elapsed: %s  |  Window: %s  |  Requests: %d total, %d ok, %d failed (%.1f%% error)\n",
-		formatDuration(agg.Elapsed), formatDuration(agg.Window), agg.Total, agg.Success, agg.Failed, errPct)
+	capLabel := ""
+	if agg.RequestLimit > 0 {
+		capLabel = fmt.Sprintf(", cap %d", agg.RequestLimit)
+	}
+	fmt.Printf("  Elapsed: %s  |  Window: %s  |  Requests: %d total%s, %d ok, %d failed (%.1f%% error)\n",
+		formatDuration(agg.Elapsed), formatDuration(agg.Window), agg.Total, capLabel, agg.Success, agg.Failed, errPct)
 	fmt.Printf("%s\n", strings.Repeat("-", colWidth))
 
 	hdr := fmt.Sprintf("  %-16s  %-11s  %-11s  %-11s  %-11s  %-11s  %-11s  %s",
@@ -59,11 +63,13 @@ func printOne(agg types.AggregatedMetrics) {
 		if agg.DecodeTPS > 0 {
 			fmt.Printf("  Decode: %.1f tok/s (单流解码速度，1/平均 TPOT)\n", agg.DecodeTPS)
 		}
+		printThroughputWindows(agg, true)
 	} else {
 		printRow("E2E Latency", agg.Latency)
 
 		fmt.Printf("  %s\n", strings.Repeat("-", colWidth-2))
 		fmt.Printf("  QPS: %.4f req/s  |  QPM: %.2f req/min\n", agg.QPS, agg.QPM)
+		printThroughputWindows(agg, false)
 	}
 
 	// goodput：仅当本次运行配置了 SLO 阈值才输出，未配置时不产生任何新内容
@@ -96,6 +102,12 @@ func printOne(agg types.AggregatedMetrics) {
 			agg.GenSpeedExcluded)
 	}
 
+	// usage 对拍：偏差超阈值的样本说明服务端 usage 与可见文本不符
+	if agg.UsageChecked > 0 {
+		fmt.Printf("  [NOTE] usage 对拍 %d 条：%d 条偏差超阈值（|偏差| P50 %.1f%%，Max %.1f%%）\n",
+			agg.UsageChecked, agg.UsageDrifted, agg.UsageDriftAbs.P50, agg.UsageDriftAbs.Max)
+	}
+
 	// token 数为文本估算的样本占比过高时，速率分位数可信度下降
 	if agg.EstimatedOutputs > 0 {
 		fmt.Printf("  [NOTE] %d/%d 条成功样本的 token 数为文本估算（provider 未上报 usage），TPS/TPM 分位数可信度下降\n",
@@ -119,6 +131,26 @@ func printOne(agg types.AggregatedMetrics) {
 	if n := agg.TTFT.N; n > 0 && n < 20 {
 		fmt.Printf("  [WARN] low sample count (N=%d): P95/P99 may be inaccurate\n", n)
 	}
+}
+
+// printThroughputWindows 输出稳态 / Last 30s 吞吐，与上面的 Overall 数字并排看：
+// 三者差异大说明档位内负载未进入稳态（ramp 未过、上游在扩容、或收尾衰减占比高）。
+func printThroughputWindows(agg types.AggregatedMetrics, streaming bool) {
+	if agg.SteadyWindow <= 0 {
+		return
+	}
+	steady := fmt.Sprintf("QPS %.4f", agg.SteadyQPS)
+	if streaming {
+		steady += fmt.Sprintf(", TPS %.2f", agg.SteadyTPS)
+	}
+	last30 := "N/A（窗口不足 30s）"
+	if agg.Last30sWindow > 0 {
+		last30 = fmt.Sprintf("QPS %.4f", agg.Last30sQPS)
+		if streaming {
+			last30 += fmt.Sprintf(", TPS %.2f", agg.Last30sTPS)
+		}
+	}
+	fmt.Printf("  Steady(掐头去尾 10%%): %s  |  Last 30s: %s\n", steady, last30)
 }
 
 func printRow(label string, s types.PercentileStats) {

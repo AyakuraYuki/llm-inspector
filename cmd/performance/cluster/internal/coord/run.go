@@ -85,19 +85,23 @@ func RunBenchmark(ctx context.Context, bench types.BenchmarkConfig, cluster *con
 
 loop:
 	for mi, model := range bench.Models {
-		if bench.Warmup && ctx.Err() == nil {
-			if err := runWarmup(ctx, clients, bench, model, mi, runID, pollOpt, rep); err != nil {
-				rep.BenchmarkEnd(true)
-				return results, summary, err
-			}
-		}
 		for i, conc := range bench.Concurrency {
 			if ctx.Err() != nil {
 				break loop
 			}
-			seq++
 			rate := levelTargetRate(bench, i)
-			agg, stopped, err := runOneLevel(ctx, clients, bench, model, conc, rate, runID, seq, total, pollOpt, rep)
+			// 预热语义与单机版一致：首档前必做，WarmupPerLevel 时每档前都做
+			if bench.Warmup && (i == 0 || bench.WarmupPerLevel) {
+				if err := runWarmup(ctx, clients, bench, model, mi, conc, rate, runID, pollOpt, rep); err != nil {
+					rep.BenchmarkEnd(true)
+					return results, summary, err
+				}
+				if ctx.Err() != nil {
+					break loop
+				}
+			}
+			seq++
+			agg, stopped, err := runOneLevel(ctx, clients, bench, model, conc, rate, bench.LevelRequestLimit(i), runID, seq, total, pollOpt, rep)
 			if err != nil {
 				rep.BenchmarkEnd(true)
 				return results, summary, err
@@ -145,10 +149,12 @@ func levelTargetRate(bench types.BenchmarkConfig, i int) float64 {
 // runOneLevel 执行一个 model×concurrency 档位：切分下发、轮询聚合、结果回收合并。
 // rate 是本档全局目标 RPS（0 为 closed-loop），按 agent 数等分下发给各 agent；
 // 允许存在 <1 个 agent 份的浮点误差（除不尽时），量级可忽略。
+// requestLimit 是本档全局请求数上限（0 为纯时长制），只分给拿到并发份额的 agent。
 func runOneLevel(ctx context.Context, clients []*Client, bench types.BenchmarkConfig, model types.ModelSpec,
-	conc int, rate float64, runID string, seq, total int, pollOpt pollOptions, rep reporter.Reporter) (types.AggregatedMetrics, bool, error) {
+	conc int, rate float64, requestLimit int, runID string, seq, total int, pollOpt pollOptions, rep reporter.Reporter) (types.AggregatedMetrics, bool, error) {
 
 	shares := Split(conc, len(clients))
+	limits := SplitAmongActive(requestLimit, shares)
 	agentRate := 0.0
 	if rate > 0 {
 		agentRate = rate / float64(len(clients))
@@ -157,7 +163,7 @@ func runOneLevel(ctx context.Context, clients []*Client, bench types.BenchmarkCo
 	t0 := time.Now()
 	rep.LevelStart(seq, total, model, conc, t0.Add(bench.Duration))
 
-	tasks, err := dispatchTasks(ctx, clients, shares, proto.TaskStart{
+	tasks, err := dispatchTasks(ctx, clients, shares, limits, proto.TaskStart{
 		RunID:      runID,
 		Kind:       proto.TaskLevel,
 		Bench:      levelBench(bench, model, bench.Duration),
@@ -207,6 +213,7 @@ func runOneLevel(ctx context.Context, clients []*Client, bench types.BenchmarkCo
 	}
 
 	merged := MergeLevel(t0, bench.Duration, conc, stopped, parts)
+	merged.RequestLimit = requestLimit // 回填全局上限（而非各 agent 分片），与单机版口径一致
 	merged.Model = model.Name
 	merged.Provider = model.Provider
 	merged.TokenGroup = model.TokenGroup
@@ -225,14 +232,13 @@ func runOneLevel(ctx context.Context, clients []*Client, bench types.BenchmarkCo
 	return metrics.AggregateMetrics(merged, bench.SLO, bench.ShowHistogram), stopped, nil
 }
 
-// runWarmup 让每个 agent 按首个正式档位的分片并发预热，结果丢弃。
-// 语义对齐单机版 warmupModel：紧贴各自模型的首档执行，把建连开销挡在测量窗口外。
+// runWarmup 让每个 agent 按即将开始的档位的分片并发/速率预热，结果丢弃。
+// 语义对齐单机版 warmupLevel：紧贴各自模型的档位执行，把建连开销挡在测量窗口外。
+// 预热始终按时长运行，不受请求数制约束。
 func runWarmup(ctx context.Context, clients []*Client, bench types.BenchmarkConfig, model types.ModelSpec,
-	mi int, runID string, pollOpt pollOptions, rep reporter.Reporter) error {
+	mi, warmupConc int, rate float64, runID string, pollOpt pollOptions, rep reporter.Reporter) error {
 
-	warmupConc := bench.Concurrency[0]
 	shares := Split(warmupConc, len(clients))
-	rate := levelTargetRate(bench, 0)
 	agentRate := 0.0
 	if rate > 0 {
 		agentRate = rate / float64(len(clients))
@@ -240,14 +246,14 @@ func runWarmup(ctx context.Context, clients []*Client, bench types.BenchmarkConf
 	rep.WarmupStart(warmupConc, bench.WarmupDuration)
 	rep.WarmupModel(mi+1, len(bench.Models), model, time.Now().Add(bench.WarmupDuration))
 
-	tasks, err := dispatchTasks(ctx, clients, shares, proto.TaskStart{
+	tasks, err := dispatchTasks(ctx, clients, shares, nil, proto.TaskStart{
 		RunID:      runID,
 		Kind:       proto.TaskWarmup,
 		Bench:      levelBench(bench, model, bench.WarmupDuration),
 		Model:      model,
 		TargetRate: agentRate,
 		Ramp:       runner.RampDuration(warmupConc, bench.WarmupDuration),
-	}, fmt.Sprintf("%s-warmup-%d", runID, mi))
+	}, fmt.Sprintf("%s-warmup-%d-%d", runID, mi, warmupConc))
 	if err != nil {
 		return err
 	}
@@ -263,7 +269,8 @@ func runWarmup(ctx context.Context, clients []*Client, bench types.BenchmarkConf
 }
 
 // dispatchTasks 并行向份额非零的 agent 下发任务。任一下发失败即广播取消已下发的分片。
-func dispatchTasks(ctx context.Context, clients []*Client, shares []int, tmpl proto.TaskStart, taskIDPrefix string) ([]levelTask, error) {
+// limits 是各 agent 的请求数上限分片（与 shares 等长），nil 表示纯时长制。
+func dispatchTasks(ctx context.Context, clients []*Client, shares, limits []int, tmpl proto.TaskStart, taskIDPrefix string) ([]levelTask, error) {
 	var tasks []levelTask
 	for i, c := range clients {
 		if shares[i] <= 0 {
@@ -284,11 +291,16 @@ func dispatchTasks(ctx context.Context, clients []*Client, shares []int, tmpl pr
 		}
 		t := tasks[idx]
 		share := shares[i]
+		limit := 0
+		if i < len(limits) {
+			limit = limits[i]
+		}
 		idx++
 		wg.Go(func() {
 			req := tmpl
 			req.TaskID = t.taskID
 			req.Concurrency = share
+			req.RequestLimit = limit
 			reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
 			if err := t.client.TaskStart(reqCtx, req); err != nil {

@@ -17,7 +17,12 @@ import (
 // v2：BenchmarkConfig 新增 ThinkTime / MaxOutputTokens。两者都是 agent 侧
 // 实际发压行为的一部分，旧 agent 会静默忽略它们、沿用硬编码的 300ms 与 8192，
 // 于是各节点用着不同的负载参数却汇总成一份报告——正是版本校验要拦的情况。
-const Version = 2
+//
+// v3：TaskStart 新增 RequestLimit（请求数制分片）；BenchmarkConfig 新增
+// TokenizerPath/TokenizerFingerprint/UsageDriftPct（本地分词）、PromptTokensMin/Max、
+// DatasetPrompt/DatasetLines（line_by_line 数据集）、OpenLoopUnbounded、WarmupPerLevel。
+// 旧 agent 会把请求数制当成纯时长制、把数据集模式当成固定文本——同样是静默错位。
+const Version = 3
 
 // HeaderToken 是可选的共享密钥鉴权头。agent 以 -token 启动时，
 // 所有请求都必须携带一致的值；未配置时跳过校验。
@@ -97,11 +102,12 @@ type TaskStart struct {
 
 	// Bench 的 Duration 为本档时长；EarlyStopEnabled 恒为 false
 	//（早停判定统一由 coordinator 汇总全局错误率后广播 cancel）。
-	Bench       types.BenchmarkConfig
-	Model       types.ModelSpec // 含 token
-	Concurrency int             // 本机分片并发数（open-loop 时为本机在途请求数上限分片）
-	TargetRate  float64         // 本机分片目标 RPS，closed-loop（Bench.OpenLoop 为 false）恒为 0
-	Ramp        time.Duration   // coordinator 按全局并发统一计算的错峰窗口
+	Bench        types.BenchmarkConfig
+	Model        types.ModelSpec // 含 token
+	Concurrency  int             // 本机分片并发数（open-loop 时为本机在途请求数上限分片）
+	TargetRate   float64         // 本机分片目标 RPS，closed-loop（Bench.OpenLoop 为 false）恒为 0
+	Ramp         time.Duration   // coordinator 按全局并发统一计算的错峰窗口
+	RequestLimit int             // 本机分片的请求数上限，0 为纯时长制（Bench.RequestsPerLevel 未配置）
 }
 
 // TaskProgress 是 GET /v1/task/progress?task_id= 的响应：

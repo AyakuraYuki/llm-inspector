@@ -131,8 +131,12 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 		{"时长 / 并发档位", cfg.Duration.String()},
 		{"并发档位", fmt.Sprintf("%v", cfg.Concurrency)},
 		{"负载模式", loadModeSummary(cfg)},
+		{"请求数制", requestsSummary(cfg)},
+		{"输入构造", promptSummary(cfg)},
+		{"本地分词器", tokenizerSummary(cfg)},
 		{"思考时间", thinkTimeSummary(cfg)},
 		{"输出上限", fmt.Sprintf("max_tokens=%d", cfg.EffectiveMaxOutputTokens())},
+		{"预热", warmupSummary(cfg)},
 		{"模型数量", len(cfg.Models)},
 		{"排除模型", excludedModel},
 		{"错误率早停", earlyStopSummary(cfg)},
@@ -171,6 +175,8 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 	rows = append(rows, []any{"- I/O Ratio", "输出/输入 token 比（output_tokens/input_tokens，per-request 分位数及 System 总量比）"})
 	rows = append(rows, []any{"- Cache Hit Rate", "缓存命中率（cached_input_tokens/input_tokens*100%，input_tokens 为全量输入口径：Anthropic 已补入 cache_read/cache_creation；per-request 分位数及 System 总量比，仅上报了缓存字段的 provider 有效，未上报时显示 N/A）"})
 	rows = append(rows, []any{"- Goodput", "满足全部已配置 SLO 阈值（TTFT/TPOT/E2E）的请求占总请求数的比例；未配置 slo 时显示 N/A"})
+	rows = append(rows, []any{"- Steady / Last 30s", "稳态吞吐窗口，对标 evalscope 的 Workload Throughput：Steady 掐掉窗口头尾各 10%，只算中间 80% 内完成的请求；Last 30s 只算窗口最后 30s 内完成的请求（窗口不足 30s 为 N/A）。与 Overall（System TPS/QPS）差异大说明档位内负载未进入稳态"})
+	rows = append(rows, []any{"- usage 对拍", "配置本地分词器后，对服务端 completion_tokens 与本地对可见文本的计数比较，|偏差| 超过 usage_drift_pct 的样本计为漂移；出现思考内容的请求不对拍（思考 token 不在可见文本里）。大量漂移说明网关/上游 usage 统计与实际输出不符"})
 	rows = append(rows, []any{"- 分位数全景 sheet", "每个「档位 × 指标」一行，列出 Min/P10/P25/P50/P75/P90/P95/P99/P99.5/P99.9/Max/Avg/StdDev 全量统计。低分位看整体分布形态，StdDev 看抖动幅度——只看高分位分不出「整体偏慢」与「少数长尾拖高均值」"})
 
 	for i, row := range rows {
@@ -232,12 +238,76 @@ func thinkTimeSummary(cfg types.BenchmarkConfig) string {
 	return fmt.Sprintf("%s（closed-loop 每个 worker 两次请求之间的等待）", cfg.ThinkTime)
 }
 
+// requestsSummary 渲染总览 sheet 里的请求数制摘要。
+func requestsSummary(cfg types.BenchmarkConfig) string {
+	switch len(cfg.RequestsPerLevel) {
+	case 0:
+		return fmt.Sprintf("时长制（每档 %s）", cfg.Duration)
+	case 1:
+		return fmt.Sprintf("每档 %d 个请求与 %s 先到者结束", cfg.RequestsPerLevel[0], cfg.Duration)
+	default:
+		return fmt.Sprintf("逐档请求数 %v 与 %s 先到者结束", cfg.RequestsPerLevel, cfg.Duration)
+	}
+}
+
+// promptSummary 渲染总览 sheet 里的输入构造摘要。
+func promptSummary(cfg types.BenchmarkConfig) string {
+	switch {
+	case cfg.DatasetPrompt:
+		return fmt.Sprintf("dataset（line_by_line，%d 行，每请求随机取一行）", len(cfg.DatasetLines))
+	case cfg.DynamicPrompt:
+		length := fmt.Sprintf("约 %d tokens", cfg.PromptTokens)
+		if cfg.PromptTokensMin > 0 && cfg.PromptTokensMax > 0 {
+			length = fmt.Sprintf("[%d, %d] tokens 均匀采样", cfg.PromptTokensMin, cfg.PromptTokensMax)
+		}
+		precision := "按字符数近似（≈4 字符/token）"
+		if cfg.TokenizerPath != "" {
+			precision = "按本地分词器精确收敛"
+		}
+		return fmt.Sprintf("dynamic（随机长文本 %s，%s）", length, precision)
+	case cfg.CodexPrompt:
+		return "codex（固定长系统提示词 + 随机简短提问，高相似度请求）"
+	default:
+		return "text（固定文本）"
+	}
+}
+
+// tokenizerSummary 渲染总览 sheet 里的本地分词器摘要。
+func tokenizerSummary(cfg types.BenchmarkConfig) string {
+	if cfg.TokenizerPath == "" {
+		return "未配置（输入长度按字符近似，usage 缺失时字符估算，不做 usage 对拍）"
+	}
+	drift := "usage 对拍关闭"
+	if cfg.UsageDriftPct > 0 {
+		drift = fmt.Sprintf("usage 对拍阈值 %.1f%%", cfg.UsageDriftPct)
+	}
+	fp := cfg.TokenizerFingerprint
+	if len(fp) > 12 {
+		fp = fp[:12]
+	}
+	return fmt.Sprintf("%s（词表指纹 %s，%s）", cfg.TokenizerPath, fp, drift)
+}
+
+// warmupSummary 渲染总览 sheet 里的预热摘要。
+func warmupSummary(cfg types.BenchmarkConfig) string {
+	if !cfg.Warmup {
+		return "关闭"
+	}
+	if cfg.WarmupPerLevel {
+		return fmt.Sprintf("%s，每个并发档位前都预热", cfg.WarmupDuration)
+	}
+	return fmt.Sprintf("%s，仅每个模型首档前预热", cfg.WarmupDuration)
+}
+
 // loadModeSummary 渲染总览 sheet 里的负载模式摘要。
 func loadModeSummary(cfg types.BenchmarkConfig) string {
 	if !cfg.OpenLoop {
 		return "closed-loop（默认）"
 	}
-	return fmt.Sprintf("open-loop（目标 RPS：%v，泊松到达）", cfg.RequestRate)
+	if cfg.OpenLoopUnbounded {
+		return fmt.Sprintf("open-loop 无界（目标 RPS：%v，泊松到达，不设在途上限）", cfg.RequestRate)
+	}
+	return fmt.Sprintf("open-loop（目标 RPS：%v，泊松到达，在途上限 = concurrency）", cfg.RequestRate)
 }
 
 // sloConfigSummary 渲染总览 sheet 里的 SLO/Goodput 配置摘要。
@@ -433,6 +503,9 @@ func writeGenSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 		if agg.EstimatedOutputs > 0 {
 			notes = append(notes, fmt.Sprintf("%d/%d 条成功样本的 token 数为文本估算（无 usage 上报），速率分位数可信度下降", agg.EstimatedOutputs, agg.Success))
 		}
+		if agg.UsageChecked > 0 {
+			notes = append(notes, fmt.Sprintf("usage 对拍 %d 条，%d 条偏差超阈值（|偏差| P50 %.1f%%，Max %.1f%%）", agg.UsageChecked, agg.UsageDrifted, agg.UsageDriftAbs.P50, agg.UsageDriftAbs.Max))
+		}
 		note := strings.Join(notes, "；")
 		xlSetRow(f, sh, row, []any{
 			agg.Model,
@@ -501,9 +574,10 @@ func writeIORSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle int) {
 	const sh = "QPS压测(TPS·req)"
 	headers := []any{
-		"模型 ID", "Provider", "Token Group", "类型", "并发数", "目标RPS(open-loop)", "开始时间",
-		"实际时长(s)", "吞吐窗口(s)", "QPS(req/s)", "QPM(req/min)", "成功率(%)",
-		"成功请求数", "失败请求数", "Goodput(%)", "SLO 阈值", "备注",
+		"模型 ID", "Provider", "Token Group", "类型", "并发数", "目标RPS(open-loop)", "请求数上限", "开始时间",
+		"实际时长(s)", "吞吐窗口(s)", "QPS(req/s)", "QPM(req/min)",
+		"Steady QPS", "Steady TPS(tok/s)", "Last30s QPS", "Last30s TPS(tok/s)",
+		"成功率(%)", "成功请求数", "失败请求数", "Goodput(%)", "SLO 阈值", "备注",
 	}
 	xlSetRow(f, sh, 1, headers, hdrStyle)
 	_ = f.SetColWidth(sh, "A", "A", 30)
@@ -511,11 +585,11 @@ func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 	_ = f.SetColWidth(sh, "C", "C", 18)
 	_ = f.SetColWidth(sh, "D", "D", 14)
 	_ = f.SetColWidth(sh, "E", "E", 10)
-	_ = f.SetColWidth(sh, "F", "F", 18)
-	_ = f.SetColWidth(sh, "G", "G", 22)
-	_ = f.SetColWidth(sh, "H", "O", 12)
-	_ = f.SetColWidth(sh, "P", "P", 30)
-	_ = f.SetColWidth(sh, "Q", "Q", 55)
+	_ = f.SetColWidth(sh, "F", "G", 18)
+	_ = f.SetColWidth(sh, "H", "H", 22)
+	_ = f.SetColWidth(sh, "I", "T", 12)
+	_ = f.SetColWidth(sh, "U", "U", 30)
+	_ = f.SetColWidth(sh, "V", "V", 55)
 
 	row := 2
 	for _, agg := range results {
@@ -547,6 +621,25 @@ func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 			goodput = fmt.Sprintf("%.1f", agg.GoodputRatio)
 			sloText = sloSummary(agg, agg.Provider != types.ProviderOpenAIImage)
 		}
+		reqCap := "N/A"
+		if agg.RequestLimit > 0 {
+			reqCap = fmt.Sprintf("%d", agg.RequestLimit)
+		}
+		// 稳态/Last30s：没有时间轴（SteadyWindow 为 0）或窗口不足 30s 时为 N/A；
+		// 图片端点没有 token，TPS 列恒为 N/A
+		var steadyQPS, steadyTPS, last30QPS, last30TPS any = "N/A", "N/A", "N/A", "N/A"
+		if agg.SteadyWindow > 0 {
+			steadyQPS = round3(agg.SteadyQPS)
+			if category == "text" {
+				steadyTPS = round2(agg.SteadyTPS)
+			}
+		}
+		if agg.Last30sWindow > 0 {
+			last30QPS = round3(agg.Last30sQPS)
+			if category == "text" {
+				last30TPS = round2(agg.Last30sTPS)
+			}
+		}
 		xlSetRow(f, sh, row, []any{
 			agg.Model,
 			string(agg.Provider),
@@ -554,11 +647,16 @@ func writeQPSSheet(f *excelize.File, results []types.AggregatedMetrics, hdrStyle
 			category,
 			agg.Concurrency,
 			targetRate,
+			reqCap,
 			startStr,
 			round2(agg.Elapsed.Seconds()),
 			round2(agg.Window.Seconds()),
 			round3(agg.QPS),
 			round2(agg.QPM),
+			steadyQPS,
+			steadyTPS,
+			last30QPS,
+			last30TPS,
 			round1(successPct),
 			agg.Success,
 			agg.Failed,

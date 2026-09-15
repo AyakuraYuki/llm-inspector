@@ -19,3 +19,32 @@ func Split(global, n int) []int {
 	}
 	return shares
 }
+
+// SplitAmongActive 把全局请求数 total 只分给并发份额非零的 agent（shares[i] > 0），
+// 返回与 shares 等长的切片，份额为零的 agent 对应 0。请求数制下 agent 是否参与
+// 由并发切分决定：一个没拿到 worker 的 agent 即便分到请求配额也无人发送，
+// 那部分配额会凭空消失，导致全局实际发出的请求数少于配置值。
+func SplitAmongActive(total int, shares []int) []int {
+	limits := make([]int, len(shares))
+	if total <= 0 {
+		return limits
+	}
+	active := 0
+	for _, s := range shares {
+		if s > 0 {
+			active++
+		}
+	}
+	if active == 0 {
+		return limits
+	}
+	parts := Split(total, active)
+	j := 0
+	for i, s := range shares {
+		if s > 0 {
+			limits[i] = parts[j]
+			j++
+		}
+	}
+	return limits
+}

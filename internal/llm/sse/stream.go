@@ -14,6 +14,7 @@ type StreamSummary struct {
 	UsageSeen         bool      // 出现过携带 completion token 的 usage 事件
 	TerminalSeen      bool      // 出现过协议终止标记（[DONE]/finish_reason/message_stop 等）
 	UpstreamErr       string    // 流内错误事件的首个错误消息
+	ReasoningSeen     bool      // 出现过思考内容事件（thinking/reasoning_content/thought part 等）：思考 token 计入 usage 却不在可见文本里，本地文本计数与 usage 对拍时须排除
 	TextParts         []string  // 收集的文本片段（usage 缺失时的 token 估算回退）
 	ITLSamplesMS      []float64 // 逐次输出内容事件之间的间隔（毫秒），按事件粒度近似逐 token 生成间隔
 	lastContentMS     float64   // 上一个输出内容事件的到达时刻，<0 表示尚未出现（TTFT 打点那一刻不产生间隔样本）
@@ -35,6 +36,9 @@ func ApplySSEEvent(obj map[string]any, nowMS float64, s *StreamSummary) {
 	}
 	if IsTerminal(obj) {
 		s.TerminalSeen = true
+	}
+	if HasReasoningContent(obj) {
+		s.ReasoningSeen = true
 	}
 	if HasOutputContent(obj) {
 		if s.TTFTMS < 0 {

@@ -168,6 +168,14 @@ func (s *Server) handlePreflight(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
+	// 本地分词器校验放在预检：coordinator 下发的只是路径，词表文件必须由本节点
+	// 预置。目录缺失或指纹不一致都在开测前暴露，否则该节点会静默回退到字符估算，
+	// 输入长度口径与其他节点不同却汇总成一份报告。
+	if err := req.Bench.ValidateTokenizer(); err != nil {
+		writeErr(w, http.StatusBadRequest, "本地分词器校验失败: "+err.Error())
+		return
+	}
+
 	resp := proto.PreflightResponse{Results: make([]proto.PreflightResult, 0, len(req.Bench.Models))}
 	for _, model := range req.Bench.Models {
 		if r.Context().Err() != nil {

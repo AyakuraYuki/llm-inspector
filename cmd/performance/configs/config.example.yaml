@@ -7,22 +7,50 @@ concurrency: [10, 20, 30, 40, 50, 75, 100, 120, 150]  # 并发档位列表，逐
 
 # 文本端点的 prompt 配置
 prompt:
-  # 生成方式，三选一：
+  # 生成方式，四选一：
   #   text    —— 使用下方 text 的固定文本
-  #   dynamic —— 每次请求现场拼装约 tokens 个 token 的随机长文本，用于长上下文压测
+  #   dynamic —— 每次请求现场拼装目标长度的随机长文本，用于长上下文压测
   #   codex   —— 类 Codex 系统提示词 + 随机简短提问，模拟高相似度请求场景
+  #   dataset —— 从 dataset_path 文件随机取一个非空行作为 prompt（evalscope 的 line_by_line）
   mode: "text"
   # mode=text 时使用的固定 prompt
   text: "Explain in plain English what API latency and throughput mean for a developer integrating LLM APIs. Write about 120 words. Do not use bullet points."
-  # mode=dynamic 时生成文本的目标近似 token 数
+  # mode=dynamic 时生成文本的目标 token 数（单点）。配了下面的 tokenizer 就精确收敛到这个数，
+  # 否则按「4 字符 ≈ 1 token」近似（不同模型词表下误差可达 ±30%）
   tokens: 2000
+  # mode=dynamic 时改为在 [tokens_min, tokens_max] 内逐请求均匀采样（覆盖 tokens）：
+  # 真实流量的输入长度是分布不是单点。两项须同时配置且 min <= max。
+  #tokens_min: 500
+  #tokens_max: 4000
+  # mode=dataset 时必填：纯文本文件，每个非空行一条 prompt
+  #dataset_path: "prompts.txt"
+
+# tokenizer：本地分词器（可选）。path 指向 configs/tokenizers/<name> 目录（HF tokenizer.json
+# 或 tiktoken 格式，纯 Go 加载）。启用后：
+#   1. dynamic 模式按分词器精确收敛输入长度（对标 evalscope --tokenizer-path）
+#   2. provider 未上报 usage 时用它对可见文本计数，比字符估算准得多
+#   3. usage 对拍：服务端 completion_tokens 与本地计数偏差超过 usage_drift_pct（%）的请求打标，
+#      能抓出网关/上游 usage 统计不符的问题；思考型请求自动跳过（思考 token 不在可见文本里）
+# 词表必须与被测模型一致：仓库预置 deepseek-v4 / kimi-k3，GPT 系可自补 o200k_base；
+# Claude/Gemini 词表不公开，对这两家配了也拿不到准确数字。目录不可加载时配置阶段直接报错。
+#tokenizer:
+#  path: "configs/tokenizers/kimi-k3"
+#  usage_drift_pct: 10   # 默认 10；显式 0 关闭对拍
 
 # 图片生成端点的测试 prompt
 image_prompt: "A cute fluffy kitten playing with a ball of yarn, soft lighting, adorable, high detail."
 
-warmup: true          # 正式测试前是否执行预热阶段（并发=10，时长由 warmup_duration 控制）
+warmup: true          # 正式测试前是否执行预热阶段（并发=即将开始档位的并发数，时长由 warmup_duration 控制）
 warmup_duration: 10s  # 预热阶段持续时长
+# warmup_per_level：true 时每个并发档位前都预热（默认只在每个模型首档前预热一次），并发/速率取本档的。
+# 档位切换同样有冷启动批效应，首档预热挡不住；代价是总耗时多「档位数 × warmup_duration」。
+#warmup_per_level: true
 cooldown: 5s          # 每个并发档位之间的冷却等待时间
+
+# requests_per_level：每档请求数上限（对标 evalscope --number）。档位在「发满」与「到达 duration」
+# 两者先到者结束，在途请求照常等完。写一项作用于全部档位，或与 concurrency 等长逐档对应。
+# 留空为纯时长制（默认）。请求数制下吞吐分母是实际用时（含最后一批排空），与 evalscope 口径一致。
+#requests_per_level: [500]
 
 # think_time：closed-loop 下同一个 worker「收到上一个响应」到「发出下一个请求」之间的
 # 等待，用来模拟真人看完回答再提问的停顿。默认 300ms。
@@ -81,6 +109,12 @@ no_tui: false    # 禁用 TUI，使用纯文本控制台输出（stdout 非终�
 #   request_rate: [5,   10,  20,  40,  80,  120]
 #load_mode: "open"
 #request_rate: [5, 10, 20, 40, 80, 120]
+#
+# open_loop_unbounded：只在 load_mode: open 下有效。默认 false 时同时在途的请求数到达 concurrency
+# 就先排队等空位（过载时退化成限速闭环，安全但偏乐观）；true 时到点即发、不设在途上限，是严格的
+# 开环（evalscope --open-loop 的语义），找系统饱和点更真实，但服务端跟不上时压测机侧的在途请求会
+# 无限堆积，开之前先估算压测机的协程/连接/内存承受力。
+#open_loop_unbounded: true
 
 # SLO 达标率（goodput）：三项阈值都可选，只填要考察的维度；一个都不填等价于不配置
 # 这一整块。开启后终端/Excel 会额外展示「同时满足全部已配置阈值的请求占比」。
