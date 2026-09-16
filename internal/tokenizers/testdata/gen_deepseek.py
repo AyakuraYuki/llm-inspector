@@ -1,7 +1,7 @@
 import json, sys
 from transformers import PreTrainedTokenizerFast
 
-D = "../../configs/tokenizers/deepseek-v4-flash-0731"
+D = "../../configs/tokenizers/deepseek-v4"
 tk = PreTrainedTokenizerFast(tokenizer_file=D + "/tokenizer.json")
 
 CASES = [
