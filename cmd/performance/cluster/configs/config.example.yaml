@@ -121,7 +121,7 @@ prompt:
 # tokenizer：本地分词器（可选），语义与单机版一致（精确收敛 dynamic 长度、usage 缺失时
 # 本地计数、usage 对拍）。分布式下只下发 path 与词表的 SHA-256 指纹：每台 agent 必须在
 # 同一路径预置同一份词表目录，预检阶段校验指纹，不一致直接中止。
-# 词表必须与被测模型一致：仓库预置 deepseek-v4 / kimi-k3；Claude/Gemini 词表不公开。
+# 词表必须与被测模型一致：仓库预置 deepseek-v4 / glm-53 / kimi-k3；Claude/Gemini 词表不公开。
 #tokenizer:
 #  path: "configs/tokenizers/kimi-k3"
 #  usage_drift_pct: 10   # 默认 10；显式 0 关闭对拍

@@ -102,7 +102,7 @@ prompt:
 #   2. 服务端未上报 usage 时用它对可见文本计数，替代字符估算
 #   3. usage 对拍：completion_tokens 与本地计数偏差超过 usage_drift_pct（%）的请求打标，
 #      能抓出网关/上游 usage 统计不符；思考型请求自动跳过（思考 token 不在可见文本里）
-# 词表必须与被测模型一致：仓库预置 deepseek-v4 / kimi-k3，GPT 系可自补 o200k_base；
+# 词表必须与被测模型一致：仓库预置 deepseek-v4 / glm-53 / kimi-k3，GPT 系可自补 o200k_base；
 # Claude/Gemini 词表不公开。目录不可加载时配置阶段直接报错。
 #tokenizer:
 #  path: "configs/tokenizers/kimi-k3"
