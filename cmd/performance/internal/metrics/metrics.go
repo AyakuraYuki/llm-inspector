@@ -150,7 +150,7 @@ func AggregateMetrics(result types.BenchmarkResult, slo types.SLOThresholds, sho
 			}
 			// per-request 输入/输出 token 比
 			if m.InputTokens > 0 && m.OutputTokens > 0 {
-				iorValues = append(iorValues, float64(m.OutputTokens)/float64(m.InputTokens))
+				iorValues = append(iorValues, float64(m.InputTokens)/float64(m.OutputTokens))
 			}
 			// per-request 缓存命中率（%），仅在 provider 上报了缓存字段时入样：
 			// 未上报时 CachedInputTokens 恒为 0，入样会把分位数压成 0%，
@@ -221,8 +221,8 @@ func AggregateMetrics(result types.BenchmarkResult, slo types.SLOThresholds, sho
 	agg.UsageDriftAbs = floatPercentileStats(driftAbs)
 
 	// 系统级输入/输出 token 比
-	if totalInputToks > 0 {
-		agg.IORatio = float64(totalToks) / float64(totalInputToks)
+	if totalToks > 0 {
+		agg.IORatio = float64(totalInputToks) / float64(totalToks)
 	}
 
 	// 系统级缓存命中统计

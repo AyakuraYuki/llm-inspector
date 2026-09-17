@@ -336,7 +336,7 @@ type AggregatedMetrics struct {
 	TpmPr            FloatStats      // per-request tokens/min 分位数
 	GenSpeedExcluded int             // 未通过有效性校验（生成窗口过窄或超出单流物理天花板，测不出真实解码速度）被 TPOT/TPS/TPM/ITL 剔除的成功样本数
 	EstimatedOutputs int             // OutputTokens 来自文本估算（无 usage 上报）的成功样本数；占比高时速率分位数可信度下降
-	IOR              FloatStats      // per-request 输出/输入 token 比（output_tokens / input_tokens）分位数
+	IOR              FloatStats      // per-request 输入/输出 token 比（input_tokens / output_tokens）分位数
 	CacheHitPr       FloatStats      // per-request 缓存命中率（cached_input_tokens / input_tokens * 100）分位数，仅上报了缓存字段的请求入样
 
 	// 所有端点均有
@@ -372,7 +372,7 @@ type AggregatedMetrics struct {
 	// 被短响应拉高，后者更贴近"每个 token 平均要等多久"。TPOT 无样本时为 0。
 	DecodeTPS float64
 
-	// 系统级输入/输出 token 比（总 output_tokens / 总 input_tokens，仅统计有 usage 上报的请求）
+	// 系统级输入/输出 token 比（总 input_tokens / 总 output_tokens，仅统计有 usage 上报的请求）
 	IORatio float64
 
 	// 系统级缓存命中统计（原始 token 总量 + 命中率，仅统计有 usage 上报的请求）

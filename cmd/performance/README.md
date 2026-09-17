@@ -308,7 +308,7 @@ tokens:
   ITL               15.1ms       30.2ms       48.3ms       90.7ms       17.2ms       12.6ms       7920
   E2E Latency       3.20s        4.10s        4.80s        5.90s        3.45s        780.2ms      810
   --------------------------------------------------------------------------------------------------
-  TPS:     2650.30 tok/s  |  TPM:  159018.0 tok/min  |  QPS: 13.5000 req/s  |  QPM: 810.00 req/min  |  I/O Ratio: 12.400
+  TPS:     2650.30 tok/s  |  TPM:  159018.0 tok/min  |  QPS: 13.5000 req/s  |  QPM: 810.00 req/min  |  I/O Ratio: 0.081
   Decode: 51.5 tok/s (单流解码速度，1/平均 TPOT)
   Error types: timeout: 2
 
@@ -317,7 +317,7 @@ tokens:
 --------------------------------------------------------------------------------
   Model (Provider)        Token Group       Conc   QPS       TPS       TTFT P50    TTFT P95    I/O Ratio
   --------------------------------------------------------------------------
-  gpt-5.6-sol (openai)    openai-channel    50     13.500    2650.3    320.5ms     680.2ms     12.400
+  gpt-5.6-sol (openai)    openai-channel    50     13.500    2650.3    320.5ms     680.2ms     0.081
 ============================================================
 ```
 
@@ -371,7 +371,7 @@ per-level 明细下方可能出现的提示行，含义如下：
   30s 时显示 N/A。三者（Overall/Steady/Last 30s）差异大说明档位内负载未进入稳态——ramp 未过、上游还在扩容、或收尾衰减占比过高，此时 Steady 比 Overall 更接近「稳定运行时能扛多少」
 - **usage 对拍**（需 `tokenizer`）：服务端 `completion_tokens` 与本地分词器对可见输出文本计数的相对偏差 `(usage - local) / local`。报表给出对拍条数、|偏差| 超过 `usage_drift_pct` 的条数、|偏差| 的分位数；思考型请求与无 usage
   的请求不对拍。原始样本里逐请求带 `local_output_tokens`/`usage_drift_pct`/`usage_drifted`
-- **I/O Ratio**：输出/输入 token 比，per-request 分位数与系统级总量比（`总 output_tokens / 总 input_tokens`）两种口径
+- **I/O Ratio**：输入/输出 token 比，per-request 分位数与系统级总量比（`总 input_tokens / 总 output_tokens`）两种口径
 - **Cache Hit Rate**：`cached_input_tokens / input_tokens * 100%`，同样有 per-request 分位数与系统级总量比两种口径；仅统计上报了缓存字段的 provider，未上报时显示 `N/A`（区别于「上报了但命中率为 0%」）
 - **Goodput**：同时满足全部已配置 `slo` 阈值（TTFT/TPOT/E2E）的请求数占总请求数的比例；失败请求必然不达标，未配置 `slo` 时显示 `N/A`（区别于「配置了但 0%」）
 - **错误类型**：`timeout`/`net_timeout`/`canceled`/`dns_error`/`conn_refused`/`conn_reset`/`tls_error`/`connect`/`rate_limited`/`server_error`/`http_error`/`upstream_error`/`stream_broken`/

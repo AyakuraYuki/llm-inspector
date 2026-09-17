@@ -172,7 +172,7 @@ func writeOverview(f *excelize.File, cfg types.BenchmarkConfig, runAt time.Time,
 	rows = append(rows, []any{"- System TPS", "吞吐窗口内完成的总 tokens/窗口时长（窗口外完成的长尾请求不计入）"})
 	rows = append(rows, []any{"- QPS（又称RPS）", "系统级 req/s"})
 	rows = append(rows, []any{"- QPM（又称RPM）", "系统级 req/min"})
-	rows = append(rows, []any{"- I/O Ratio", "输出/输入 token 比（output_tokens/input_tokens，per-request 分位数及 System 总量比）"})
+	rows = append(rows, []any{"- I/O Ratio", "输入/输出 token 比（input_tokens/output_tokens，per-request 分位数及 System 总量比）"})
 	rows = append(rows, []any{"- Cache Hit Rate", "缓存命中率（cached_input_tokens/input_tokens*100%，input_tokens 为全量输入口径：Anthropic 已补入 cache_read/cache_creation；per-request 分位数及 System 总量比，仅上报了缓存字段的 provider 有效，未上报时显示 N/A）"})
 	rows = append(rows, []any{"- Goodput", "满足全部已配置 SLO 阈值（TTFT/TPOT/E2E）的请求占总请求数的比例；未配置 slo 时显示 N/A"})
 	rows = append(rows, []any{"- Steady / Last 30s", "稳态吞吐窗口，对标 evalscope 的 Workload Throughput：Steady 掐掉窗口头尾各 10%，只算中间 80% 内完成的请求；Last 30s 只算窗口最后 30s 内完成的请求（窗口不足 30s 为 N/A）。与 Overall（System TPS/QPS）差异大说明档位内负载未进入稳态"})
