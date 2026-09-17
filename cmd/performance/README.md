@@ -113,7 +113,7 @@ TTFT 分布形态用区间，想做严格可比的回归基线用单点。
 
 **范围限制，务必知道**：
 
-- 分词器必须与被测模型一致，借用别家词表不会报错，但计数会静默失真。仓库目前预置 `deepseek-v4`（HF）与 `kimi-k3`（tiktoken）两份；GPT 系可自行补 `o200k_base`（tiktoken 格式，放目录 + `inspector.json` 即可）；**Claude 与
+- 分词器必须与被测模型一致，借用别家词表不会报错，但计数会静默失真。仓库目前预置 `deepseek-v4`（HF）、`glm-53`（HF）与 `kimi-k3`（tiktoken）三份；GPT 系可自行补 `o200k_base`（tiktoken 格式，放目录 + `inspector.json` 即可）；**Claude 与
   Gemini 的词表不公开**，这两家做不到精确控长与 usage 对拍，evalscope 同样做不到
 - **思考型请求不对拍**：思考 token 计入各协议的 completion 计数，却不在可见文本里，本地必然偏小。出现过思考内容（`thinking_delta`/`reasoning_content`/Gemini `thought:true`/Responses `reasoning_*`）的请求自动跳过对拍，
   `local_output_tokens` 为 0

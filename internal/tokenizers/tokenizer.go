@@ -117,7 +117,7 @@ var cache sync.Map // map[string]*cacheEntry，key 为配置的绝对路径
 //
 // path 可以是：
 //
-//   - 分词器配置目录，例如 configs/tokenizers/deepseek-v4-flash-0731
+//   - 分词器配置目录，例如 configs/tokenizers/deepseek-v4
 //   - 目录下的具体文件，例如 .../tokenizer.json、.../tiktoken.model
 //   - .../tokenizer_config.json —— 该文件仅含特殊 token 元数据，并非分词器
 //     本体，此时自动回退到其所在目录继续探测
