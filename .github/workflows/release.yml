@@ -1,0 +1,115 @@
+# 平台矩阵与产物命名遵循 Makefile 的 RELEASE_OS/RELEASE_ARCH
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CGO_ENABLED: '0'
+  GO_LDFLAGS: -s -w # 用GO_LDFLAGS取代LDFLAGS以避免覆盖GCC编译参数
+
+jobs:
+  build:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: darwin, goarch: amd64, os: macos, arch: x64 }
+          - { goos: darwin, goarch: arm64, os: macos, arch: aarch64 }
+          - { goos: linux, goarch: amd64, os: linux, arch: amd64 }
+          - { goos: linux, goarch: arm64, os: linux, arch: arm64 }
+          - { goos: windows, goarch: amd64, os: windows, arch: x64 }
+          - { goos: windows, goarch: arm64, os: windows, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # benchmark 的 HF 题库不在 git 里，go:embed 编译需要；约 4MB
+      - name: Download HF datasets for benchmark
+        run: |
+          pip install huggingface_hub
+          hf download math-ai/aime25 --repo-type dataset --local-dir cmd/benchmark/internal/dataset/hf/math-ai/aime25/
+          hf download math-ai/aime26 --repo-type dataset --local-dir cmd/benchmark/internal/dataset/hf/math-ai/aime26/
+          hf download TIGER-Lab/MMLU-Pro --repo-type dataset --local-dir cmd/benchmark/internal/dataset/hf/TIGER-Lab/MMLU-Pro/
+
+      - name: Build all tools
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          EXE_EXT: ${{ matrix.goos == 'windows' && '.exe' || '' }}
+        run: |
+          mkdir -p dist/benchmark dist/evaluation dist/performance dist/performance-cluster dist/imagespec
+          go build -ldflags "$GO_LDFLAGS" -o dist/benchmark/benchmark$EXE_EXT ./cmd/benchmark
+          go build -ldflags "$GO_LDFLAGS" -o dist/evaluation/evaluation$EXE_EXT ./cmd/evaluation
+          go build -ldflags "$GO_LDFLAGS" -o dist/performance/performance$EXE_EXT ./cmd/performance
+          go build -ldflags "$GO_LDFLAGS" -o dist/performance-cluster/performance-cluster$EXE_EXT ./cmd/performance/cluster
+          go build -ldflags "$GO_LDFLAGS" -o dist/imagespec/imagespec$EXE_EXT ./cmd/imagespec
+          cp cmd/benchmark/configs/config.example.yml dist/benchmark/config.yml
+          cp cmd/evaluation/configs/config.example.yml dist/evaluation/config.yml
+          cp cmd/performance/configs/config.example.yaml dist/performance/config.yaml
+          cp cmd/performance/cluster/configs/config.example.yaml dist/performance-cluster/config.yaml
+          cp cmd/imagespec/configs/config.example.yaml dist/imagespec/config.yaml
+          cp cmd/benchmark/使用教程-macOS.txt cmd/benchmark/使用教程-Windows.txt dist/benchmark/
+          cp cmd/evaluation/使用教程-macOS.txt cmd/evaluation/使用教程-Windows.txt dist/evaluation/
+          cp cmd/performance/使用教程-macOS.txt cmd/performance/使用教程-Windows.txt dist/performance/
+          cp cmd/performance/cluster/使用教程-macOS.txt cmd/performance/cluster/使用教程-Windows.txt dist/performance-cluster/
+          cp cmd/imagespec/使用教程-macOS.txt cmd/imagespec/使用教程-Windows.txt dist/imagespec/
+
+      - name: Verify static linking
+        if: matrix.goos == 'linux'
+        run: file dist/benchmark/benchmark
+
+      # matrix 各平台产物先传 artifact，由 release job 统一建 release，避免 6 个 job 并发抢同一个 release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}_${{ matrix.arch }}
+          path: dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # 不 merge：每个 artifact 解到各自子目录 all/dist-<platform>/，避免同名文件互相覆盖
+      - uses: actions/download-artifact@v4
+        with:
+          path: all/
+
+      # 每个平台：完整包（all_ 前缀排在列表最前）+ 5 个单独工具包（目录结构保留，
+      # 解压到任意目录直接落位 benchmark/benchmark 等）
+      - name: Pack release archives
+        run: |
+          VERSION=${GITHUB_REF_NAME#refs/tags/}
+          [ "$GITHUB_REF_TYPE" = "tag" ] || VERSION=manual-$(date +%Y%m%d-%H%M%S)
+          TOOLS="benchmark evaluation imagespec performance performance-cluster"
+          for platform in macos_x64 macos_aarch64 linux_amd64 linux_arm64 windows_x64 windows_arm64; do
+            dir="all/dist-${platform}"
+            # windows 用 zip
+            case "$platform" in windows_*) ext=zip ;; *) ext=tar.gz ;; esac
+            for target in all $TOOLS; do
+              src=$target; [ "$target" = all ] && src=.
+              out="${target}_${VERSION}_${platform}.${ext}"
+              if [ "$ext" = zip ]; then
+                (cd "$dir" && zip -qr "$GITHUB_WORKSPACE/$out" "$src")
+              else
+                tar -czf "$out" -C "$dir" "$src"
+              fi
+            done
+          done
+          ls -1 *.tar.gz *.zip | sort
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.tar.gz
+            *.zip
