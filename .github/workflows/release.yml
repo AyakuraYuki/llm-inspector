@@ -3,7 +3,7 @@ name: release
 
 on:
   push:
-    tags: ['v*']
+    tags: [ 'v*' ]
   workflow_dispatch:
 
 permissions:
@@ -28,9 +28,9 @@ jobs:
           - { goos: windows, goarch: amd64, os: windows, arch: x64 }
           - { goos: windows, goarch: arm64, os: windows, arch: arm64 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -70,7 +70,7 @@ jobs:
         run: file dist/benchmark/benchmark
 
       # matrix 各平台产物先传 artifact，由 release job 统一建 release，避免 6 个 job 并发抢同一个 release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.os }}_${{ matrix.arch }}
           path: dist/
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # 不 merge：每个 artifact 解到各自子目录 all/dist-<platform>/，避免同名文件互相覆盖
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: all/
 
@@ -108,7 +108,7 @@ jobs:
           ls -1 *.tar.gz *.zip | sort
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             *.tar.gz
