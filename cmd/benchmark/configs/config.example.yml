@@ -22,7 +22,9 @@ extra_thinking: |
 # 使用预设数据集，数据集来自 huggingface
 dataset:
   aime25: true                        # 2025 AIME 题库
+  aime25_problems: []                 # 只测指定题号（1-30），留空或省略 = 全部 30 题
   aime26: false                       # 2026 AIME 题库
+  aime26_problems: []                 # 只测指定题号（1-30），留空或省略 = 全部 30 题
   mmlu_pro:
     enabled: false                    # 使用 MMLU-Pro 题库
     use_validation: false             # 使用 MMLU-Pro 验证题库

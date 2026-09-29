@@ -40,8 +40,14 @@ func (cfg *Config) aime26() ([]types.Question, error) {
 		problems = append(problems, row)
 	}
 
-	var questions []types.Question
-	for _, r := range problems {
+	indices, err := pickProblems(len(problems), cfg.AIME26Problems, AIME26)
+	if err != nil {
+		return nil, err
+	}
+
+	questions := make([]types.Question, 0, len(indices))
+	for _, i := range indices {
+		r := problems[i]
 		questions = append(questions, types.Question{
 			Dataset:  AIME26,
 			Question: fmt.Sprintf("%s\n\nPlease reason step by step, and put your final answer within \\boxed{}.", r.Problem),

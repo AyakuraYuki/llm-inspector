@@ -118,7 +118,9 @@ reasoning_effort: high                # 思考强度，支持 low | medium | hig
 ```yaml
 dataset:
   aime25: true                        # 2025 AIME 题库
+  aime25_problems: []                 # 只测指定题号（1-30），留空或省略 = 全部 30 题
   aime26: false                       # 2026 AIME 题库
+  aime26_problems: []                 # 只测指定题号（1-30），留空或省略 = 全部 30 题
   mmlu_pro:
     enabled: false                    # 使用 MMLU-Pro 题库
     use_validation: false             # 追加 MMLU-Pro 验证题库
@@ -154,6 +156,21 @@ dataset:
 - `enabled: true` 且 `use_pickup: false` 时会 **回退到加载 test 全集**，也就是 12032 道题。想小规模试跑就一定要开 `use_pickup` 并配好每个分类的数量。
 - `use_validation` 是 **追加**行为，开启后 70 道验证题会和 pickup/全集的题目一起进入本次测试。
 - 每个分类的摘选数量会被该分类的实际题量截断，填得比题库大不会报错。摘选是随机的，每次运行的题目组合都不一样。
+
+### 单独测 AIME 的某几题
+
+`aime25_problems` / `aime26_problems` 用来从题库里挑出指定的题号单独测试，适合调试单题、验证某个改动对特定难题的影响，或者只跑几题快速看效果：
+
+```yaml
+dataset:
+  aime25: true
+  aime25_problems: [3, 7, 12]         # 只跑第 3、7、12 题
+```
+
+- 题号是 **1-based 的自然序号**（`1`-`30`），对应题库文件里的第几行，和题目自带的 `id` 字段无关。两个 AIME 题库的 `id` 起点不同（aime25 从 `"0"` 开始且是字符串，aime26 从 `1` 开始且是整数），按序号配置可以避开这个差异。
+- 留空或整项省略表示跑全部 30 题，行为和以前一致。
+- 输出顺序始终按题号升序，配置里写乱序不影响顺序；重复题号会去重。
+- 题号越界（`0`、`31` 或负数）会在启动时报错退出，不会静默跳过——静默跳过容易让人误以为跑完了预期的题目。仅当对应的题库开关也开着时才会校验，`aime25: false` 时 `aime25_problems` 写了什么都会被忽略。
 
 AIME 题目会自动追加 `Please reason step by step, and put your final answer within \boxed{}.`；MMLU-Pro 题目会自动拼装成带 `(A) (B) (C) ...` 选项的多选题模板，并要求把选项字母放进 `\boxed{}`
 。这些提示词由程序拼接，不需要在配置里写。
